@@ -1,6 +1,6 @@
 ## 🧾 Abstract
 
-**FLOWRA (Flow Reconfiguration Agent)** is a proof-of-concept system introducing a novel architecture for temporally sovereign intelligence. Unlike conventional Reinforcement Learning (RL) systems that operate in a forward-only causal frame and depend on reward maximization or imagination-based counterfactuals, FLOWRA treats the agent and environment as a **unified closed-loop signal ecology**. Its primary objective is not goal optimization, but the **preservation of coherent information flow across time**.
+**FLOWRA (Flow Recognition-Reconfiguration Agent)** is a proof-of-concept system introducing a novel architecture for temporally sovereign intelligence. Unlike conventional Reinforcement Learning (RL) systems that operate in a forward-only causal frame and depend on reward maximization or imagination-based counterfactuals, FLOWRA treats the agent and environment as a **unified closed-loop signal ecology**. Its primary objective is not goal optimization, but the **preservation of coherent information flow across time**.
 
 In contrast to architectures that passively observe and react to events, FLOWRA actively **reconfigures internal past signal pathways** in response to both **predicted and dynamically unfolding disruptions**. These may include anticipated failures (such as forecasted satellite communication breakdowns) or unpredicted anomalies emerging in real-time. By adjusting past decision pathways to preserve continuity into the future, FLOWRA exhibits **retrocausal adaptation without relying on simulation or imagination**.
 

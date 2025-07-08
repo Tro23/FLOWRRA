@@ -34,8 +34,7 @@ def calculate_angle_from_reference(reference_point, target_point):
     """Calculates the angle of target_point relative to reference_point (in radians)."""
     dx = target_point[0] - reference_point[0]
     dy = target_point[1] - reference_point[1]
-    angle_radians = math.atan2(dy, dx)
-    return abs(math.cos(angle_radians)) # Returns angle from -0 to 1
+    return math.atan2(dy, dx) # Returns angle from -0 to 1
 
 def positional_shape(node_positions):
     """Generates the loop shape desired for the nodes"""
@@ -189,9 +188,8 @@ for i in range(NUM_NODES):
 
 plt.gca().set_aspect('equal', adjustable='box')
 plt.tight_layout()
-plt.show()
 
-'''# --- Animation Function ---
+# --- Animation Function ---
 
 def animate_moving_loop(frame):
     """
@@ -260,4 +258,4 @@ def animate_moving_loop(frame):
 # interval: delay between frames in milliseconds
 ani = animation.FuncAnimation(fig, animate_moving_loop, frames=100, interval=1000, blit=False, repeat=True)
 
-plt.show()'''
+plt.show()

@@ -1,5 +1,6 @@
 import numpy as np
 import random
+import math
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.animation as animation
@@ -27,6 +28,42 @@ def get_valid_positions(num_nodes, grid_size):
         x, y = random.randint(1, grid_size - 2), random.randint(1, grid_size - 2)
         positions.add((x, y))
     return list(positions) # Return as a list to maintain a consistent order for the loop
+
+
+def calculate_angle_from_reference(reference_point, target_point):
+    """Calculates the angle of target_point relative to reference_point (in radians)."""
+    dx = target_point[0] - reference_point[0]
+    dy = target_point[1] - reference_point[1]
+    angle_radians = math.atan2(dy, dx)
+    return abs(math.cos(angle_radians)) # Returns angle from -0 to 1
+
+def positional_shape(node_positions):
+    """Generates the loop shape desired for the nodes"""
+    
+    if not node_positions:
+        return []
+
+    final_list = [node_positions[0]]
+    chosen_point = node_positions[0]
+    list_to_consider = list(node_positions[1:]) # Make a copy to modify
+
+    for _ in range(len(node_positions) - 1):
+        list_comparisons = []
+        for node in list_to_consider:
+            distance = math.hypot(node[0] - chosen_point[0], node[1] - chosen_point[1])
+            # Calculate angle relative to the *current chosen_point*
+            angle = calculate_angle_from_reference(chosen_point, node)
+            list_comparisons.append((distance, angle, node)) # Store distance, angle, and the node
+        
+        # Sort by distance first, then by angle
+        # If distances are equal, the angle will decide.
+        chosen_point = sorted(list_comparisons)[0][2] # Get the node from the tuple
+        
+        final_list.append(chosen_point)
+        list_to_consider.remove(chosen_point) # Remove the *actual node tuple*
+    
+    final_list.append(node_positions[0])
+    return final_list
 
 def calculate_target_angle_idx(from_pos, to_pos, angle_steps):
     """
@@ -91,9 +128,13 @@ def move_node(node_info, grid_size, all_nodes_data):
 # 1. Get positions for all nodes
 node_positions = get_valid_positions(num_nodes=NUM_NODES, grid_size=GRID_SIZE)
 
+# 1-2. Loop the positions for all nodes in desired right order 
+
+node_positions_2 = positional_shape(node_positions)
+
 # 2. Initialize nodes data (using a list of dictionaries for better structure)
 nodes_data = []
-for i, pos in enumerate(node_positions):
+for i, pos in enumerate(node_positions_2):
     nodes_data.append({
         'id': i,
         'pos': pos,
@@ -136,7 +177,7 @@ for node in nodes_data:
 # We need to store line objects so we can update their data in the animation
 for i in range(NUM_NODES):
     current_node = nodes_data[i]
-    next_node = nodes_data[(i + 1) % NUM_NODES]
+    next_node = nodes_data[i + 1]
 
     x1_center, y1_center = current_node['pos'][0] + 0.5, current_node['pos'][1] + 0.5
     x2_center, y2_center = next_node['pos'][0] + 0.5, next_node['pos'][1] + 0.5
@@ -148,8 +189,9 @@ for i in range(NUM_NODES):
 
 plt.gca().set_aspect('equal', adjustable='box')
 plt.tight_layout()
+plt.show()
 
-# --- Animation Function ---
+'''# --- Animation Function ---
 
 def animate_moving_loop(frame):
     """
@@ -216,6 +258,6 @@ def animate_moving_loop(frame):
 # Create the animation
 # frames: number of frames (e.g., 400 steps for continuous movement)
 # interval: delay between frames in milliseconds
-ani = animation.FuncAnimation(fig, animate_moving_loop, frames=100, interval=10, blit=False, repeat=True)
+ani = animation.FuncAnimation(fig, animate_moving_loop, frames=100, interval=1000, blit=False, repeat=True)
 
-plt.show()
+plt.show()'''

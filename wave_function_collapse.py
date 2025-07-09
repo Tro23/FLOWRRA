@@ -3,6 +3,7 @@ import math
 import matplotlib.pyplot as plt
 from EnvironmentA import EnvironmentA
 from density_function_estimator import DensityFunctionEstimator
+from scipy.stats import entropy
 
 
 
@@ -47,7 +48,7 @@ class WaveFunctionCollapse:
 # 1. Simulate EnvironmentA data
 env = EnvironmentA()
 env_data = []
-for _ in range(500):
+for _ in range(100):
     state = env.step()
     env_data.extend([[x, y, angle] for (x, y), angle in state])
 env_data = np.array(env_data)
@@ -62,14 +63,30 @@ wfc = WaveFunctionCollapse(estimator)
 # 4. Run WFC
 collapsed_loop = wfc.collapse(num_nodes=12)
 
-# 5. Visualize
+# 5. Flow Coherence Metric
+loop_angles = collapsed_loop[:, 2]
+
+# Calculate frequencies of each angle
+
+counts, _ = np.histogram(loop_angles, bins=range(37), density=False)
+
+# Convert counts to probabilities
+probabilities = counts / np.sum(counts)
+
+# Filter out zero probabilities to avoid log(0) issues in entropy calculation
+probabilities = probabilities[probabilities > 0]
+
+#Calculate Entropy
+h_value = entropy(probabilities, base=2)
+
+# 6. Visualize
 x, y = collapsed_loop[:, 0] + 0.5, collapsed_loop[:, 1] + 0.5
 plt.figure(figsize=(6, 6))
 plt.plot(x, y, 'o-', color='orange', linewidth=2, markersize=6)
 plt.xlim(0, 30)
 plt.ylim(0, 30)
 plt.gca().set_aspect('equal')
-plt.title("Wave Function Collapse: Loop")
+plt.title(f"Wave Function Collapse: Loop with Entropy Value of {h_value}")
 plt.grid(alpha=0.3)
 plt.tight_layout()
 plt.show()

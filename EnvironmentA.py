@@ -95,7 +95,11 @@ class EnvironmentA:
         final_list.append(final_list[0])  # close the loop
         return final_list
 
-    def step(self):
+    def step(self,external_obstacles=None):
+        if external_obstacles is None:
+            external_obstacles = set()
+        else:
+            external_obstacles = set(external_obstacles)
         for i in range(self.num_nodes):
             node = self.nodes[i]
             # Ensure next_node is correctly determined from the current sequence of nodes, which is self.nodes
@@ -105,8 +109,10 @@ class EnvironmentA:
             moved = False
             for dx, dy in random.sample([(0, 1), (0, -1), (1, 0), (-1, 0)], 4):
                 new_x, new_y = node['pos'][0] + dx, node['pos'][1] + dy
-                if 0 <= new_x < self.grid_size and 0 <= new_y < self.grid_size:
-                    if all((new_x, new_y) != n['pos'] for j, n in enumerate(self.nodes) if j != i):
+                if (0 <= new_x < self.grid_size and 
+                    0 <= new_y < self.grid_size and 
+                    (new_x, new_y) not in external_obstacles and 
+                    all((new_x, new_y) != n['pos'] for j, n in enumerate(self.nodes) if j != i)):
                         node['pos'] = (new_x, new_y)
                         moved = True
                         break

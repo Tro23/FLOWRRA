@@ -4,7 +4,7 @@ from EnvironmentA import EnvironmentA
 from EnvironmentB import EnvironmentB
 from density_function_estimator import DensityFunctionEstimator
 from wave_function_collapse import WaveFunctionCollapse
-from environmentAVisualizer import EnvironmentAVisualizer
+from environmentABVisualizer import EnvironmentABVisualizer
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -84,5 +84,5 @@ if __name__ == "__main__":
     entropy_value = controller.visualize_coherence(loop)
     log_scores = controller.run_with_obstacles_and_update()
 
-    visualizer = EnvironmentAVisualizer(controller.env_a)
+    visualizer = EnvironmentABVisualizer(controller.env_a,controller.env_b)
     visualizer.render()

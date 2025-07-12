@@ -7,7 +7,7 @@ class EnvironmentABVisualizer:
         self.env_a = env_a
         self.env_b = env_b
 
-    def render(self):
+    def render(self,save=False, filename=None):
         fig, ax = plt.subplots(figsize=(8, 8))
         ax.set_xlim(0, self.env_a.grid_size)
         ax.set_ylim(0, self.env_a.grid_size)
@@ -57,4 +57,8 @@ class EnvironmentABVisualizer:
 
         plt.gca().set_aspect('equal', adjustable='box')
         plt.tight_layout()
-        plt.show()
+        if save and filename:
+            plt.savefig(filename)
+            plt.close()
+        else:
+            plt.show()

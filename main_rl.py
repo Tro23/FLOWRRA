@@ -93,5 +93,5 @@ for episode in range(max_episodes):
         visualizer = EnvironmentABVisualizer(current_env_a, env_b)
         visualizer.render(save=True, filename=f"Loop_Outputs/flowrra_rl_frame_{episode}.png")
 
-print("RL training complete.")
+print("RL training complete.") 
 

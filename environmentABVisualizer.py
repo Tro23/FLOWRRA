@@ -15,7 +15,7 @@ class EnvironmentABVisualizer:
         ax.set_xticks([])
         ax.set_yticks([])
 
-        # 🌐 Environment A — agents
+        # Environment A — agents
         nodes = self.env_a.nodes
         for i, node in enumerate(nodes):
             x_center, y_center = node['pos'][0] + 0.5, node['pos'][1] + 0.5
@@ -45,12 +45,12 @@ class EnvironmentABVisualizer:
             x2, y2 = next_[0] + 0.5, next_[1] + 0.5
             ax.plot([x1, x2], [y1, y2], 'k:', alpha=0.4, lw=1.0)
 
-        # 🧱 Environment B — fixed obstacles
+        # Environment B — fixed obstacles
         for (x, y) in self.env_b.fixed_blocks:
             rect = patches.Rectangle((x, y), 1, 1, fc='black', alpha=0.8)
             ax.add_patch(rect)
 
-        # 🧊 Environment B — moving blocks
+        # Environment B — moving blocks
         for (x, y) in self.env_b.moving_blocks:
             rect = patches.Rectangle((x + 0.1, y + 0.1), 0.8, 0.8, fc='crimson', alpha=0.7, lw=1.2, ec='darkred')
             ax.add_patch(rect)

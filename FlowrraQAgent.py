@@ -5,7 +5,6 @@ from sklearn.neighbors import KernelDensity # Only needed if FlowrraRLAgent itse
 class FlowrraRLAgent:
     def __init__(self, env_a, env_b, estimator, wfc,
                  angle_steps=36, alpha=0.1, gamma=0.95, entropy_threshold=3.0):
-        # Removed 'bandwidth' from init as KDE is handled by the 'estimator' object passed in
         self.env_a = env_a
         self.env_b = env_b
         self.estimator = estimator # This estimator should be pre-fitted on desired coherent data

@@ -1,97 +1,150 @@
-from EnvironmentA import EnvironmentA
-from EnvironmentB import EnvironmentB
-from density_function_estimator import DensityFunctionEstimator
-from wave_function_collapse import WaveFunctionCollapse
-from environmentABVisualizer import EnvironmentABVisualizer # Assuming this correctly handles both env_a and env_b
-from FlowrraQAgent import FlowrraRLAgent
-
+from FLOWRRA import Flowrra
+from Environment_B import EnvironmentB
+from EnvironmentAB_Visualizer import EnvironmentABVisualizer
 import numpy as np
-import matplotlib.pyplot as plt
+import random # We need random for the initial loop data generation
 
-# --- 1. Initialize core environments ---
-# Initialize with default parameters; these might be updated later if a WFC collapse re-initializes.
-env_a = EnvironmentA()
-env_b = EnvironmentB() # Environment B for obstacles
+# --- 1. Define the system configuration based on your requested structure ---
+# Configuration for Node_Position
+class NodePositionConfig:
+    def __init__(self, position, eye_angles, rotation_speed, move_speed):
+        self.position = position
+        self.eye_angles = eye_angles
+        self.rotation_speed = rotation_speed
+        self.move_speed = move_speed
 
-# --- 2. Collect initial data to train the KDE (the 'Stochastic Wave Function') ---
-# This is CRUCIAL. The KDE needs to learn the density of *desired* coherent states.
-# Simulate EnvironmentA following some ideal/desired coherent patterns or collect data from pre-defined loops.
-# For now, let's simulate EnvironmentA in a way that generates somewhat coherent (or representative) data.
+# Configuration for Node_Sensor
+class NodeSensorConfig:
+    def __init__(self, max_range, noise_std, false_negative_prob, false_positive_prob):
+        self.max_range = max_range
+        self.noise_std = noise_std
+        self.false_negative_prob = false_negative_prob
+        self.false_positive_prob = false_positive_prob
+
+# Configuration for Coherence_Score
+class CoherenceScoreConfig:
+    def __init__(self, entropy_threshold):
+        self.entropy_threshold = entropy_threshold
+
+# Generate some initial loop data for the first coherent state
+# This would typically come from an an initial WFC collapse or a pre-defined pattern
+num_nodes = 12
+initial_loop_data = []
+for i in range(num_nodes):
+    x = random.randint(0, 29)
+    y = random.randint(0, 29)
+    angle = random.randint(0, 35)
+    initial_loop_data.append([x, y, angle])
+
+# Initialize the main FLOWRRA class with the new structured configuration
+flowrra = Flowrra(
+    node_position_config=NodePositionConfig(position=(0,0), eye_angles=0, rotation_speed=2, move_speed=1),
+    node_sensor_config=NodeSensorConfig(max_range=10, noise_std=0.5, false_negative_prob=0.05, false_positive_prob=0.05),
+    loop_data_config=initial_loop_data,
+    coherence_score_config=CoherenceScoreConfig(entropy_threshold=3.4),
+    alpha=0.1,
+    gamma=0.95
+)
+
+# Initialize the external Environment B
+env_b = EnvironmentB()
+
+# Initialize the visualizer with the correct environment objects
+visualizer = EnvironmentABVisualizer(env_b)
+
+# --- 2. Train the KDE (the 'Stochastic Wave Function') ---
 print("Collecting initial data for KDE training...")
 initial_kde_training_data = []
-# It's better to get data from a coherent, stable phase of EnvA, or pre-defined loops.
-# For example, run EnvA initialized with a WFC loop for a few steps to generate data.
-# Or, if you have historical data of 'good' flow, use that.
-# For demonstration, let's just use EnvA's random movement but for enough steps to get varied data.
-temp_env_a_for_data_collection = EnvironmentA(grid_size=env_a.grid_size, num_nodes=env_a.num_nodes, angle_steps=env_a.angle_steps)
-for _ in range(1000): # Collect more data for better KDE
-    state_data = temp_env_a_for_data_collection.step()
-    initial_kde_training_data.extend([[x, y, angle] for (x, y), angle in state_data])
-initial_kde_training_data = np.array(initial_kde_training_data)
-print(f"Collected {len(initial_kde_training_data)} data points for KDE training.")
+# Simulate a few hundred steps of the initial loop to collect data
+for _ in range(500):
+    state = flowrra.env_a.step()
+    initial_kde_training_data.extend([[p[0][0], p[0][1], p[1]] for p in state])
+    
+flowrra.density_estimator.fit(initial_kde_training_data)
+print("KDE has been successfully trained on initial coherent data.")
 
+# --- 3. Warm-up Phase: Random Exploration to Populate Experience ---
+# This is a crucial step for many RL algorithms. We let the agent interact with
+# the environment randomly for a set number of steps to fill its internal state
+# with experiences before it starts policy-based learning.
+print("Starting warm-up phase with random actions...")
+warm_up_episodes = 50
+for episode in range(warm_up_episodes):
+    # Reset Environment B for a new episode
+    env_b = EnvironmentB()
+    visited_cells_b = set()
+    
+    for step in range(50): # Steps within a warm-up episode
+        # The agent steps with an epsilon of 1.0, ensuring purely random actions
+        next_env_a_state_data, reward, visited_cells_b = flowrra.step(env_b, visited_cells_b, epsilon=1.0)
+        
+        # Step Environment B (moving obstacles)
+        env_b.step()
 
-# --- 3. Fit the Density Function Estimator (KDE) ---
-# This fitted estimator is the 'Stochastic Wave Function' against which coherence will be measured throughout RL training.
-estimator = DensityFunctionEstimator(bandwidth=1.5) # You can tune bandwidth
-estimator.fit(initial_kde_training_data)
-print("Kernel Density Estimator (KDE) fitted on initial data.")
+print(f"Warm-up complete after {warm_up_episodes} episodes.")
 
-# --- 4. Instantiate Wave Function Collapse (WFC) ---
-# WFC uses the fitted estimator to generate coherent loops.
-wfc = WaveFunctionCollapse(estimator, grid_size=env_a.grid_size, angle_steps=env_a.angle_steps)
-print("WaveFunctionCollapse instantiated.")
+# --- 4. Run the Reinforcement Learning Loop ---
+num_episodes = 2000
+epsilon = 0.05  # Start with a very low epsilon for pure exploitation
+epsilon_increase = 0.0005 # A small, gradual increase rate
+max_epsilon = 0.2 # The steady-state epsilon threshold
 
-# --- 5. Initialize RL Agent ---
-# The agent needs the pre-fitted estimator.
-agent = FlowrraRLAgent(env_a, env_b, estimator, wfc)
-print("FlowrraRLAgent instantiated.")
-
-# --- 6. Perform initial 'Collapse' to set up EnvironmentA for the first time with a coherent loop ---
-# This ensures the RL training starts from a relatively coherent state.
-print("Performing initial WFC collapse to set EnvironmentA state for RL training...")
-initial_loop = wfc.collapse(num_nodes=env_a.num_nodes) # Generate a coherent loop
-# Re-initialize agent's env_a with this coherent loop. Update num_nodes based on actual loop length.
-agent.env_a = EnvironmentA(grid_size=env_a.grid_size, num_nodes=len(initial_loop)-1,
-                           angle_steps=env_a.angle_steps, initial_loop_data=initial_loop.tolist())
-env_a = agent.env_a # Make sure the main script's env_a reference is updated
-print("EnvironmentA initialized with a collapsed loop for RL training.")
-
-# --- 7. Run the RL training loop ---
-max_episodes = 2000 # Increased episodes to give RL more time to learn
 coherence_scores_per_episode = []
 entropies_per_episode = []
+visited_cells_b = set()
 
-print("Starting RL training loop...")
-for episode in range(max_episodes):
-    # agent.step() controls env_a's nodes, updates Q-tables, and returns if collapse is needed
-    # The external_obstacles from env_b.step() are handled *inside* agent.step().
-    collapse_triggered, current_env_a = agent.step()
+for episode in range(num_episodes):
+    # Reset Environment B for a new episode
+    env_b = EnvironmentB()
+    
+    # Get initial state of Environment A for the episode
+    current_env_a_state_data = flowrra.env_a.step()
+    
+    for step in range(500): # Steps within an episode
+        # Step the FLOWRRA agent
+        next_env_a_state_data, reward, visited_cells_b = flowrra.step(env_b, visited_cells_b, epsilon)
+        
+        # Step Environment B (moving obstacles)
+        env_b.step()
 
-    # Get current coherence score and entropy for logging and visualization
-    current_state_data = [(n['pos'], n['eye_angle_idx']) for n in current_env_a.nodes]
-    current_coherence_score = agent._score_environment(current_state_data)
-    current_entropy = agent._compute_entropy(current_state_data)
+        # Check for coherence and potentially trigger WFC
+        current_coherence_score = flowrra._score_environment(current_env_a_state_data)
+        current_entropy = flowrra._compute_entropy(current_env_a_state_data)
 
+        if current_entropy > flowrra.coherence_score_config.entropy_threshold:
+            print(f"Collapse triggered at episode {episode}, step {step} due to high entropy ({current_entropy:.2f}).")
+            
+            # Use WFC to generate a new coherent loop from the neighborhood of the previous state
+            new_loop = flowrra.wfc.collapse(num_nodes=flowrra.num_nodes, last_state_data=current_env_a_state_data)
+            
+            # Re-initialize Environment A with the new coherent loop
+            flowrra.env_a = flowrra.Environment_A(
+                node_params=flowrra.node_pos_config,
+                loop_data=new_loop.tolist(),
+                grid_size=flowrra.env_a.grid_size,
+                angle_steps=flowrra.env_a.angle_steps
+            )
+            print("Environment A re-initialized with a new coherent loop.")
+            break # End the current episode
+        
+        # Update state for next step
+        current_env_a_state_data = next_env_a_state_data
+
+    # Log episode stats at the end of the episode
     coherence_scores_per_episode.append(current_coherence_score)
     entropies_per_episode.append(current_entropy)
-
-    if collapse_triggered:
-        print(f"Collapse triggered at episode {episode} due to high entropy ({current_entropy:.2f}).")
-        # Generate a new coherent loop from WFC
-        new_loop = wfc.collapse(num_nodes=current_env_a.num_nodes)
-        
-        # Re-initialize EnvironmentA with the new loop to restore coherence
-        agent.env_a = EnvironmentA(grid_size=current_env_a.grid_size, num_nodes=len(new_loop)-1,
-                                   angle_steps=current_env_a.angle_steps, initial_loop_data=new_loop.tolist())
-        env_a = agent.env_a # Update reference in main script
-        print(f"EnvironmentA re-initialized with a new coherent loop.")
+    
+    # Gradually increase epsilon towards the max_epsilon threshold
+    epsilon = min(max_epsilon, epsilon + epsilon_increase)
 
     # Optional: visualize every N episodes and log progress
-    if episode % 100 == 0: # Visualize less frequently to save time/resources
-        print(f"Episode {episode}: Coherence Score = {current_coherence_score:.2f}, Entropy = {current_entropy:.2f}")
-        visualizer = EnvironmentABVisualizer(current_env_a, env_b)
-        visualizer.render(save=True, filename=f"Loop_Outputs/flowrra_rl_frame_{episode}.png")
+    '''if episode % 50 == 0:
+        print(f"Episode {episode}: Coherence Score = {coherence_scores_per_episode[-1]:.2f}, Entropy = {entropies_per_episode[-1]:.2f}, Epsilon = {epsilon:.2f}")
+        visualizer.render(nodes_to_render=flowrra.node_pos_config.position, 
+                          grid_size=flowrra.env_a.grid_size,
+                          angle_steps=flowrra.env_a.angle_steps, 
+                          visited_cells_b=visited_cells_b, 
+                          save=True, 
+                          filename=f"Version_1_Outputs/FLowrra_frame_{episode}.png")'''
 
-print("RL training complete.") 
-
+print("Training finished!")

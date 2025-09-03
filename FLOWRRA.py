@@ -180,78 +180,93 @@ class Flowrra:
         def score_samples(self, data_points):
             return self.kde.score_samples(np.array(data_points))
 
+
+
     class WaveFunctionCollapse:
-        """
-        Collapses the 'wave function' of the loop to a coherent state.
-        Now collapses to a state in the neighborhood of the previous state.
-        """
-        def __init__(self, density_estimator, env_a):
-            self.estimator = density_estimator
-            self.env_a = env_a
-            self.grid_size = self.env_a.grid_size
-            self.angle_steps = self.env_a.angle_steps
-            
+        def __init__(self, estimator, grid_size=30, angle_steps=36):
+            self.estimator = estimator
+            self.grid_size = grid_size
+            self.angle_steps = angle_steps
+
         def generate_loop(self, positions):
             """Generates a loop by connecting nearest nodes iteratively."""
             if len(positions) == 0:
                 return []
-            
-            # Sort positions to form a coherent loop
-            positions_list = positions.tolist()
-            loop = [positions_list.pop(0)]
-            
-            while positions_list:
-                current_point = loop[-1]
-                distances = [(math.hypot(x - current_point[0], y - current_point[1]), point) 
-                             for point in positions_list for x, y, _ in [point]]
-                
-                min_dist_point = min(distances)[1]
-                loop.append(min_dist_point)
-                positions_list.remove(min_dist_point)
 
+            loop = [positions[0]]
+            current = positions[0]
+            remaining = positions[1:].tolist()
+
+            while remaining:
+                distances = [(math.hypot(x - current[0], y - current[1]), [x, y, a]) for x, y, a in remaining]
+                if not distances:
+                    break
+                _, next_point = min(distances)
+                loop.append(next_point)
+                remaining.remove(next_point)
+                current = next_point
+
+            loop.append(loop[0])  # Close the loop
             return np.array(loop)
 
-        def collapse(self, num_nodes, last_state_data):
+        def collapse(self, num_nodes=12, last_state_data=None):
             """
-            Performs wave function collapse by sampling and looping.
-            The collapse is biased towards the neighborhood of the last state.
+            Performs a more intelligent wave function collapse by iteratively building
+            a coherent loop from the density estimator.
             """
-            # Step 1: Sample a large pool of potential new states
-            num_samples = 1000 # Sample a larger pool to find a good candidate
-            samples = self.estimator.sample(num_samples)
+            # --- Stage 1: Initialize the loop with a starting point ---
+            if last_state_data is not None and len(last_state_data) > 0:
+                # Use the most recent positions of the last state as a starting point
+                start_pos_x, start_pos_y = last_state_data[0][0][0], last_state_data[0][0][1]
+                start_angle = last_state_data[0][1]
+                loop_nodes = [np.array([start_pos_x, start_pos_y, start_angle])]
+            else:
+                # Fallback: Sample a random point from the estimator
+                samples = self.estimator.sample(1)
+                loop_nodes = [samples[0]]
             
-            # Step 2: Calculate the "neighborhood distance" for each sample
-            last_state_array = np.array([p[0] for p in last_state_data])
+            # --- Stage 2: Iteratively add nodes to build the coherent loop ---
+            for _ in range(num_nodes - 1):
+                last_node = loop_nodes[-1]
             
-            candidate_distances = []
-            for i in range(num_samples):
-                candidate_pos = samples[i, :2].reshape(1, -1)
+                # Sample a batch of candidates from the KDE
+                candidate_samples = self.estimator.sample(50) 
+            
+                # Score each candidate
+                best_score = -float('inf')
+                best_candidate = None
+            
+                for candidate in candidate_samples:
+                    # Calculate distance to the last node
+                    distance = np.linalg.norm(candidate[:2] - last_node[:2])
                 
-                # Check for the closest node in the previous state to the current sample
-                distances_to_last_state = np.linalg.norm(last_state_array - candidate_pos, axis=1)
-                min_dist = np.min(distances_to_last_state)
-                candidate_distances.append(min_dist)
-
-            # Step 3: Select the best sample based on neighborhood proximity
-            best_sample_idx = np.argmin(candidate_distances)
-            best_sample = samples[best_sample_idx]
+                    # Get the KDE score for the candidate
+                    kde_score = self.estimator.score_samples([candidate])[0]
+                
+                    # Combine scores: reward high KDE density and penalize large distances
+                    # The weighting (e.g., 5.0) can be tuned to balance coherence and proximity
+                    combined_score = kde_score - 5.0 * distance
+                
+                    if combined_score > best_score:
+                        best_score = combined_score
+                        best_candidate = candidate
             
-            # Step 4: Generate a new coherent loop from the best sample
-            # The loop generation logic remains the same
-            best_sample[0] = np.clip(best_sample[0], 0, self.grid_size - 1)
-            best_sample[1] = np.clip(best_sample[1], 0, self.grid_size - 1)
-            best_sample[2] = np.clip(best_sample[2], 0, self.angle_steps - 1)
+                # If a best candidate was found, add it to the loop
+                if best_candidate is not None:
+                    loop_nodes.append(best_candidate)
+                else:
+                    # Fallback: If no good candidates found, just sample randomly
+                    loop_nodes.append(self.estimator.sample(1)[0])
 
-            # Generate a full loop based on the chosen sample
-            # This is a simplification. A more complex approach would involve
-            # a multi-point collapse. For now, we take one "anchor" point
-            # and re-generate the loop from a new set of samples.
-            new_samples = self.estimator.sample(num_nodes)
-            new_samples[:, 0] = np.clip(new_samples[:, 0], 0, self.grid_size - 1)
-            new_samples[:, 1] = np.clip(new_samples[:, 1], 0, self.grid_size - 1)
-            new_samples[:, 2] = np.clip(new_samples[:, 2], 0, self.angle_steps - 1)
-            
-            return self.generate_loop(np.round(new_samples).astype(int))
+            # --- Stage 3: Post-processing and finalizing the loop ---
+            # Ensure all coordinates and angles are within valid ranges
+            final_nodes = np.array(loop_nodes)
+            final_nodes[:, 0] = np.clip(final_nodes[:, 0], 0, self.grid_size - 1)
+            final_nodes[:, 1] = np.clip(final_nodes[:, 1], 0, self.grid_size - 1)
+            final_nodes[:, 2] = np.clip(final_nodes[:, 2], 0, self.angle_steps - 1)
+            final_nodes_int = np.round(final_nodes).astype(int)
+
+            return self.generate_loop(final_nodes_int)
 
     def __init__(self, node_position_config, node_sensor_config, loop_data_config, coherence_score_config, alpha=0.1, gamma=0.95):
         """
@@ -268,7 +283,7 @@ class Flowrra:
 
         # Initialize inner components
         self.env_a = self.Environment_A(
-            NodePositionClass=NodePosition,  # Pass the top-level class
+            NodePositionClass=NodePosition,
             node_params=self.node_pos_config,
             loop_data=self.loop_data_config,
             grid_size=30,
@@ -278,10 +293,8 @@ class Flowrra:
             bandwidth=1.5
         )
         self.wfc = self.WaveFunctionCollapse(
-            density_estimator=self.density_estimator,
-            env_a=self.env_a
+            estimator=self.density_estimator
         )
-        # Use the top-level NodeSensor class
         self.node_sensor = NodeSensor(
             max_range=self.node_sensor_config.max_range,
             noise_std=self.node_sensor_config.noise_std,
@@ -289,38 +302,36 @@ class Flowrra:
             false_positive_prob=self.node_sensor_config.false_positive_prob
         )
 
-        # Q-learning tables for each node
         self.q_tables = {i: {} for i in range(self.num_nodes)}
         self.action_space = self._generate_actions()
+        
+        self.visited_cells_b = set()
+        
+        self.last_collapse_state = None
 
+    # --- CHANGED ---: The agent's action space is now simplified.
+    # It only controls movement (dx, dy), not rotation. This makes the learning
+    # problem easier and enforces that eye angles are determined by the loop's structure.
     def _generate_actions(self):
-        # A tuple of (move_x, move_y, rotate_steps)
-        # Move actions: 0, -1, 1 for x and y
-        # Rotate actions: -1, 0, 1 for rotation steps
-        # This is a simplified action space.
+        """Generates the action space, now only for movement."""
         actions = []
         for dx in [-1, 0, 1]:
             for dy in [-1, 0, 1]:
-                for dr in [-1, 0, 1]:
-                    actions.append((dx, dy, dr))
+                actions.append((dx, dy))
         return actions
 
     def _get_q_state(self, env_a_state_data, env_b_sensor_readings):
-        """
-        Maps the complex environment state to a simplified Q-learning state.
-        This is a crucial design choice for RL.
-        """
-        # A simple state representation could be the positions of all agents,
-        # plus the sensor readings for all agents.
-        # This will create a very large state space, which is a known challenge.
-        # For simplicity, we'll use a tuple of tuples.
+        """Maps the complex environment state to a simplified Q-learning state."""
         state = tuple(env_a_state_data) + tuple(env_b_sensor_readings)
         return state
 
+    # --- CHANGED ---: The apply action method no longer handles rotation.
+    # The `Environment_A.step()` method is now the sole controller of eye angles,
+    # ensuring they always point to the next node in the loop.
     def _apply_action(self, node_index, action):
-        """Applies a chosen action to a single node."""
+        """Applies a chosen MOVEMENT action to a single node."""
         node = self.env_a.nodes[node_index]
-        dx, dy, dr = action
+        dx, dy = action # Action is now just (dx, dy)
         
         # Apply movement
         new_x = int(node.pos[0] + dx)
@@ -330,8 +341,7 @@ class Flowrra:
         if 0 <= new_x < self.env_a.grid_size and 0 <= new_y < self.env_a.grid_size:
             node.pos = (new_x, new_y)
 
-        # Apply rotation
-        node.eye_angle_idx = (node.eye_angle_idx + dr) % self.env_a.angle_steps
+        # Rotation is no longer part of the action.
 
     def _compute_entropy(self, state_data_list):
         """Computes the Shannon entropy of the loop's eye angles."""
@@ -353,90 +363,98 @@ class Flowrra:
         return ShannonEntropy(probs, base=2)
 
     def _score_environment(self, state_data_list):
-        """
-        Scores the current environment A loop against the coherent density model.
-        Returns the log-likelihood sum.
-        """
+        """Scores the current environment A loop against the coherent density model."""
+        if not self.density_estimator.trained:
+            return -np.inf
         data_for_scoring = np.array([[x, y, angle] for (x, y), angle in state_data_list])
         log_likelihoods = self.density_estimator.score_samples(data_for_scoring)
         return np.sum(log_likelihoods)
 
-    def _compute_reward(self, current_state_data, next_state_data, visited_cells_b, entropy_threshold):
+    def _compute_reward(self, next_state_data, new_cells_visited_count, entropy_threshold):
         """
-        Calculates the reward based on exploration of Environment B and
-        coherence of Environment A.
+        Calculates reward based on exploration, coherence, and memory of past failures.
         """
-        # Reward from Environment B: Exploration
-        new_visited_cells = len(visited_cells_b)
-        exploration_reward = new_visited_cells * 0.1 # Small reward for each new cell visited
+        # 1. Reward from Environment B: Exploration
+        exploration_reward = new_cells_visited_count * 0.5
 
-        # Reward/Penalty from Environment A: Coherence
-        current_entropy = self._compute_entropy(current_state_data)
+        # 2. Reward/Penalty from Environment A: Coherence and Failure State Avoidance
         next_entropy = self._compute_entropy(next_state_data)
-        
         coherence_reward = 0
-        if next_entropy > entropy_threshold:
-            coherence_reward = -10 # Large penalty for high entropy
-        elif next_entropy < current_entropy:
-            coherence_reward = 1 # Small positive reward for decreasing entropy
+
+        # Priority 1: Check if the agent has returned to the state that previously caused a collapse.
+        if self.last_collapse_state is not None and tuple(next_state_data) == self.last_collapse_state:
+            coherence_reward = -100.0
+            print("!!! Agent returned to a previous collapse state. Applying large penalty. !!!")
+            self.last_collapse_state = None 
+        
+        # Priority 2: Check if the new state breaks coherence (crosses entropy threshold).
+        elif next_entropy > entropy_threshold:
+            coherence_reward = -20.0
+        
+        # Priority 3: If coherent, reward the agent for maintaining low entropy.
         else:
-            coherence_reward = -0.1 # Small penalty for increasing or stable entropy
+            coherence_reward = (entropy_threshold - next_entropy) * 2.0
 
         return exploration_reward + coherence_reward
+    
+    def record_collapse_state(self, state_data):
+        """Records the state that led to a wave function collapse."""
+        self.last_collapse_state = tuple(state_data)
+        print(f"Recorded a collapse state. Will now penalize returning to it.")
 
-    def step(self, env_b, visited_cells_b, epsilon):
+    def reinitialize_loop(self, new_loop_data):
+        """Re-initializes Environment_A with a new coherent loop."""
+        self.env_a._initialize_nodes(new_loop_data, self.node_pos_config)
+        print("Flowrra internal loop has been re-initialized.")
+
+    def step(self, env_b, epsilon):
         """
         Executes one step of the RL process for the multi-agent system.
         """
-        # Get current state from Environment A
         current_env_a_state_data = self.env_a.step()
 
-        # Each node performs a sensor reading from Environment B
         env_b_sensor_readings = []
         for node in self.env_a.nodes:
             reading = self.node_sensor.sense(node, env_b, self.env_a.grid_size)
             env_b_sensor_readings.append(reading)
 
-        # Combine states for Q-learning
         q_state = self._get_q_state(current_env_a_state_data, env_b_sensor_readings)
 
-        # Epsilon-greedy action selection for each node
         chosen_actions = []
         for node_index in range(self.num_nodes):
             if random.random() < epsilon:
-                action = random.choice(self.action_space)  # Explore
+                action = random.choice(self.action_space)
             else:
-                # Exploit
-                if q_state in self.q_tables[node_index]:
+                if q_state in self.q_tables[node_index] and self.q_tables[node_index][q_state]:
                     q_values = self.q_tables[node_index][q_state]
                     action = max(q_values, key=q_values.get)
                 else:
-                    action = random.choice(self.action_space) # No Q-value yet, explore
+                    action = random.choice(self.action_space)
             chosen_actions.append(action)
 
-        # Apply chosen actions to Environment A
         for node_index, action in enumerate(chosen_actions):
             self._apply_action(node_index, action)
             
-        # Update Environment A's state and get new data for reward calculation
         next_env_a_state_data = self.env_a.step()
 
-        # Update visited cells in Environment B for reward
+        previous_visited_count = len(self.visited_cells_b)
         for node in self.env_a.nodes:
-            visited_cells_b.add(node.pos)
+            self.visited_cells_b.add(node.pos)
+        new_cells_visited_count = len(self.visited_cells_b) - previous_visited_count
 
-        # Compute reward
-        reward = self._compute_reward(current_env_a_state_data, next_env_a_state_data, visited_cells_b, self.coherence_score_config.entropy_threshold)
+        reward = self._compute_reward(
+            next_env_a_state_data, 
+            new_cells_visited_count, 
+            self.coherence_score_config.entropy_threshold
+        )
 
-        # Get next state and update Q-table
         next_q_state = self._get_q_state(next_env_a_state_data, env_b_sensor_readings)
         
         for node_index, action in enumerate(chosen_actions):
-            # Q-table update using the centralized reward
             if q_state not in self.q_tables[node_index]:
-                self.q_tables[node_index][q_state] = {a: 0 for a in self.action_space}
+                self.q_tables[node_index][q_state] = {a: 0.0 for a in self.action_space}
             if next_q_state not in self.q_tables[node_index]:
-                self.q_tables[node_index][next_q_state] = {a: 0 for a in self.action_space}
+                self.q_tables[node_index][next_q_state] = {a: 0.0 for a in self.action_space}
                 
             old_q_value = self.q_tables[node_index][q_state][action]
             next_max_q = max(self.q_tables[node_index][next_q_state].values())
@@ -444,24 +462,4 @@ class Flowrra:
             new_q_value = old_q_value + self.alpha * (reward + self.gamma * next_max_q - old_q_value)
             self.q_tables[node_index][q_state][action] = new_q_value
 
-        return next_env_a_state_data, reward, visited_cells_b
-
-    def warm_up(self, env_b, wfc, num_episodes, steps_per_episode):
-        """
-        Performs a Q-table warm-up session to pre-populate the tables.
-        """
-        print("Warming up Q-tables with a short training session...")
-        epsilon = 0.6 # Start with pure exploration
-        epsilon_decay = 0.6 / (num_episodes * steps_per_episode) # Decay over the session
-        
-        for episode in range(num_episodes):
-            # Re-initialize with a new coherent loop from WFC at the start of each warmup episode
-            new_loop = wfc.collapse(num_nodes=self.env_a.num_nodes, last_state_data=self.env_a.nodes)
-            self.env_a._initialize_nodes(new_loop.tolist(), self.node_pos_config)
-
-            visited_cells_b = set()
-            for step in range(steps_per_episode):
-                self.step(env_b, visited_cells_b, epsilon)
-                epsilon = max(0.05, epsilon - epsilon_decay) # Decay epsilon
-
-        print(f"Warm-up finished. Q-tables populated with {sum(len(t) for t in self.q_tables.values())} state-action pairs.")
+        return next_env_a_state_data, reward

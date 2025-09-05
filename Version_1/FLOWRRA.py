@@ -3,6 +3,15 @@ import random
 import math
 from sklearn.neighbors import KernelDensity
 from scipy.stats import entropy as ShannonEntropy
+import logging
+
+
+# configure logging once -- Necessary
+logging.basicConfig(
+    filename="flowrra_collapses.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 # --- Moved NodePosition and NodeSensor outside the Flowrra class ---
 class NodePosition:
@@ -422,7 +431,8 @@ class Flowrra:
     def record_collapse_state(self, state_data):
         """Records the state that led to a wave function collapse."""
         self.last_collapse_state = tuple(state_data)
-        print(f"Recorded a collapse state. Will now penalize returning to it.")
+        logging.warning(f"Collapse recorded at state: {self.last_collapse_state}")
+        print(f"Will now penalize returning to {self.last_collapse_state}.")
 
     def reinitialize_loop(self, new_loop_data):
         """Re-initializes Environment_A with a new coherent loop."""

@@ -62,7 +62,7 @@ flowrra = Flowrra(
     node_position_config=NodePositionConfig(position=(0,0), eye_angles=0, rotation_speed=2, move_speed=1),
     node_sensor_config=NodeSensorConfig(max_range=10, noise_std=0.5, false_negative_prob=0.05, false_positive_prob=0.05),
     loop_data_config=initial_loop_data,
-    coherence_score_config=CoherenceScoreConfig(entropy_threshold=3.47),
+    coherence_score_config=CoherenceScoreConfig(entropy_threshold=2.8),
     alpha=0.09,
     gamma=0.85
 )
@@ -100,10 +100,10 @@ for episode in range(warm_up_episodes):
 print(f"Warm-up complete after {warm_up_episodes} episodes.")
 
 # --- 4. Run the Reinforcement Learning Loop ---
-num_episodes = 250
-steps_per_episode = 500
+num_episodes = 500
+steps_per_episode = 1000
 eps_min=0.05
-eps_peak=0.6
+eps_peak=0.8
 epsilon = eps_min
 
 rewards_per_episode = []

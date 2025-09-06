@@ -36,7 +36,7 @@ class Environment_A:
         self.loopdata: List[List[Dict[str, Any]]] = []
         self.t: int = 0
         self._initialize_nodes()
-
+        
     def _initialize_nodes(self):
         """Creates the initial set of nodes with random positions and orientations."""
         self.nodes = []
@@ -53,10 +53,6 @@ class Environment_A:
     def snapshot_nodes(self) -> List[Dict[str, Any]]:
         """
         Creates a serializable snapshot of the current state of all nodes.
-        This is used for logging and for the history buffer in WaveFunctionCollapse.
-
-        Returns:
-            A list of dictionaries, each representing a node's state.
         """
         return [{
             'id': n.id,
@@ -65,13 +61,18 @@ class Environment_A:
             'velocity': n.velocity()
         } for n in self.nodes]
 
+    def get_node_positions_flat(self) -> List[float]:
+        """
+        Returns the x,y positions of all nodes in a single flattened list.
+        """
+        positions = []
+        for node in self.nodes:
+            positions.extend(node.pos.tolist())
+        return positions
+    
     def step(self, actions: List[Dict[str, Any]], dt: float = 1.0):
         """
         Advances the simulation by one timestep.
-
-        Args:
-            actions (List[Dict]): A list of action dictionaries, one for each node.
-            dt (float): The time delta for this step.
         """
         if len(actions) != len(self.nodes):
             raise ValueError("Number of actions must match number of nodes.")

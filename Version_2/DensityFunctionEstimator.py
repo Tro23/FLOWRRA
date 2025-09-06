@@ -28,12 +28,14 @@ class Density_Function_Estimator:
     """
     def __init__(self,
                  grid_shape: tuple[int, int] = (64, 64),
-                 eta: float = 0.1,         # Repulsion learning rate
+                 eta: float = 0.02,         # Repulsion learning rate
                  gamma_f: float = 0.8,       # Forward decay for comet-tail
                  k_f: int = 5,             # Forward projection steps
                  sigma_f: float = 2.5,       # Kernel width in grid cells
                  decay_lambda: float = 0.01, # Field decay rate
-                 blur_delta: float = 0.1):   # Diffusion/blur mix factor
+                 blur_delta: float = 0.1, # Diffusion/blur mix factor
+                 angle_steps: int = 360,   # Discrete angle resolution
+                 beta: float = 0.05):       # Repulsion Weight
 
         self.grid_shape = grid_shape
         self.repulsion_field = np.zeros(grid_shape)
@@ -45,9 +47,13 @@ class Density_Function_Estimator:
         self.sigma_f = sigma_f
         self.decay_lambda = decay_lambda
         self.blur_delta = blur_delta
+        self.angle_steps = angle_steps
+        self.beta = beta
 
         # Pre-compute grid coordinates and a blur kernel for efficiency
         self._grid_y, self._grid_x = np.mgrid[0:grid_shape[0], 0:grid_shape[1]]
+        self.width = grid_shape[1]
+        self.height = grid_shape[0]
         self.blur_kernel = self._create_blur_kernel()
 
     def _create_blur_kernel(self):
@@ -55,45 +61,57 @@ class Density_Function_Estimator:
         k = np.array([[0.5, 1.0, 0.5], [1.0, 2.0, 1.0], [0.5, 1.0, 0.5]])
         return k / k.sum()
 
-    def _splat_gaussian(self, center_x: float, center_y: float, strength: float):
+    def _splat_gaussian(self, center_x_grid: float, center_y_grid: float, strength: float):
         """
         Adds a single Gaussian kernel to the repulsion field.
         This is the fundamental operation for adding repulsion.
         """
-        g = strength * np.exp(-((self._grid_x - center_x)**2 + (self._grid_y - center_y)**2) / (2 * self.sigma_f**2))
+        """center_x_grid, center_y_grid are in grid coordinates (0..width-1), (0..height-1)."""
+        g = strength * np.exp(-((self._grid_x - center_x_grid)**2 + (self._grid_y - center_y_grid)**2) / (2 * (self.sigma_f**2)))
         self.repulsion_field += g
 
     def update_from_detections(self, all_detections: list[dict[str, any]]):
         """
         Updates the repulsion field based on all sensor detections.
-        We now use the eye angle to create a directional repulsion component.
+        Handles both nodes (with angle data) and obstacles (without).
         """
         if not all_detections:
             return
 
         for det in all_detections:
             # 1. Get core detection data
-            pos = det['pos']
-            velocity = det['velocity']
-            angle_idx = det['angle_idx']  # <-- GET THE NEW DATA
-
+            pos = np.array(det['pos'])        # normalized [0,1)
+            velocity = np.array(det.get('velocity', np.zeros(2)))
+        
             # 2. Create the repulsion splat from position & velocity
-            # This is your existing "comet-tail" logic, which is still important.
-            kernel_center = pos + velocity * self.gamma_f
+            # This is the "comet-tail" logic, which applies to both nodes and obstacles.
 
-            # 3. Create a **directional** repulsion based on eye angle
-            # This is the new logic to connect eyes to the density field.
-            eye_angle_rad = (angle_idx / 360) * 2 * np.pi
-            eye_vector = np.array([np.cos(eye_angle_rad), np.sin(eye_angle_rad)])
+            # Convert normalized pos -> grid coords BEFORE splatting
+            center_norm = pos + velocity * self.gamma_f   # still normalized
+            # clamp to [0,1)
+            center_norm = np.clip(center_norm, 0.0, 0.999999)
+            # convert to grid coordinates (x,y)
+            center_x_grid = center_norm[0] * (self.width - 1)
+            center_y_grid = center_norm[1] * (self.height - 1)
 
-            # We can create a small "cone" of repulsion in the direction of the eye
-            # This tells the system that looking in a certain direction creates a "bad" field
-            cone_center = pos + eye_vector * 0.05  # A small distance in front of the node
+            # Strength uses eta and optionally signal if available
+            signal = float(det.get('signal', 1.0))
+            strength = self.eta * signal
 
-            # Combine existing repulsion with directional repulsion
-            # We'll splat a kernel at both the original position and a new 'cone' position.
-            self._splat_gaussian(kernel_center, strength =self.sigma_f)
-            self._splat_gaussian(cone_center, strength = self.sigma_f * 0.5) # Smaller, more localized splat
+            self._splat_gaussian(center_x_grid, center_y_grid, strength)
+
+            # 3. Create a **directional** repulsion based on eye angle.
+            # This only applies to the nodes that have an angle_idx.
+            if 'angle_idx' in det:
+                angle_idx = det['angle_idx']
+                # convert discrete index -> angle in radians using estimator's angle_steps
+                eye_angle_rad = (angle_idx / float(self.angle_steps)) * 2.0 * np.pi
+                eye_vector = np.array([np.cos(eye_angle_rad), np.sin(eye_angle_rad)])
+                cone_center_norm = pos + eye_vector * 0.03  # small offset in normalized space
+                cone_center_norm = np.clip(cone_center_norm, 0.0, 0.999999)
+                cx = cone_center_norm[0] * (self.width - 1)
+                cy = cone_center_norm[1] * (self.height - 1)
+                self._splat_gaussian(cx, cy, strength * 0.6)
 
     def step_dynamics(self):
         """
@@ -126,12 +144,12 @@ class Density_Function_Estimator:
         """
         if positions.shape[0] == 0:
             return np.array([])
-        # Convert to grid coordinates
-        grid_coords = positions * np.array([self.grid_shape[1], self.grid_shape[0]])
-        # Simple nearest-neighbor sampling. Bilinear interpolation would be more accurate.
-        grid_x = np.clip(grid_coords[:, 0].astype(int), 0, self.grid_shape[1] - 1)
-        grid_y = np.clip(grid_coords[:, 1].astype(int), 0, self.grid_shape[0] - 1)
+        # positions assumed normalized [0,1)
+        #simplest nearest neighbor
+        grid_x = np.clip((positions[:,0] * (self.width - 1)).astype(int), 0, self.width - 1)
+        grid_y = np.clip((positions[:,1] * (self.height - 1)).astype(int), 0, self.height - 1)
         return self.repulsion_field[grid_y, grid_x]
+
     
     def get_density_at_positions(self, positions: np.ndarray) -> np.ndarray:
         """
@@ -146,13 +164,16 @@ class Density_Function_Estimator:
         
         # 2. Add the base potential U_pos. (Assuming U_pos is a constant for simplicity, e.g., 0.5)
         # The design document states U_pos is a "smooth, fixed prior".
-        U_pos = 0.5 
+        U_pos = 0.5
+        # --- NEW: attraction term ---
+        loop_center = np.array([0.5, 0.5])  # placeholder, or dynamic avg of nodes
+        dist2 = np.sum((positions - loop_center) ** 2, axis=1)
+        attraction = 0.1 * dist2   # small quadratic pull
         
         # 3. Calculate total potential U(x,t) = U_pos + beta * r(x,t)
         # Note: 'beta' (repulsion weight) is currently missing from your config, 
         # so let's add it to the main_runner config and pass it here. 
-        beta = 1.0 # This needs to be a parameter, as suggested in the design doc.
-        total_potentials = U_pos + beta * repulsion_potentials
+        total_potentials = U_pos + self.beta * repulsion_potentials + attraction
         
         # 4. Convert potential to unnormalized density: exp(-U(x,t))
         unnormalized_density = np.exp(-total_potentials)

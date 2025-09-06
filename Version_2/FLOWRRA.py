@@ -63,13 +63,23 @@ class Flowrra:
         """Initializes the CSV log file with headers."""
         with open(self.log_file, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(['t', 'coherence', 'reward', 'collapse_event'])
+            # Dynamic header generation based on the number of nodes
+            node_headers = []
+            for i in range(self.env.num_nodes):
+                node_headers.extend([f'node_{i}_x', f'node_{i}_y'])
+            
+            headers = ['t', 'coherence', 'reward', 'collapse_event'] + node_headers
+            writer.writerow(headers)
 
     def _log_step(self, coherence: float, reward: float, collapse_event: bool):
         """Writes a single row to the CSV log."""
         with open(self.log_file, 'a', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow([self.env.t, coherence, reward, int(collapse_event)])
+            # Retrieve flattened node positions
+            node_positions = self.env.get_node_positions_flat()
+            
+            row = [self.env.t, coherence, reward, int(collapse_event)] + node_positions
+            writer.writerow(row)
 
     def _calculate_angle_idx(self, p1: np.ndarray, p2: np.ndarray) -> int:
         """Helper to calculate the discrete angle from p1 to p2."""
@@ -92,50 +102,50 @@ class Flowrra:
         angle_rad = (eye_angle_idx / self.env.angle_steps) * 2 * np.pi
         return np.array([np.cos(angle_rad), np.sin(angle_rad)])
 
-    def generate_actions(self, rotation_substeps: int = 4) -> list[dict[str, any]]:
+    def generate_actions(self) -> list[dict[str, any]]:
         """
-        Generates actions for each node to maintain the loop structure,
-        using sub-steps to ensure fluid rotation.
+        Generates actions (move, rotate) for each node based on the repulsion field
+        and adds a small random walk to ensure constant movement.
         """
-        
-        # This will contain the final actions after all substeps
-        final_actions = []
-
-        for _ in range(rotation_substeps):
-            num_nodes = len(self.env.nodes)
+        actions = []
+        for node in self.env.nodes:
+            pos = node.pos
             
-            for i in range(num_nodes):
-                curr_node = self.env.nodes[i]
-                next_node = self.env.nodes[(i + 1) % num_nodes]
-                
-                # 1. Calculate the target angle towards the next node
-                target_angle_idx = self._calculate_angle_idx(curr_node.pos, next_node.pos)
-
-                # 2. Update the node's eye to rotate towards the target
-                # This logic is what was in your original Environment_A.step method
-                diff = (target_angle_idx - curr_node.angle_idx) % self.env.angle_steps
-                if diff > self.env.angle_steps // 2:
-                    diff -= self.env.angle_steps
-                
-                if abs(diff) > curr_node.rotation_speed:
-                    if diff > 0:
-                        curr_node.angle_idx = (curr_node.angle_idx + curr_node.rotation_speed) % self.env.angle_steps
-                    else:
-                        curr_node.angle_idx = (curr_node.angle_idx - curr_node.rotation_speed) % self.env.angle_steps
-                else:
-                    curr_node.angle_idx = target_angle_idx
+            # --- 1. Repulsion Force from Density Field (as before) ---
+            epsilon = 1e-4
+            current_pot = self.density_estimator.get_potential_at_positions(np.array([pos]))[0]
+            pot_x = self.density_estimator.get_potential_at_positions(np.array([pos + np.array([epsilon, 0.0])]))[0]
+            pot_y = self.density_estimator.get_potential_at_positions(np.array([pos + np.array([0.0, epsilon])]))[0]
             
-            # Since the position and velocity are not updated within this substep loop,
-            # we simply let the rotation happen. The move action will be determined
-            # after these sub-rotations.
+            force_x = (pot_x - current_pot) / epsilon
+            force_y = (pot_y - current_pot) / epsilon
+            repulsion_force_vector = np.array([force_x, force_y])
+            
+            # Move *away* from the repulsion
+            move_vector = -repulsion_force_vector
+            
+            # --- 2. Add the Random Walk (U_pos) ---
+            # This is the new, simple movement component
+            # A small random vector that ensures movement even when repulsion is zero.
+            random_walk_vector = (np.random.rand(2) - 0.5) * 0.01 
+            move_vector += random_walk_vector
+            
+            # --- 3. Add an Attraction Force to the Center (as before) ---
+            center_of_mass = np.mean([n.pos for n in self.env.nodes], axis=0)
+            attraction_vector = center_of_mass - pos
+            move_vector += 0.05 * attraction_vector
+            
+            # Clamp the final movement vector to the node's maximum speed
+            max_move_speed = np.mean(node.move_speed)
+            move_magnitude = np.linalg.norm(move_vector)
+            if move_magnitude > max_move_speed:
+                move_vector = (move_vector / move_magnitude) * max_move_speed
 
-        # 3. Finally, generate the move action based on the rotated eye direction
-        for i in range(num_nodes):
-            final_actions.append({
-                'move_vector': self.get_move_vector_from_eye_angle(self.env.nodes[i].angle_idx)
+            actions.append({
+                'move': move_vector,
+                'target_angle_idx': None
             })
-
-        return final_actions
+        return actions
 
     def compute_coherence(self) -> float:
         """
@@ -180,42 +190,23 @@ class Flowrra:
 
         return reward
 
-    def STEP(self, visualize: bool = False):
+    def STEP(self, visualize: bool = False) -> dict:
         """
-        Executes a single, complete timestep of the FLOWRRA simulation.
+        Performs a single simulation step.
         """
-        # Step the external environment to move obstacles
-        self.env_b.step()
-
-        # 1. SENSE: Each node senses other nodes
-        all_detections = []
-        for node in self.env.nodes:
-            detections = self.env.node_sensor.sense(node, self.env.nodes)
-            all_detections.extend(detections)
-
-        # Sense external obstacles from EnvironmentB
-        obstacle_states = self.env_b.get_obstacle_states()
-        sensor_range = self.env.node_sensor.max_range
-        for node in self.env.nodes:
-            for i, obs in enumerate(obstacle_states):
-                dist = np.linalg.norm(node.pos - obs['pos'])
-                if dist < sensor_range:
-                    # Create a detection that mimics the NodeSensor output
-                    all_detections.append({
-                        'id': f"obs_{i}", # Unique obstacle ID
-                        'pos': obs['pos'],
-                        'velocity': obs['velocity'],
-                        'signal': 2.5 / (dist + 1e-6), # Stronger signal for obstacles
-                    })
-
-        # 2. UPDATE DENSITY: Update the repulsion field based on new sensory data
+        # 1. SENSE: Gather all sensor data from the nodes & obstacles
+        node_detections = self.env.snapshot_nodes()
+        obstacle_detections = self.env_b.get_obstacle_states()
+        all_detections = node_detections + obstacle_detections
+        
+        # 2. PERCEIVE: Update the density field
         self.density_estimator.update_from_detections(all_detections)
-        self.density_estimator.step_dynamics() # Apply decay and blur
+        self.density_estimator.step_dynamics()
 
         # 3. ACT: Generate and apply actions
         actions = self.generate_actions()
         self.env.step(actions)
-
+        
         # 4. EVALUATE & LEARN: Compute coherence and reward, check for collapse
         coherence = self.compute_coherence()
         reward = self.compute_reward(coherence)
@@ -227,7 +218,6 @@ class Flowrra:
             logger.warning(f"Collapse triggered at t={self.env.t}! Re-initializing loop.")
             meta = self.wfc.collapse_and_reinitialize(self.env)
             logger.info(f"Re-initialization complete. Method: {meta.get('reinit_from')}")
-            # Optionally, you could add a "repulsion scar" here from the failing state
 
         # 5. LOGGING
         self._log_step(coherence, reward, collapse_event)
@@ -237,8 +227,11 @@ class Flowrra:
                 self.env.nodes,
                 self.env_b,
                 out_path=os.path.join(self.visual_dir, f"t_{self.env.t:05d}.png"),
-                title=f"t={self.env.t}, Coherence={coherence:.3f}"
+                title=f"t={self.env.t}, Coherence={coherence:.2f}"
             )
-
-        return {'coherence': coherence, 'reward': reward, 'collapse': collapse_event}
-
+        
+        return {
+            'coherence': coherence,
+            'reward': reward,
+            'collapse_event': collapse_event
+        }

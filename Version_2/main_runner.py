@@ -24,10 +24,10 @@ if __name__ == '__main__':
         'env_b_num_moving': 8,
 
         # Density Estimator Params
-        'eta': 0.15,          # Repulsion learning rate
-        'gamma_f': 0.85,      # Comet-tail decay
-        'k_f': 6,             # Comet-tail length
-        'sigma_f': 3.0,       # Repulsion kernel width
+        'eta': 0.02,          # Repulsion learning rate
+        'gamma_f': 0.8,      # Comet-tail decay
+        'k_f': 5,             # Comet-tail length
+        'sigma_f': 2.0,       # Repulsion kernel width
         'decay_lambda': 0.02, # Field decay rate
 
         # WFC Params
@@ -55,11 +55,19 @@ if __name__ == '__main__':
             logging.info(f"Step {i}/{total_steps} | "
                          f"Coherence: {output['coherence']:.4f} | "
                          f"Reward: {output['reward']:.4f} | "
-                         f"Collapsed: {output['collapse']}")
+                         f"Collapsed: {output['collapse_event']}")
 
     end_time = time.time()
     logging.info("--- Simulation Complete ---")
     logging.info(f"Total runtime: {end_time - start_time:.2f} seconds.")
     logging.info(f"Log data saved to: {config['logfile']}")
     logging.info(f"Visualizations saved in: {config['visual_dir']}/")
+
+    import pandas as pd
+    import matplotlib.pyplot as plt
+
+    # One-liner to read and plot the coherence
+    df = pd.read_csv('flowrra_log_v2.csv')
+    df.plot(x='t', y='coherence', title='Coherence Over Time')
+    plt.savefig("Coherence_Over_Time.png")
 

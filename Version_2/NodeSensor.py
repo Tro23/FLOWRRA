@@ -95,7 +95,8 @@ class Node_Sensor:
                 'distance': float(phantom_distance),
                 'bearing_rad': float(phantom_bearing),
                 'signal': 0.1 + np.random.rand() * 0.2, # Weak signal
-                'velocity': np.random.randn(2) * 0.01 # Random slow drift
+                'velocity': np.random.randn(2) * 0.01, # Random slow drift
+                'angle_idx': self_node.angle_idx
             })
 
         return detections

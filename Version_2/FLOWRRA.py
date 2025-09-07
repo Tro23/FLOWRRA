@@ -34,17 +34,22 @@ class Flowrra:
             seed=config.get('seed', None)
         )
         self.env_b = EnvironmentB(
-            grid_size=config.get('env_b_grid_size', 40),
-            num_fixed=config.get('env_b_num_fixed', 20),
-            num_moving=config.get('env_b_num_moving', 8)
+            grid_size=config.get('env_b_grid_size', 60),
+            num_fixed=config.get('env_b_num_fixed', 10),
+            num_moving=config.get('env_b_num_moving', 4),
+            seed=config.get('seed', None)
         )
+        # --- MODIFIED: Pass angle_steps and beta from config to the estimator ---
+        # This ensures that parameters are consistently used across modules.
         self.density_estimator = Density_Function_Estimator(
-            grid_shape=config.get('grid_size', (64, 64)),
+            grid_shape=config.get('grid_size', (60, 60)),
             eta=config.get('eta', 0.1),
-            gamma_f=config.get('gamma_f', 0.8),
+            gamma_f=config.get('gamma_f', 4),
             k_f=config.get('k_f', 5),
             sigma_f=config.get('sigma_f', 2.5),
-            decay_lambda=config.get('decay_lambda', 0.01)
+            decay_lambda=config.get('decay_lambda', 0.01),
+            angle_steps=self.env.angle_steps,
+            beta=config.get('beta', 0.8)
         )
         self.wfc = Wave_Function_Collapse(
             history_length=config.get('history_length', 200),
@@ -82,60 +87,102 @@ class Flowrra:
             writer.writerow(row)
 
     def _calculate_angle_idx(self, p1: np.ndarray, p2: np.ndarray) -> int:
-        """Helper to calculate the discrete angle from p1 to p2."""
+        """Helper to calculate the discrete angle from p1 to p2, handling toroidal space."""
         angle_steps = self.env.angle_steps
-        dx, dy = p2 - p1
+        delta = p2 - p1
         
-        # Adjust for toroidal boundaries
-        if abs(dx) > 0.5: dx = dx - np.sign(dx)
-        if abs(dy) > 0.5: dy = dy - np.sign(dy)
+        # Adjust for toroidal boundaries (shortest path wrap-around)
+        delta[delta > 0.5] -= 1.0
+        delta[delta < -0.5] += 1.0
             
-        angle_rad = np.arctan2(dy, dx)
-        angle_degrees = np.degrees(angle_rad)
+        angle_rad = np.arctan2(delta[1], delta[0])
         
-        # Convert to discrete index
-        angle_idx = int((angle_degrees / 360) * angle_steps)
-        return (angle_idx + angle_steps) % angle_steps
+        # Convert rad to discrete index
+        angle_idx = int(np.round((angle_rad / (2 * np.pi)) * angle_steps))
+        return angle_idx % angle_steps
 
-    def get_move_vector_from_eye_angle(self, eye_angle_idx: int) -> np.ndarray:
-        """Converts the discrete eye angle to a continuous movement vector."""
-        angle_rad = (eye_angle_idx / self.env.angle_steps) * 2 * np.pi
-        return np.array([np.cos(angle_rad), np.sin(angle_rad)])
-
+    # --- REWRITTEN: generate_actions method ---
+    # This is a major change to address the core issues of movement and rotation.
     def generate_actions(self) -> list[dict[str, any]]:
         """
-        Generates actions (move, rotate) for each node based on the repulsion field
-        and adds a small random walk to ensure constant movement.
+        Generates actions (move, rotate) for each node based on various forces.
+        - Repulsion Force: Pushes nodes away from high-density areas (obstacles, other nodes).
+        - Attraction Force: A gentle pull towards the center of the loop to maintain cohesion.
+        - Random Walk: Ensures continuous micro-movements to prevent stagnation.
+        - Loop Maintenance Rotation: Orients nodes to face their next neighbor in the sequence.
         """
         actions = []
-        for node in self.env.nodes:
+        num_nodes = len(self.env.nodes)
+        if num_nodes == 0:
+            return []
+    
+        # Calculate center of mass with toroidal wrapping consideration
+        positions = np.array([n.pos for n in self.env.nodes])
+    
+        # Use toroidal mean calculation
+        angles_x = positions[:, 0] * 2 * np.pi
+        angles_y = positions[:, 1] * 2 * np.pi
+        mean_x = np.arctan2(np.mean(np.sin(angles_x)), np.mean(np.cos(angles_x))) / (2 * np.pi)
+        mean_y = np.arctan2(np.mean(np.sin(angles_y)), np.mean(np.cos(angles_y))) / (2 * np.pi)
+        center_of_mass = np.array([mean_x % 1.0, mean_y % 1.0])
+
+        for i, node in enumerate(self.env.nodes):
             pos = node.pos
-            
-            # --- 1. Repulsion Force from Density Field (as before) ---
-            epsilon = 1e-4
+        
+            # --- 1. Repulsion Force from Density Field ---
+            # Use a larger epsilon for more stable gradient calculation
+            epsilon = 0.002
             current_pot = self.density_estimator.get_potential_at_positions(np.array([pos]))[0]
-            pot_x = self.density_estimator.get_potential_at_positions(np.array([pos + np.array([epsilon, 0.0])]))[0]
-            pot_y = self.density_estimator.get_potential_at_positions(np.array([pos + np.array([0.0, epsilon])]))[0]
+        
+            # Calculate gradient with toroidal wrapping
+            pos_x_plus = np.array([(pos[0] + epsilon) % 1.0, pos[1]])
+            pos_y_plus = np.array([pos[0], (pos[1] + epsilon) % 1.0])
+        
+            pot_x_plus = self.density_estimator.get_potential_at_positions(np.array([pos_x_plus]))[0]
+            pot_y_plus = self.density_estimator.get_potential_at_positions(np.array([pos_y_plus]))[0]
+        
+            grad_x = (pot_x_plus - current_pot) / epsilon
+            grad_y = (pot_y_plus - current_pot) / epsilon
+            repulsion_force = -np.array([grad_x, grad_y])
+        
+        
+            # --- 3. Separation Force (prevent nodes from getting too close) ---
+            separation_force = np.zeros(2)
+            for j, other_node in enumerate(self.env.nodes):
+                if i == j:
+                    continue
+                diff = other_node.pos - pos
+                # Handle toroidal distance
+                if diff[0] > 0.5:
+                    diff[0] -= 1.0
+                elif diff[0] < -0.5:
+                    diff[0] += 1.0
+                if diff[1] > 0.5:
+                    diff[1] -= 1.0
+                elif diff[1] < -0.5:
+                    diff[1] += 1.0
             
-            force_x = (pot_x - current_pot) / epsilon
-            force_y = (pot_y - current_pot) / epsilon
-            repulsion_force_vector = np.array([force_x, force_y])
-            
-            # Move *away* from the repulsion
-            move_vector = -repulsion_force_vector
-            
-            # --- 2. Add the Random Walk (U_pos) ---
-            # This is the new, simple movement component
-            # A small random vector that ensures movement even when repulsion is zero.
-            random_walk_vector = (np.random.rand(2) - 0.5) * 0.01 
-            move_vector += random_walk_vector
-            
-            # --- 3. Add an Attraction Force to the Center (as before) ---
-            center_of_mass = np.mean([n.pos for n in self.env.nodes], axis=0)
-            attraction_vector = center_of_mass - pos
-            move_vector += 0.05 * attraction_vector
-            
-            # Clamp the final movement vector to the node's maximum speed
+                dist = np.linalg.norm(diff)
+                if dist < 0.05 and dist > 0:  # Too close!
+                    # Push away with inverse square law
+                    separation_force -= (diff / dist) * (0.01 / (dist ** 2))
+        
+            # --- 4. Random Walk ---
+            random_walk_vector = (np.random.rand(2) - 0.5) * 0.9
+        
+            # --- 5. Combine Forces with adjusted coefficients ---
+            # Reduced attraction, increased repulsion influence
+            move_vector = (
+                0.25 * repulsion_force +      # Increased repulsion weight
+                0.25 * separation_force +      # Strong separation to prevent collapse
+                0.75 * random_walk_vector
+            )
+        
+            # --- 6. Rotation to Maintain Loop Structure ---
+            next_node = self.env.nodes[(i + 1) % num_nodes]
+            target_angle_idx = self._calculate_angle_idx(node.pos, next_node.pos)
+
+            # --- 7. Clamp Final Movement to Node's Maximum Speed ---
             max_move_speed = np.mean(node.move_speed)
             move_magnitude = np.linalg.norm(move_vector)
             if move_magnitude > max_move_speed:
@@ -143,24 +190,44 @@ class Flowrra:
 
             actions.append({
                 'move': move_vector,
-                'target_angle_idx': None
+                'target_angle_idx': target_angle_idx
             })
         return actions
 
     def compute_coherence(self) -> float:
         """
-        Computes the coherence metric based on the average density of the nodes.
-        Higher coherence means nodes are in higher-density (lower potential) regions.
+        Computes coherence as the average density at node positions.
+        High coherence = nodes are in low-repulsion (good) areas.
         """
+        if len(self.env.nodes) == 0:
+            return 0.0
+            
         current_node_positions = np.array([node.pos for node in self.env.nodes])
         
-        # Call the new method from the density estimator
-        # This is where the fix is implemented
+        # Get densities (high density = good areas)
         densities = self.density_estimator.get_density_at_positions(current_node_positions)
-
-        # The coherence metric is the average density of the nodes, as per the design doc
-        coherence = np.mean(densities)
-        return float(coherence)
+        
+        # Coherence is the mean density
+        coherence = float(np.mean(densities))
+        
+        # Add a penalty if nodes are too clustered
+        distances = []
+        for i in range(len(self.env.nodes)):
+            for j in range(i+1, len(self.env.nodes)):
+                diff = self.env.nodes[j].pos - self.env.nodes[i].pos
+                # Handle toroidal wrapping
+                diff[diff > 0.5] -= 1.0
+                diff[diff < -0.5] += 1.0
+                distances.append(np.linalg.norm(diff))
+        
+        if distances:
+            min_dist = min(distances)
+            if min_dist < 0.02:  # Too close!
+                coherence *= 0.1  # Severe penalty
+            elif min_dist < 0.05:
+                coherence *= 0.5  # Moderate penalty
+        
+        return coherence
 
     def compute_reward(self, coherence: float) -> float:
         """
@@ -173,20 +240,20 @@ class Flowrra:
         positions = np.array([n.pos for n in self.env.nodes])
         dists = np.linalg.norm(positions[:, np.newaxis, :] - positions[np.newaxis, :, :], axis=-1)
         np.fill_diagonal(dists, np.inf)
-        min_dist = np.min(dists)
-
-        if min_dist < 0.03: # Collision penalty
-            reward -= 1.0
+        if dists.size > 0:
+            min_dist = np.min(dists)
+            if min_dist < 0.03: # Collision penalty
+                reward -= 1.0
 
         # Penalty for collisions with external obstacles
         obstacle_states = self.env_b.get_obstacle_states()
         if obstacle_states:
             obstacle_positions = np.array([s['pos'] for s in obstacle_states])
-            # Calculate distance from each node to each obstacle
             node_obs_dists = np.linalg.norm(positions[:, np.newaxis, :] - obstacle_positions[np.newaxis, :, :], axis=-1)
-            min_node_obs_dist = np.min(node_obs_dists)
-            if min_node_obs_dist < 0.03: # Obstacle collision penalty
-                reward -= 1.5 # Make it more severe than inter-node collision
+            if node_obs_dists.size > 0:
+                min_node_obs_dist = np.min(node_obs_dists)
+                if min_node_obs_dist < 0.03: # Obstacle collision penalty
+                    reward -= 1.5
 
         return reward
 
@@ -194,18 +261,40 @@ class Flowrra:
         """
         Performs a single simulation step.
         """
-        # 1. SENSE: Gather all sensor data from the nodes & obstacles
-        node_detections = self.env.snapshot_nodes()
+        # --- MODIFIED: Proper SENSE step using Node_Sensor ---
+        # 1. SENSE: Gather all sensor data from the nodes & obstacles.
+        # This now correctly uses the Node_Sensor class to simulate imperfect sensing.
+        all_node_detections = []
+        for node in self.env.nodes:
+            detections = self.env.node_sensor.sense(node, self.env.nodes)
+            all_node_detections.extend(detections)
+
+        # Remove duplicate detections (e.g., node A sees B, and B sees A)
+        unique_node_detections = {det['id']: det for det in all_node_detections if det.get('id', -1) != -1}
+        phantom_detections = [det for det in all_node_detections if det.get('id', -1) == -1]
+        node_detections = list(unique_node_detections.values()) + phantom_detections
+        
         obstacle_detections = self.env_b.get_obstacle_states()
         all_detections = node_detections + obstacle_detections
+
+        # Adaptive feedback to prevent collapse
+        current_coherence = self.compute_coherence()
+        # If coherence drops below a certain point, increase repulsion
+        if current_coherence < 0.5 and self.density_estimator.beta < 0.5:
+            self.density_estimator.beta += 0.05
+        elif self.density_estimator.beta > 0.8:
+            # Decay the beta back to its base value after stability is restored
+            self.density_estimator.beta -= 0.01
         
         # 2. PERCEIVE: Update the density field
         self.density_estimator.update_from_detections(all_detections)
         self.density_estimator.step_dynamics()
 
         # 3. ACT: Generate and apply actions
+        # The generate_actions method is now much more sophisticated.
         actions = self.generate_actions()
         self.env.step(actions)
+        self.env_b.step() # Also step the external environment
         
         # 4. EVALUATE & LEARN: Compute coherence and reward, check for collapse
         coherence = self.compute_coherence()

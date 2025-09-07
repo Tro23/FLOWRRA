@@ -14,32 +14,33 @@ if __name__ == '__main__':
     config = {
         'num_nodes': 12,
         'seed': 42,
-        'grid_size': (80, 80),
+        'grid_size': (60, 60),
         'visual_dir': 'flowrra_visuals_v2',
         'logfile': 'flowrra_log_v2.csv',
 
         # EnvironmentB Params
-        'env_b_grid_size': 40,
-        'env_b_num_fixed': 20,
-        'env_b_num_moving': 8,
+        'env_b_grid_size': 60,
+        'env_b_num_fixed': 10,
+        'env_b_num_moving': 4,
 
-        # Density Estimator Params
-        'eta': 0.02,          # Repulsion learning rate
-        'gamma_f': 0.8,      # Comet-tail decay
-        'k_f': 5,             # Comet-tail length
-        'sigma_f': 2.0,       # Repulsion kernel width
-        'decay_lambda': 0.02, # Field decay rate
+        # Density Estimator Params - ADJUSTED
+        'eta': 0.01,              # Decreased repulsion learning rate (was 0.08)
+        'gamma_f': 0.4,           # Reduced comet-tail decay for tighter response (was 0.8)
+        'k_f': 4,                 # Shorter comet-tail for more immediate response (was 5)
+        'sigma_f': 2.0,           # kernel for smoother field (was 4.0)
+        'decay_lambda': 0.003,    # Slower decay to maintain memory (was 0.005)
+        'beta': 0.2,              # Decreased repulsion weight (was 0.8)
 
-        # WFC Params
-        'history_length': 300,
-        'tail_length': 20,
-        'collapse_threshold': 0.35,
-        'tau': 8,             # Steps below threshold to trigger collapse
+        # WFC Params - ADJUSTED
+        'history_length': 200,
+        'tail_length': 15,
+        'collapse_threshold': 0.25,  # Lower threshold for earlier intervention (was 0.35)
+        'tau': 5,                    # Less patience before collapse (was 8)
     }
 
     # Simulation parameters
     total_steps = 2000
-    visualize_every_n_steps = 200
+    visualize_every_n_steps = 100 # Reduced for more frequent visualization
 
     # --- Initialize and Run ---
     model = Flowrra(config)
@@ -67,7 +68,10 @@ if __name__ == '__main__':
     import matplotlib.pyplot as plt
 
     # One-liner to read and plot the coherence
-    df = pd.read_csv('flowrra_log_v2.csv')
-    df.plot(x='t', y='coherence', title='Coherence Over Time')
-    plt.savefig("Coherence_Over_Time.png")
-
+    try:
+        df = pd.read_csv('flowrra_log_v2.csv')
+        df.plot(x='t', y='coherence', title='Coherence Over Time')
+        plt.savefig("Coherence_Over_Time.png")
+        plt.show()
+    except FileNotFoundError:
+        logging.error("Log file not found. Could not generate coherence plot.")

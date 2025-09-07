@@ -24,7 +24,7 @@ class Wave_Function_Collapse:
     def __init__(self,
                  history_length: int = 200,
                  tail_length: int = 15,
-                 collapse_threshold: float = 0.2,
+                 collapse_threshold: float = 0.25,
                  tau: int = 5):
         self.history_length = history_length
         self.tail_length = tail_length

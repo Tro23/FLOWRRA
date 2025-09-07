@@ -19,7 +19,11 @@ class EnvironmentB:
         moving_blocks (list): A list of (x,y) tuples for dynamic obstacles.
         last_moving_blocks (list): The previous positions of moving obstacles, for velocity calculation.
     """
-    def __init__(self, grid_size: int = 40, num_fixed: int = 20, num_moving: int = 8):
+    def __init__(self, grid_size: int = 60, num_fixed: int = 10, num_moving: int = 4, seed: int | None = None):
+        if seed is not None:
+            random.seed(seed)
+            np.random.seed(seed)
+            
         self.grid_size = grid_size
         self.num_fixed = num_fixed
         self.num_moving = num_moving
@@ -52,6 +56,7 @@ class EnvironmentB:
         self.last_moving_blocks = list(self.moving_blocks) # Store current pos before moving
 
         updated_positions = []
+        # Create a temporary set of occupied positions for this step's collision checks
         occupied_for_step = self.fixed_blocks.union(set(self.moving_blocks))
 
         for i, (x, y) in enumerate(self.moving_blocks):
@@ -62,16 +67,22 @@ class EnvironmentB:
                 nx, ny = x + dx, y + dy
                 new_pos = (nx, ny)
 
-                # Check bounds and if the new position is not occupied
+                # Temporarily remove the current block's old position to allow other blocks to move into it
+                occupied_for_step.remove((x,y))
+                
+                # Check bounds and if the new position is not occupied by another block
                 if (0 <= nx < self.grid_size and 0 <= ny < self.grid_size and
                         new_pos not in occupied_for_step):
                     updated_positions.append(new_pos)
-                    occupied_for_step.remove((x,y))
-                    occupied_for_step.add(new_pos)
+                    occupied_for_step.add(new_pos) # Add its new position
                     moved = True
                     break
+                
+                # If move was not valid, add its old position back
+                occupied_for_step.add((x,y))
+
             if not moved:
-                updated_positions.append((x, y))
+                updated_positions.append((x, y)) # If no valid move, stay put
 
         self.moving_blocks = updated_positions
         self.all_blocks = self.fixed_blocks.union(set(self.moving_blocks))

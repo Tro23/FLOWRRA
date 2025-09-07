@@ -27,15 +27,15 @@ class Density_Function_Estimator:
         blur_kernel (np.ndarray): The convolution kernel used for blurring.
     """
     def __init__(self,
-                 grid_shape: tuple[int, int] = (64, 64),
-                 eta: float = 0.02,         # Repulsion learning rate
+                 grid_shape: tuple[int, int] = (60, 60),
+                 eta: float = 0.08,         # Repulsion learning rate
                  gamma_f: float = 0.8,       # Forward decay for comet-tail
                  k_f: int = 5,             # Forward projection steps
-                 sigma_f: float = 2.5,       # Kernel width in grid cells
-                 decay_lambda: float = 0.01, # Field decay rate
+                 sigma_f: float = 4,       # Kernel width in grid cells
+                 decay_lambda: float = 0.005, # Field decay rate
                  blur_delta: float = 0.1, # Diffusion/blur mix factor
                  angle_steps: int = 360,   # Discrete angle resolution
-                 beta: float = 0.05):       # Repulsion Weight
+                 beta: float = 0.4):       # Repulsion Weight
 
         self.grid_shape = grid_shape
         self.repulsion_field = np.zeros(grid_shape)
@@ -151,37 +151,25 @@ class Density_Function_Estimator:
         return self.repulsion_field[grid_y, grid_x]
 
     
-    def get_density_at_positions(self, positions: np.ndarray) -> np.ndarray:
+    def get_density_at_positions(self, positions: np.ndarray, loop_center: np.ndarray = None) -> np.ndarray:
         """
-        Samples the normalized probability density at a set of continuous positions,
-        as defined by the design document.
+        Samples the normalized probability density at a set of continuous positions.
+        High density = good areas (low repulsion)
+        Low density = bad areas (high repulsion)
         """
         if positions.shape[0] == 0:
             return np.array([])
         
-        # 1. Get raw repulsion potential
+        # 1. Get raw repulsion potential (high values = bad areas)
         repulsion_potentials = self.get_potential_at_positions(positions)
         
-        # 2. Add the base potential U_pos. (Assuming U_pos is a constant for simplicity, e.g., 0.5)
-        # The design document states U_pos is a "smooth, fixed prior".
-        U_pos = 0.5
-        # --- NEW: attraction term ---
-        loop_center = np.array([0.5, 0.5])  # placeholder, or dynamic avg of nodes
-        dist2 = np.sum((positions - loop_center) ** 2, axis=1)
-        attraction = 0.1 * dist2   # small quadratic pull
+        # 2. Total potential (high = bad areas to avoid)
+        total_potentials = self.beta * repulsion_potentials
         
-        # 3. Calculate total potential U(x,t) = U_pos + beta * r(x,t)
-        # Note: 'beta' (repulsion weight) is currently missing from your config, 
-        # so let's add it to the main_runner config and pass it here. 
-        total_potentials = U_pos + self.beta * repulsion_potentials + attraction
+        # 3. Convert to density: exp(-U) so high repulsive potential -> low repulsive density
+        densities = 1.0 - np.clip(1.0 - np.exp(-total_potentials), 0, 1)
         
-        # 4. Convert potential to unnormalized density: exp(-U(x,t))
-        unnormalized_density = np.exp(-total_potentials)
+        '''# 4. Clip to reasonable range to avoid numerical issues
+        densities = np.clip(densities, 0, 1)'''
         
-        # 5. Normalize density by a simple max-value for the coherence calculation
-        # The design document's full normalization requires an integral,
-        # but for the coherence metric, normalizing by rho_max is simpler and sufficient.
-        rho_max = np.exp(-U_pos) # max density occurs where repulsion is zero
-        normalized_density = unnormalized_density / rho_max
-
-        return normalized_density
+        return densities

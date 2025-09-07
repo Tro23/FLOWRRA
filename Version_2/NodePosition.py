@@ -27,8 +27,11 @@ class Node_Position:
     id: int
     pos: np.ndarray = field(default_factory=lambda: np.random.rand(2))
     angle_idx: int = 0
-    rotation_speed: float = 2.0  # Default rotation speed in angle indices per step
-    move_speed: np.ndarray = field(default_factory=lambda: np.array([0.01, 0.01]))
+    rotation_speed: float = 3.0
+    # --- MODIFIED: Increased move_speed ---
+    # The previous value was too low (0.01), severely limiting movement.
+    # This allows nodes to react more dynamically to forces.
+    move_speed: np.ndarray = field(default_factory=lambda: np.array([0.02, 0.02]))
     angle_steps: int = 360
     target_angle_idx: int | None = None
     last_pos: np.ndarray | None = None
@@ -53,7 +56,7 @@ class Node_Position:
 
         # Clamp the rotation to the maximum speed
         move = np.clip(diff, -self.rotation_speed * dt, self.rotation_speed * dt)
-        self.angle_idx = int((self.angle_idx + move) % self.angle_steps)
+        self.angle_idx = int((self.angle_idx + move + self.angle_steps) % self.angle_steps)
 
     def move(self, action_vector: np.ndarray, dt: float = 1.0, bounds: str = 'toroidal'):
         """
@@ -64,8 +67,9 @@ class Node_Position:
             dt (float): Timestep delta.
             bounds (str): The boundary condition ('toroidal' for wrap-around, or None).
         """
-        # Clamp the movement to the maximum speed
-        displacement = np.clip(action_vector, -self.move_speed * dt, self.move_speed * dt)
+        # Note: The clamping of the action_vector now happens in FLOWRRA's generate_actions.
+        # This method simply applies the final, calculated displacement.
+        displacement = action_vector * dt
 
         # Update position history
         self.last_pos = self.pos.copy()
@@ -79,4 +83,9 @@ class Node_Position:
 
     def velocity(self, dt: float = 1.0) -> np.ndarray:
         """Calculates the node's current velocity based on its position change."""
-        return (self.pos - self.last_pos) / dt
+        # --- MODIFIED: Handle toroidal space for accurate velocity ---
+        # This prevents huge velocity spikes when a node wraps around the screen.
+        vel = self.pos - self.last_pos
+        vel[vel > 0.5] -= 1.0
+        vel[vel < -0.5] += 1.0
+        return vel / dt

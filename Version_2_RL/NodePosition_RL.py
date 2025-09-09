@@ -4,7 +4,7 @@ NodePosition_RL.py
 Represents the physical state of a single node in the FLOWRRA environment.
 This class holds all kinematic properties, such as position, velocity, and orientation,
 and provides methods to update them based on actions. It now also handles its
-own sensing capabilities.
+own sensing capabilities and a local repulsion grid.
 """
 from __future__ import annotations
 import numpy as np
@@ -31,69 +31,100 @@ class Node_Position:
         last_pos (np.ndarray): The position of the node in the previous timestep, used for velocity calculation.
         
         # Sensor Attributes
-        sensor_range (float): The maximum distance the sensor can detect.
+        sensor_range (float): The range in which the node can detect other nodes and obstacles.
+        
+        # New: Per-node repulsion grid
+        repulsion_grid: np.ndarray = field(default_factory=lambda: np.zeros((4, 4), dtype=np.float32))
+
     """
     id: int
-    pos: np.ndarray = field(default_factory=lambda: np.random.rand(2))
-    angle_idx: int = 0
-    rotation_speed: float = 3.0
-    move_speed: float = 0.05
+    pos: np.ndarray
+    angle_idx: int
+    rotation_speed: float = 2.0
+    move_speed: float = 0.01
     angle_steps: int = 360
     target_angle_idx: int = 0
-    last_pos: np.ndarray = field(default_factory=lambda: np.random.rand(2))
-    sensor_range: float = 0.2
-    
-    def step_rotate_and_move(self, dt: float = 1.0):
-        """
-        Rotates towards the target angle and moves forward.
-        """
-        # Calculate the shortest angle difference
-        diff = (self.target_angle_idx - self.angle_idx + self.angle_steps / 2) % self.angle_steps - self.angle_steps / 2
-        
-        # Apply rotation speed limit
-        turn = np.clip(diff, -self.rotation_speed, self.rotation_speed)
-        
-        # Update angle
-        self.angle_idx = int((self.angle_idx + turn + self.angle_steps) % self.angle_steps)
-        
-        # Calculate velocity vector from new angle
-        angle_rad = (self.angle_idx / self.angle_steps) * 2 * np.pi
-        velocity_vector = np.array([np.cos(angle_rad), np.sin(angle_rad)]) * self.move_speed
-        
-        # Store last position for velocity calculation
+    last_pos: np.ndarray = field(default_factory=lambda: np.zeros(2))
+    sensor_range: float = 0.1
+
+    def __post_init__(self):
         self.last_pos = self.pos.copy()
         
-        # Update position
-        self.pos = self.pos + velocity_vector * dt
-        
-        # Clamp position to a normalized [0,1) space
-        self.pos = np.mod(self.pos, 1.0)
-        
-    def velocity(self, dt: float = 1.0) -> np.ndarray:
-        """Calculates the node's current velocity based on its position change."""
-        # Handle toroidal space for accurate velocity
-        vel = self.pos - self.last_pos
-        # Check for wrap-around movement
-        if np.abs(vel[0]) > 0.5:
-            vel[0] -= np.sign(vel[0]) * 1.0
-        if np.abs(vel[1]) > 0.5:
-            vel[1] -= np.sign(vel[1]) * 1.0
-        return vel / dt
+    def velocity(self) -> np.ndarray:
+        """Calculates the current velocity based on last and current positions."""
+        delta = self.pos - self.last_pos
+        # Toroidal wrapping for velocity calculation
+        toroidal_delta = np.mod(delta + 0.5, 1.0) - 0.5
+        return toroidal_delta
 
-    def sense_other_nodes(self, all_nodes: List[Node_Position]) -> List[Dict[str, Any]]:
+    def get_angle_rad(self) -> float:
+        """Returns the current angle in radians."""
+        return (self.angle_idx / self.angle_steps) * 2 * np.pi
+
+    def rotate_towards_target(self):
         """
-        Senses other nodes within the sensor range.
+        Rotates the node's angle_idx towards its target_angle_idx.
+        """
+        if self.angle_idx == self.target_angle_idx:
+            return
+
+        # Calculate clockwise and counter-clockwise distances
+        # Angle difference is calculated in [0, 1] range of angle_steps
+        diff = (self.target_angle_idx - self.angle_idx + self.angle_steps) % self.angle_steps
+        
+        if diff <= self.angle_steps / 2:
+            # Rotate clockwise
+            step = min(diff, self.rotation_speed)
+            self.angle_idx = (self.angle_idx + int(step)) % self.angle_steps
+        else:
+            # Rotate counter-clockwise
+            step = min(self.angle_steps - diff, self.rotation_speed)
+            self.angle_idx = (self.angle_idx - int(step) + self.angle_steps) % self.angle_steps
+    
+    def move(self, dt: float = 1.0):
+        """
+        Moves the node forward in its current direction.
+        """
+        self.last_pos = self.pos.copy()
+        angle_rad = self.get_angle_rad()
+        direction_vector = np.array([np.cos(angle_rad), np.sin(angle_rad)])
+        # New position is the current position plus the scaled direction vector
+        self.pos = np.mod(self.pos + direction_vector * self.move_speed * dt, 1.0)
+    
+    def apply_position_action(self, pos_action: np.ndarray, dt: float = 1.0):
+        """
+        Applies a raw position change from the RL agent.
+        """
+        self.last_pos = self.pos.copy()
+        self.pos = np.mod(self.pos + pos_action * dt, 1.0)
+
+    def apply_angle_action(self, angle_action: int):
+        """
+        Applies a discrete angular action to the node.
+        
+        Args:
+            angle_action (int): An index representing the desired rotation.
+        """
+        if angle_action == 0:  # Rotate left
+            self.angle_idx = (self.angle_idx - int(self.rotation_speed) + self.angle_steps) % self.angle_steps
+        elif angle_action == 1:  # Rotate right
+            self.angle_idx = (self.angle_idx + int(self.rotation_speed)) % self.angle_steps
+        # Other angle_action values (e.g., 2, 3) can be no-ops or other movements
+        
+    def sense_nodes(self, all_nodes: List[Node_Position]) -> List[Dict[str, Any]]:
+        """
+        Senses other nodes within the sensor range, excluding self.
         """
         detections = []
         for other_node in all_nodes:
             if other_node.id == self.id:
                 continue
-            
-            # Calculate toroidal distance
+
             delta = other_node.pos - self.pos
+            # Use toroidal distance for sensing
             toroidal_delta = np.mod(delta + 0.5, 1.0) - 0.5
             distance = np.linalg.norm(toroidal_delta)
-            
+
             if distance < self.sensor_range:
                 relative_velocity = other_node.velocity() - self.velocity()
                 bearing_rad = np.arctan2(toroidal_delta[1], toroidal_delta[0])

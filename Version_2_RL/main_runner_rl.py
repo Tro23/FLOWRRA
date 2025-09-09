@@ -31,47 +31,46 @@ if __name__ == '__main__':
         'env_b_num_moving': 6,
 
         # RL Params (some will be computed)
-        'action_size': 4,  # 0: left, 1: right, 2: noop, 3: noop (expand if desired)
-        'batch_size': 64,
+        'action_size': 16,  # 4 position actions * 4 angle actions = 16
         'gamma': 0.99,
-        'lr': 0.0005,
-        'target_update_freq': 10,
+        'lr': 0.001,
+        'buffer_capacity': 50000,
+        'batch_size': 64,
+        'epsilon_decay': 0.9999,
+        'epsilon_min': 0.01,
 
-        # Repulsion collapse threshold
-        'repulsion_collapse_threshold': 0.4,
-
-        # Training Parameters
-        'total_training_steps': 20000,
+        # Training & Visualization Params
+        'total_training_steps': 10000,
         'episode_steps': 200,
         'visualize_every_n_steps': 1000,
-
-        # Model save path
-        'model_save_path': 'flowrra_shared_agent.pth'
+        'model_save_path': 'flowrra_rl_agent.pth',
     }
 
-    # Clean visuals
+    # Clean up previous runs
     if os.path.exists(config['visual_dir']):
         shutil.rmtree(config['visual_dir'])
-    os.makedirs(config['visual_dir'], exist_ok=True)
-
-    # Initialize environment orchestrator
-    model = Flowrra_RL(config)
-
-    # Derive dynamic state size from the environment
-    model.env.reset()
-    model.env_b.reset()
-    model.density_estimator.reset()
-    model.wfc.reset()
-    example_state = model.get_state()
-    state_size = int(len(example_state))
-    num_nodes = config['num_nodes']
-    action_size = config['action_size']
+    
+    # Initialize FLOWRRA model to get state dimensions
+    model = Flowrra_RL(config=config)
+    
+    # Derive state and action sizes from the model
+    initial_state = model.get_state()
+    state_size = len(initial_state)
+    num_nodes = model.num_nodes
+    action_size = model.combined_action_size
 
     logger.info(f"Derived state_size={state_size} num_nodes={num_nodes} action_size={action_size}")
 
     # Initialize shared agent
-    agent = SharedRLAgent(state_size=state_size, num_nodes=num_nodes, action_size=action_size,
-                          lr=config['lr'], gamma=config['gamma'], buffer_capacity=50000, seed=config['seed'])
+    agent = SharedRLAgent(
+        state_size=state_size, 
+        num_nodes=num_nodes, 
+        action_size=action_size,
+        lr=config['lr'], 
+        gamma=config['gamma'], 
+        buffer_capacity=config['buffer_capacity'], 
+        seed=config['seed']
+    )
 
     # Attach agent to model and run training
     start_time = time.time()
@@ -91,15 +90,11 @@ if __name__ == '__main__':
     # Deployment (greedy)
     logger.info("--- Starting FLOWRRA RL Deployment ---")
     model.attach_agent(agent)
-    model.deploy(total_steps=150, visualize_every_n_steps=1)
+    model.deploy(total_steps=config['episode_steps'], visualize_every_n_steps=1)
     logger.info("--- Deployment Complete ---")
 
-    # Create GIF from deployment images
-    logger.info("--- Creating GIF ---")
-    create_gif(
-        image_folder=config['visual_dir'],
-        output_gif='flowrra_rl_deployment.gif',
-        pattern="deploy_t_*.png",
-        duration=1000
-    )
-    logger.info("GIF saved to flowrra_rl_deployment.gif")
+    # Create GIF of the deployment
+    logger.info("--- Creating GIF from deployment visuals ---")
+    gif_path = os.path.join(config['visual_dir'], 'deployment.gif')
+    create_gif(config['visual_dir'], gif_path, pattern="deploy_*.png")
+    logger.info(f"--- GIF created at {gif_path} ---")

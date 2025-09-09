@@ -34,65 +34,56 @@ class Wave_Function_Collapse:
 
     def reset(self):
         """
-        Resets the history buffer to prepare for a new episode.
+        Clears the history buffer.
         """
-        self.history = []
+        self.history.clear()
 
-    def record_step(self, nodes_snapshot: List[Dict[str, Any]], coherence: float, t: int):
+    def assess_loop_coherence(self, coherence: float, env_snapshot: List[Dict[str, Any]]):
         """
-        Adds a new step's data to the history buffer, maintaining max length.
+        Records the overall coherence of the entire loop state.
+        
+        Note: The coherence calculation itself is now handled by the FLOWRRA_RL class.
+        This method is purely for history management.
+
+        Args:
+            coherence (float): The coherence score for the current loop.
+            env_snapshot (List[Dict[str, Any]]): A snapshot of the node states.
         """
+        # Add the current state and its coherence to the history
         self.history.append({
-            't': t,
-            'nodes': nodes_snapshot,
+            'state_snapshot': env_snapshot,
             'coherence': coherence
         })
+        
+        # Trim history to the specified length
         if len(self.history) > self.history_length:
             self.history.pop(0)
-
-    def check_for_collapse(self) -> bool:
-        """
-        Checks if the system has been in a low-coherence state for too long.
-        """
-        if len(self.history) < self.tau:
-            return False
-        
-        recent_coherences = [h['coherence'] for h in self.history[-self.tau:]]
-        unstable_streak = all(c < self.collapse_threshold for c in recent_coherences)
-        return unstable_streak
-        
-    def compute_coherence(self, nodes: List[Any]) -> float:
-        """
-        Calculates the average deviation from the loop center, normalized.
-        Lower values = higher coherence. This is a proxy for how tightly the loop is formed.
-        """
-        if not nodes:
-            return 1.0
             
-        positions = np.array([n.pos for n in nodes])
-        center = np.mean(positions, axis=0)
-        distances_from_center = np.linalg.norm(positions - center, axis=1)
-        coherence = np.mean(distances_from_center)
-        
-        # Simple normalization based on expected range of distances
-        max_possible_coherence = 0.5 * np.sqrt(2) # Max distance from center in a unit square
-        return coherence / max_possible_coherence
-
-    def collapse_and_reinitialize(self, env: Environment_A) -> Dict[str, str]:
+    def collapse_and_reinitialize(self, env: Environment_A, rewards) -> Dict[str, Any]:
         """
-        Performs a "wave function collapse" by restoring the system to a
-        recent, high-coherence state, or by a random jitter if no such state
-        can be found.
+        Triggers a collapse if the system is in an unstable state and re-initializes
+        the environment from a previously stable state in its history.
+        
+        Args:
+            env (Environment_A): The environment to be reset.
+            rewards (np.ndarray): The rewards for the current step. Unused here, but
+                                  passed for compatibility with other methods.
 
         Returns:
-            A dictionary with metadata about the re-initialization.
+            dict: A dictionary containing information about the collapse event.
         """
-        # Find the most coherent "tail" of states in recent history
+        # Look for a streak of unstable states at the end of the history
+        # We assume this check is done by the calling class (FLOWRRA_RL)
+        
+        # If a collapse is triggered, search for a coherent tail in the history
         coherent_tail = None
-        for i in range(len(self.history) - self.tail_length, -1, -1):
+        for i in range(len(self.history) - self.tail_length):
             tail = self.history[i:i + self.tail_length]
-            if all(h['coherence'] >= self.collapse_threshold for h in tail):
-                coherent_tail = [h['nodes'] for h in tail]
+            # Check if all states in the tail are above the collapse threshold
+            is_coherent_tail = all(h['coherence'] >= self.collapse_threshold for h in tail)
+            if is_coherent_tail:
+                # We found a suitable tail. The most recent one is usually best.
+                coherent_tail = tail
                 break
 
         if coherent_tail is None:
@@ -104,8 +95,8 @@ class Wave_Function_Collapse:
         # --- Manifold Smoothing ---
         # As per the design, we smoothen the possibilities across the comet tail.
         # Here, we use a weighted average of the positions in the tail.
-        num_nodes = len(coherent_tail[0])
-        positions_over_time = np.array([[node['pos'] for node in snapshot] for snapshot in coherent_tail]) # Shape: (tail_length, num_nodes, 2)
+        num_nodes = len(coherent_tail[0]['state_snapshot'])
+        positions_over_time = np.array([[node['pos'] for node in snapshot['state_snapshot']] for snapshot in coherent_tail]) # Shape: (tail_length, num_nodes, 2)
 
         # Use a Gaussian kernel for weighted averaging, giving more weight to recent states in the tail.
         weights = np.exp(-0.5 * np.arange(self.tail_length)[::-1]**2 / (self.tail_length/4)**2)
@@ -115,10 +106,10 @@ class Wave_Function_Collapse:
         smoothed_positions = np.einsum('t,tni->ni', weights, positions_over_time)
 
         # Apply the new, stabilized state to the environment
-        last_snapshot = coherent_tail[-1]
         for i in range(num_nodes):
             env.nodes[i].pos = smoothed_positions[i]
-            # Keep the angle from the end of the tail to preserve orientation
-            env.nodes[i].angle_idx = last_snapshot[i]['angle_idx']
-        
-        return {'reinit_from': 'coherent_tail_smooth'}
+            # Keep the old position for velocity calculation in the next step
+            if coherent_tail[-1] is not None:
+                env.nodes[i].last_pos = coherent_tail[-1]['state_snapshot'][i]['pos']
+
+        return {'reinit_from': 'coherent_tail'}

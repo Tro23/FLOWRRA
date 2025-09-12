@@ -35,7 +35,8 @@ class Density_Function_Estimator:
                  k_f: int = 5,
                  sigma_f: float = 0.05,
                  decay_lambda: float = 0.01,
-                 blur_delta: float = 0.0):
+                 blur_delta: float = 0.2,
+                 beta: float = 0.7):
         # We still need a global grid for visualization, but calculations are local now.
         self.grid_shape = grid_shape
         self.repulsion_field = np.zeros(grid_shape)
@@ -45,47 +46,34 @@ class Density_Function_Estimator:
         self.sigma_f = sigma_f
         self.decay_lambda = decay_lambda
         self.blur_delta = blur_delta
+        self.beta = beta
         
     def reset(self):
         self.repulsion_field = np.zeros(self.grid_shape)
 
     def get_repulsion_potential_for_node(self,
                                          node_pos: np.ndarray,
-                                         all_node_positions: np.ndarray,
-                                         all_obstacle_states: List[Dict[str, Any]]) -> np.ndarray:
+                                         repulsion_sources: List[Dict[str, Any]]) -> np.ndarray:
         """
-        Calculates and returns a LOCAL 4x4 repulsion potential grid for a single node.
+        Calculates and returns a LOCAL 4x4 repulsion potential grid for a single node
+        based ONLY on its detected sources.
         
         Args:
             node_pos (np.ndarray): The (x,y) position of the node.
-            all_node_positions (np.ndarray): All node positions for neighbor repulsion.
-            all_obstacle_states (List[Dict]): All obstacle states for obstacle repulsion.
+            repulsion_sources (List[Dict]): The list of sensor detections.
             
         Returns:
             np.ndarray: A 4x4 grid of repulsion values.
         """
         local_grid = np.zeros((4, 4))
         
-        # Combine all sensor-detectable sources of repulsion
-        repulsion_sources = []
-        
-        # Add other nodes as repulsion sources
-        for other_pos in all_node_positions:
-            if np.linalg.norm(node_pos - other_pos) > 1e-6: # Avoid self
-                repulsion_sources.append({'pos': other_pos, 'velocity': np.zeros(2), 'type': 'node'})
-                
-        # Add obstacles as repulsion sources
-        for obstacle in all_obstacle_states:
-            repulsion_sources.append({'pos': obstacle['pos'], 'velocity': obstacle['velocity'], 'type': obstacle['type']})
-            
-        # Iterate over each source and splat onto the local grid
+        # Iterate over each source detected by the sensor and splat onto the local grid
         for source in repulsion_sources:
             for k in range(self.k_f):
                 # Calculate future position
                 future_pos = source['pos'] + source['velocity'] * k
                 
                 # Check if future position is within the local grid bounds
-                # We assume a fixed grid size relative to the node
                 local_grid_x = int(np.clip((future_pos[0] - node_pos[0] + 0.5) * 4, 0, 3))
                 local_grid_y = int(np.clip((future_pos[1] - node_pos[1] + 0.5) * 4, 0, 3))
                 
@@ -94,7 +82,7 @@ class Density_Function_Estimator:
                 
                 local_grid[local_grid_y, local_grid_x] += self.eta * (self.gamma_f ** k) * kernel_value
 
-        return local_grid
+        return self.beta * local_grid
 
     def update_from_sensor_data(self,
                                all_nodes: List[Any],
@@ -106,11 +94,13 @@ class Density_Function_Estimator:
         self.repulsion_field *= (1 - self.decay_lambda)
         
         for node in all_nodes:
-            # Get the local grid for this node
+            # Get sensor detections for this node
+            all_detections = node.sense_nodes(all_nodes) + node.sense_obstacles(all_obstacle_states)
+            
+            # Get the local grid based on detections
             local_grid = self.get_repulsion_potential_for_node(
                 node_pos=node.pos,
-                all_node_positions=np.array([n.pos for n in all_nodes]),
-                all_obstacle_states=all_obstacle_states
+                repulsion_sources=all_detections
             )
             
             # Splat the local grid back onto the global grid for visualization

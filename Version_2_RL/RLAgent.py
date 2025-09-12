@@ -7,6 +7,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import math
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -20,14 +21,16 @@ class QNetwork(nn.Module):
         self.num_nodes = num_nodes
         self.action_size = action_size
         self.fc1 = nn.Linear(state_size, hidden)
-        self.fc2 = nn.Linear(hidden, hidden)
-        self.fc3 = nn.Linear(hidden, num_nodes * action_size)
+        self.fc2 = nn.Linear(hidden, 64)
+        self.fc3 = nn.Linear(64,hidden)
+        self.fc4 = nn.Linear(hidden, num_nodes * action_size)
         self.relu = nn.ReLU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.relu(self.fc1(x))
         x = self.relu(self.fc2(x))
-        return self.fc3(x)
+        x = self.relu(self.fc3(x))
+        return self.fc4(x)
 
 class ReplayBuffer:
     """
@@ -88,20 +91,39 @@ class SharedRLAgent:
         self.epsilon_decay = 0.9999
         self.epsilon_min = 0.01
 
-    def choose_actions(self, state: np.ndarray, epsilon: float | None = None) -> np.ndarray:
+    def epsilon_gaussian(self, t, total_episodes, eps_min=0.04, eps_peak=0.8, mu=None, sigma=None):
+        """
+        Gaussian-shaped epsilon schedule.
+        - t: current episode (int)
+        - total_episodes: total training episodes
+        - eps_min: baseline minimum epsilon
+        - eps_peak: maximum exploration value
+        - mu: center of the bell (defaults to mid-training)
+        - sigma: width of the bell (defaults to total_episodes/6)
+        """
+        if mu is None:
+            mu = total_episodes / 2.0
+        if sigma is None:
+            sigma = total_episodes / 6.0
+        
+        return eps_min + (eps_peak - eps_min) * math.exp(-((t - mu) ** 2) / (2 * sigma ** 2))
+
+    def choose_actions(self, state: np.ndarray, episode_number: int, total_episodes: int, eps_min: float = 0.05, eps_peak: float = 0.8) -> np.ndarray:
         """
         Chooses actions for all nodes based on the current state and epsilon-greedy policy.
+        The epsilon value is now determined by a Gaussian decay schedule based on the episode number.
         
         Args:
             state (np.ndarray): The current flattened state vector.
-            epsilon (float | None): The exploration rate. If None, uses internal decay.
+            episode_number (int): The current episode number.
+            total_episodes (int): The total number of episodes for training.
+            eps_min (float): The minimum epsilon value.
+            eps_peak (float): The peak epsilon value.
             
         Returns:
             np.ndarray: A 1D array of chosen actions, one for each node.
         """
-        if epsilon is None:
-            self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
-            epsilon = self.epsilon
+        epsilon = self.epsilon_gaussian(episode_number, total_episodes, eps_min, eps_peak)
             
         if random.random() < epsilon:
             # Exploration: choose random actions for all nodes
@@ -151,6 +173,7 @@ class SharedRLAgent:
         self.optimizer.step()
         
         return float(loss.item())
+    
 
     def update_target_network(self):
         self.target_qnetwork.load_state_dict(self.qnetwork.state_dict())

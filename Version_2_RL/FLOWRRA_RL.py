@@ -1,9 +1,16 @@
-# FLOWRRA_RL.py
+"""
+FLOWRRA_RL.py - FIXED VERSION
+
+Fixed reward structure to encourage exploration while maintaining coherence.
+Added movement incentives and better reward balance.
+"""
+
 import logging
 import csv
 import os
 import numpy as np
 import math
+import time
 from typing import List, Dict, Any, Tuple, Optional
 from scipy.stats import entropy
 
@@ -12,9 +19,8 @@ from EnvironmentA_RL import Environment_A
 from EnvironmentB_RL import EnvironmentB
 from DensityFunctionEstimator_RL import Density_Function_Estimator
 from WaveFunctionCollapse_RL import Wave_Function_Collapse
-from RLAgent import SharedRLAgent  # shared single agent
+from RLAgent import SharedRLAgent
 
-# Setup logger for this module
 logger = logging.getLogger("FLOWRRA_RL")
 if not logger.handlers:
     h = logging.StreamHandler()
@@ -24,8 +30,7 @@ logger.setLevel(logging.INFO)
 
 class Flowrra_RL:
     """
-    Main orchestrator integrating EnvironmentA, EnvironmentB, Density Estimator,
-    Wave Function Collapse (WFC), and a shared RL agent interface.
+    Main orchestrator with FIXED reward structure to encourage movement and exploration.
     """
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -48,145 +53,192 @@ class Flowrra_RL:
         self.wfc = Wave_Function_Collapse(
             history_length=config.get('wfc_history_length', 200),
             tail_length=config.get('wfc_tail_length', 15),
-            collapse_threshold=config.get('wfc_collapse_threshold', 0.25),
-            tau=config.get('wfc_tau', 5)
+            collapse_threshold=config.get('wfc_collapse_threshold', 0.88),
+            tau=config.get('wfc_tau', 2)
         )
         self.agent: Optional[SharedRLAgent] = None
         self.log_file = config.get('logfile', 'flowrra_rl_log.csv')
         self.visual_dir = config.get('visual_dir', 'flowrra_rl_visuals')
         
-        self.log_header = ['step', 'episode', 'total_reward', 'avg_coherence', 'loss', 'wfc_reinit']
+        self.log_header = ['step', 'episode', 'total_reward', 'avg_coherence', 'exploration_reward', 'loss', 'wfc_reinit']
         
-        # New state and action dimensions
+        # State and action configuration
         self.num_nodes = self.env.num_nodes
-        # Per-node state size: pos(2) + vel(2) + sensor_data(variable) + repulsion_potential(16)
-        # We will fix sensor data representation for a consistent state size.
-        # Let's assume sensor data for 2 nearest neighbors and 2 nearest obstacles:
-        # Neighbor 1: dist(1), bearing(1), vel_x(1), vel_y(1) = 4
-        # Neighbor 2: ... = 4
-        # Obstacle 1: ... = 4
-        # Obstacle 2: ... = 4
-        # Total sensor data per node = 16
-        # Total per-node state size: 2 + 2 + 16 + 16 = 36
         self.per_node_state_size = 36
         self.state_size = self.num_nodes * self.per_node_state_size
-        self.action_size = 4 # for position, e.g., move left, right, up, down
-        self.angle_action_size = 4 # for angle, e.g., turn left, right, noop, noop
+        self.action_size = 4
+        self.angle_action_size = 4
         self.combined_action_size = self.action_size * self.angle_action_size
         
-        # Reset and get initial state
+        # NEW: Track previous positions for movement rewards
+        self.prev_positions = None
+        
         self.reset()
         
     def reset(self):
-        """
-        Resets the entire system.
-        """
+        """Reset the entire system."""
         self.env.reset()
         self.env_b.reset()
         self.wfc.reset()
+        # Reset position tracking
+        self.prev_positions = np.array([node.pos.copy() for node in self.env.nodes])
 
     def get_state(self) -> np.ndarray:
-        """
-        Generates the current state vector for the RL agent based on the new
-        multi-slice state representation.
-        
-        Returns:
-            np.ndarray: A flattened state vector (1D array).
-        """
-        state_vector = []
-        obstacle_states = self.env_b.get_obstacle_states()
+        """Generate the full state vector for the shared RL agent."""
+        all_node_states = []
+        all_obstacle_states = self.env_b.get_obstacle_states()
 
         for node in self.env.nodes:
-            # Slices of the state for a single node
-            # 1. Position and Velocity (2D arrays)
-            node_state = np.concatenate([node.pos, node.velocity()])
+            node_detections = node.sense_nodes(self.env.nodes)
+            obstacle_detections = node.sense_obstacles(all_obstacle_states)
 
-            # 2. Sensor Data (variable array - now a fixed size)
-            all_detections = node.sense_nodes(self.env.nodes) + node.sense_obstacles(obstacle_states)
-            
-            # Sort by distance and take the top N
-            all_detections.sort(key=lambda d: d['distance'])
-            
-            # Fixed-size sensor data representation (padding with zeros)
-            sensor_data = np.zeros(16) # 4 detections * 4 values each
-            for i, detection in enumerate(all_detections[:4]):
-                sensor_data[i*4 + 0] = detection['distance']
-                sensor_data[i*4 + 1] = detection['bearing_rad']
-                sensor_data[i*4 + 2] = detection['velocity'][0]
-                sensor_data[i*4 + 3] = detection['velocity'][1]
-            
-            node_state = np.concatenate([node_state, sensor_data])
-            
-            # 3. Repulsion Potential Grid (4x4 array)
-            # This is now calculated and managed by the DensityFunctionEstimator per-node
-            local_repulsion_grid = self.density_estimator.get_repulsion_potential_for_node(
+            # Sort by distance and pad/truncate to fixed size
+            node_detections_sorted = sorted(node_detections, key=lambda x: x['distance'])
+            obstacle_detections_sorted = sorted(obstacle_detections, key=lambda x: x['distance'])
+
+            num_neighbors = 2
+            num_obstacles = 2
+
+            # Flatten and pad node data
+            node_data = []
+            for i in range(num_neighbors):
+                if i < len(node_detections_sorted):
+                    d = node_detections_sorted[i]
+                    node_data.extend([d['distance'], d['bearing_rad'], d['velocity'][0], d['velocity'][1]])
+                else:
+                    node_data.extend([1.0, 0.0, 0.0, 0.0])
+
+            # Flatten and pad obstacle data
+            obstacle_data = []
+            for i in range(num_obstacles):
+                if i < len(obstacle_detections_sorted):
+                    d = obstacle_detections_sorted[i]
+                    obstacle_data.extend([d['distance'], d['bearing_rad'], d['velocity'][0], d['velocity'][1]])
+                else:
+                    obstacle_data.extend([1.0, 0.0, 0.0, 0.0])
+
+            # Get local repulsion potential
+            all_detections = node_detections + obstacle_detections
+            repulsion_potential = self.density_estimator.get_repulsion_potential_for_node(
                 node_pos=node.pos,
-                all_node_positions=np.array([n.pos for n in self.env.nodes]),
-                all_obstacle_states=obstacle_states
+                repulsion_sources=all_detections
             )
-            node_state = np.concatenate([node_state, local_repulsion_grid.flatten()])
             
-            state_vector.append(node_state)
+            repulsion_potential_flat = repulsion_potential.flatten()
             
-        return np.concatenate(state_vector)
+            # Combine all parts
+            node_state_vector = np.concatenate([
+                node.pos,
+                node.velocity(),
+                np.array(node_data),
+                np.array(obstacle_data),
+                repulsion_potential_flat
+            ])
+            
+            all_node_states.append(node_state_vector)
+
+        return np.concatenate(all_node_states).astype(np.float32)
 
     def calculate_coherence(self) -> float:
+        """Calculate system coherence based on repulsion potential."""
+        all_node_coherences = []
+        all_obstacle_states = self.env_b.get_obstacle_states()
+
+        for node in self.env.nodes:
+            all_detections = node.sense_nodes(self.env.nodes) + node.sense_obstacles(all_obstacle_states)
+            
+            repulsion_potential_local_grid = self.density_estimator.get_repulsion_potential_for_node(
+                node_pos=node.pos,
+                repulsion_sources=all_detections
+            )
+
+            x, y = int(np.clip((node.pos[0] + 0.5) * 4, 0, 3)), int(np.clip((node.pos[1] + 0.5) * 4, 0, 3))
+            repulsion_at_node_pos = repulsion_potential_local_grid[y, x]
+            
+            coherence = 1.0 / (1.0 + repulsion_at_node_pos)
+            all_node_coherences.append(coherence)
+            
+        return np.mean(all_node_coherences)
+
+    def calculate_exploration_reward(self) -> float:
         """
-        Calculates the coherence score for the entire state based on the entropy
-        of each node's local repulsion potential grid.
-        
-        Coherence is 1 - H(repulsion_potential_grids), where H is entropy.
+        NEW: Calculate reward for exploration and movement.
         
         Returns:
-            float: A single coherence score between 0 and 1. Higher is better.
+            float: Exploration reward based on movement and coverage
         """
-        repulsion_grids = []
-        obstacle_states = self.env_b.get_obstacle_states()
-        node_positions = np.array([n.pos for n in self.env.nodes])
-        
-        for node in self.env.nodes:
-            grid = self.density_estimator.get_repulsion_potential_for_node(
-                node_pos=node.pos,
-                all_node_positions=node_positions,
-                all_obstacle_states=obstacle_states
-            )
-            repulsion_grids.append(grid.flatten())
-        
-        # Combine all grids and normalize for entropy calculation
-        combined_repulsion = np.concatenate(repulsion_grids)
-        combined_repulsion = np.abs(combined_repulsion)
-        if np.sum(combined_repulsion) == 0:
-            return 1.0 # Max coherence if no repulsion
+        if self.prev_positions is None:
+            return 0.0
             
-        prob_dist = combined_repulsion / np.sum(combined_repulsion)
+        # 1. Movement reward - encourage nodes to actually move
+        current_positions = np.array([node.pos.copy() for node in self.env.nodes])
+        movements = []
         
-        # Calculate entropy (high entropy = high disorder = low coherence)
-        # Adding a small epsilon for numerical stability
-        entropy_val = entropy(prob_dist + 1e-9, base=2)
+        for i in range(self.num_nodes):
+            # Calculate toroidal distance moved
+            delta = current_positions[i] - self.prev_positions[i]
+            toroidal_delta = np.mod(delta + 0.5, 1.0) - 0.5
+            movement_distance = np.linalg.norm(toroidal_delta)
+            movements.append(movement_distance)
         
-        # Normalize entropy to a [0,1] range and invert for coherence
-        max_entropy = math.log2(len(prob_dist))
-        if max_entropy == 0:
-            return 1.0
+        # Reward movement but not too much (balanced exploration)
+        movement_reward = np.mean(movements) * 57.0  # Scale up movement reward
+        
+        # 2. Spread reward - encourage nodes to explore different areas
+        # Calculate pairwise distances between nodes
+        pairwise_distances = []
+        for i in range(self.num_nodes):
+            for j in range(i+1, self.num_nodes):
+                delta = current_positions[i] - current_positions[j]
+                toroidal_delta = np.mod(delta + 0.5, 1.0) - 0.5
+                distance = np.linalg.norm(toroidal_delta)
+                pairwise_distances.append(distance)
+        
+        # Reward well-spread configurations (but not too spread)
+        avg_distance = np.mean(pairwise_distances)
+        optimal_distance = 0.3  # Tunable parameter
+        spread_reward = 1.0 - abs(avg_distance - optimal_distance)
+        spread_reward = max(0.0, spread_reward)
+        
+        # 3. Velocity alignment reward (swarm behavior)
+        velocities = np.array([node.velocity() for node in self.env.nodes])
+        if np.any(np.linalg.norm(velocities, axis=1) > 0.001):  # If there's any movement
+            # Normalize velocities
+            vel_norms = np.linalg.norm(velocities, axis=1)
+            vel_norms[vel_norms == 0] = 1.0  # Avoid division by zero
+            normalized_vels = velocities / vel_norms.reshape(-1, 1)
             
-        coherence = 1.0 - (entropy_val / max_entropy)
+            # Calculate alignment (average dot product)
+            alignment = 0.0
+            count = 0
+            for i in range(self.num_nodes):
+                for j in range(i+1, self.num_nodes):
+                    if vel_norms[i] > 0.001 and vel_norms[j] > 0.001:
+                        alignment += np.dot(normalized_vels[i], normalized_vels[j])
+                        count += 1
+            
+            if count > 0:
+                alignment /= count
+                alignment_reward = max(0.0, alignment) * 0.5
+            else:
+                alignment_reward = 0.0
+        else:
+            alignment_reward = 0.0
         
-        return coherence
+        total_exploration_reward = movement_reward + spread_reward * 1.5 + alignment_reward
+        
+        # Update previous positions
+        self.prev_positions = current_positions.copy()
+        
+        return total_exploration_reward
 
     def step(self, actions: List[int]) -> Tuple[np.ndarray, bool, Dict[str, Any]]:
         """
-        Advances the simulation by one timestep using the new two-stage action process.
-
-        Args:
-            actions (List[int]): A list of integer actions, one for each node.
-
-        Returns:
-            Tuple[np.ndarray, bool, Dict[str, Any]]: (rewards, done, info)
+        FIXED: Advanced simulation with improved reward structure.
         """
         info = {'wfc_reinit': 'none'}
         
-        # Split actions into position and angle movements
-        # Assuming action is a combined index: 0-3 for pos, 0-3 for angle
+        # Split actions
         pos_actions = [int(a / self.angle_action_size) for a in actions]
         angle_actions = [a % self.angle_action_size for a in actions]
         
@@ -194,60 +246,62 @@ class Flowrra_RL:
         for node, pos_action in zip(self.env.nodes, pos_actions):
             node.apply_position_action(pos_action)
         
-        # Update obstacle positions
         self.env_b.step()
         
-        # Calculate repulsion based on new positions
         self.density_estimator.update_from_sensor_data(
             all_nodes=self.env.nodes,
             all_obstacle_states=self.env_b.get_obstacle_states()
         )
         
-        # Check coherence after position move
         coherence_after_pos = self.calculate_coherence()
+        exploration_reward = self.calculate_exploration_reward()
+        
+        # If collapse after position move
         if coherence_after_pos < self.wfc.collapse_threshold:
             reinit_info = self.wfc.collapse_and_reinitialize(self.env, None)
             info['wfc_reinit'] = reinit_info['reinit_from']
-            # Return zero reward on collapse
-            rewards = np.zeros(self.num_nodes)
+            rewards = np.full(self.num_nodes, -2.0)  # Heavy penalty for collapse
+            info['exploration_reward'] = 0.0
             return rewards, False, info
         
-        # STAGE 2: Apply Angle Actions (only if position move was coherent)
+        # STAGE 2: Apply Angle Actions
         for node, angle_action in zip(self.env.nodes, angle_actions):
             node.apply_angle_action(angle_action)
             
-        # Recalculate everything for the final state
         self.density_estimator.update_from_sensor_data(
             all_nodes=self.env.nodes,
             all_obstacle_states=self.env_b.get_obstacle_states()
         )
         
         final_coherence = self.calculate_coherence()
+        
+        # FIXED REWARD CALCULATION
         if final_coherence < self.wfc.collapse_threshold:
             reinit_info = self.wfc.collapse_and_reinitialize(self.env, None)
             info['wfc_reinit'] = reinit_info['reinit_from']
-            # Return zero reward on collapse
-            rewards = np.zeros(self.num_nodes)
-            return rewards, False, info
+            rewards = np.full(self.num_nodes, -3.0)  # Severe penalty
+            info['exploration_reward'] = 0.0
+        else:
+            # Balanced reward: coherence + exploration + small baseline
+            coherence_reward = (coherence_after_pos + final_coherence) * 0.5  # Scale down coherence
+            base_reward = 0.1  # Small positive baseline to encourage any action
             
-        # Final state is good, calculate rewards and proceed
-        rewards = np.full(self.num_nodes, final_coherence)
-        
+            # Combined reward encourages both coherence and exploration
+            total_reward = coherence_reward + exploration_reward + base_reward
+            rewards = np.full(self.num_nodes, total_reward)
+            info['exploration_reward'] = exploration_reward
+            
         done = False
         self.env.t += 1
         
         return rewards, done, info
         
     def attach_agent(self, agent: SharedRLAgent):
-        """
-        Attaches the RL agent to the Flowrra instance.
-        """
+        """Attach the RL agent to the Flowrra instance."""
         self.agent = agent
 
     def train(self, total_steps: int, episode_steps: int, visualize_every_n_steps: int, agent: SharedRLAgent):
-        """
-        Trains the RL agent.
-        """
+        """Train the RL agent with improved logging."""
         self.attach_agent(agent)
         
         if not os.path.exists(self.visual_dir):
@@ -263,16 +317,21 @@ class Flowrra_RL:
         for step in range(total_steps):
             episode_num = step // episode_steps
             
-            # Reset environment if episode is over or a collapse occurs
             if step % episode_steps == 0:
                 self.reset()
                 
             state = self.get_state()
-            actions = self.agent.choose_actions(state)
-            rewards, done, info = self.step(list(actions))
-            next_state = self.get_state()
+            actions = self.agent.choose_actions(state, episode_number=episode_num, total_episodes=total_steps // episode_steps)
             
-            # Store transition in replay buffer
+            rewards, done, info = self.step(list(actions))
+            
+            if info['wfc_reinit'] != 'none':
+                next_state = self.get_state()
+                logger.info(f"WFC reinit at step {step} | Episode {episode_num}")
+            else:
+                next_state = self.get_state()
+            
+            # Store transition
             self.agent.memory.push(state, actions, rewards, next_state, done)
             
             # Update agent
@@ -281,16 +340,17 @@ class Flowrra_RL:
                 loss = self.agent.learn()
                 self.agent.update_target_network()
                 
-            # Log training data
+            # Enhanced logging
             total_reward = np.sum(rewards)
             avg_coherence = self.calculate_coherence()
+            exploration_reward = info.get('exploration_reward', 0.0)
             
             with open(self.log_file, 'a', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow([step, episode_num, total_reward, avg_coherence, loss, info['wfc_reinit']])
+                writer.writerow([step, episode_num, total_reward, avg_coherence, exploration_reward, loss, info['wfc_reinit']])
 
             if step % 50 == 0:
-                logger.info(f"Step {step} | Episode {episode_num} | Coherence: {avg_coherence:.4f} | Loss: {loss:.4f} | WFC: {info['wfc_reinit']}")
+                logger.info(f"Step {step} | Episode {episode_num} | Coherence: {avg_coherence:.4f} | Exploration: {exploration_reward:.4f} | Loss: {loss:.4f}")
 
             if step % visualize_every_n_steps == 0:
                 try:
@@ -311,36 +371,42 @@ class Flowrra_RL:
 
         logger.info("--- Training Complete ---")
 
-    def deploy(self, total_steps: int, visualize_every_n_steps: int):
-        """
-        Greedy deployment using the attached shared agent (epsilon=0).
-        """
+    def deploy(self, total_steps: int, visualize_every_n_steps: int, num_episodes: int = 1):
+        """Deployment with the attached agent."""
         if self.agent is None:
             raise ValueError("Agent not attached. Call attach_agent() before deploy().")
 
         logger.info("--- Starting deployment ---")
-        self.env.reset()
-        self.env_b.reset()
-        self.wfc.reset()
+        
+        for episode_num in range(num_episodes):
+            logger.info(f"--- Starting Deployment Episode {episode_num + 1}/{num_episodes} ---")
+            self.env.reset()
+            self.env_b.reset()
+            self.wfc.reset()
+            
+            for step in range(total_steps):
+                state = self.get_state()
+                # Increased exploration during deployment to see swarm behavior
+                actions = self.agent.choose_actions(state, episode_number=episode_num, total_episodes=num_episodes, eps_peak=0.7)
+                rewards, done, info = self.step(list(actions))
 
-        for step in range(total_steps):
-            state = self.get_state()
-            actions = self.agent.choose_actions(state, epsilon=0.0)
-            rewards, done, info = self.step(list(actions))
+                if step % visualize_every_n_steps == 0:
+                    try:
+                        from utils_rl import plot_system_state_rl
+                        plot_system_state_rl(
+                            density_field=self.density_estimator.get_full_repulsion_grid(),
+                            nodes=self.env.nodes,
+                            env_b=self.env_b,
+                            out_path=os.path.join(self.visual_dir, f"deploy_ep{episode_num:02d}_t_{step:05d}.png"),
+                            title=f"FLOWRRA RL: Deployment Ep {episode_num+1} Step {step}"
+                        )
+                    except Exception as e:
+                        logger.debug(f"Deployment visualization failed at step {step}: {e}")
+                    
+                    time.sleep(1)  # Reduced pause for faster visualization
 
-            if step % visualize_every_n_steps == 0:
-                try:
-                    from utils_rl import plot_system_state_rl
-                    plot_system_state_rl(
-                        density_field=self.density_estimator.get_full_repulsion_grid(),
-                        nodes=self.env.nodes,
-                        env_b=self.env_b,
-                        out_path=os.path.join(self.visual_dir, f"deploy_t_{step:05d}.png"),
-                        title=f"FLOWRRA RL: Deployment Step {step}"
-                    )
-                except Exception as e:
-                    logger.debug(f"Deployment visualization failed at step {step}: {e}")
-
-            if done:
-                logger.info(f"Deployment ended at step {step}")
-                break
+                if done:
+                    logger.info(f"Deployment episode {episode_num + 1} ended at step {step}")
+                    break
+        
+        logger.info("--- Deployment Complete ---")

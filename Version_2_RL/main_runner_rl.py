@@ -8,6 +8,8 @@ import logging
 import os
 import shutil
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 
 from FLOWRRA_RL import Flowrra_RL
 from RLAgent import SharedRLAgent
@@ -27,8 +29,8 @@ if __name__ == '__main__':
 
         # EnvironmentB Params
         'env_b_grid_size': 60,
-        'env_b_num_fixed': 8,   # Reduced obstacles
-        'env_b_num_moving': 4,  # Reduced moving obstacles
+        'env_b_num_fixed': 15,   # Reduced obstacles
+        'env_b_num_moving': 7,  # Reduced moving obstacles
 
         # RL Params
         'action_size': 16,
@@ -114,3 +116,13 @@ if __name__ == '__main__':
     gif_path = os.path.join(config['visual_dir'], 'flowrra_rl_deployment.gif')
     create_gif(config['visual_dir'], gif_path, pattern="deploy_*.png")
     logger.info(f"--- GIF created at {gif_path} ---")
+
+
+    # One-liner to read and plot the coherence
+    try:
+        df = pd.read_csv('flowrra_rl_log.csv')
+        df.plot(x='step', y='avg_coherence', title='Coherence Over Time')
+        plt.savefig("Coherence_Over_Time.png")
+        plt.show()
+    except FileNotFoundError:
+        logging.error("Log file not found. Could not generate coherence plot.")

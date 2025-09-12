@@ -39,22 +39,23 @@ class Environment_A:
     
     def reset(self):
         """
-        Resets the environment to its initial state for a new episode.
-        This includes re-initializing the nodes at new random positions.
+        Resets the environment, generating new, random positions for all nodes.
+        This is called at the start of each new training episode.
         """
-        if self.seed is not None:
-            np.random.seed(self.seed)
-            random.seed(self.seed)
-            
+        # A new random seed for each reset ensures a unique starting position
+        seed_value = np.random.randint(0, 10000)
+        np.random.seed(seed_value)
+        
         self.nodes = []
         for i in range(self.num_nodes):
             node = Node_Position(
                 id=i,
-                pos=np.random.rand(2),
-                angle_idx=random.randrange(0, self.angle_steps),
+                pos=np.random.rand(2), # Assign a random position
+                angle_idx=np.random.randint(0, self.angle_steps),
                 angle_steps=self.angle_steps
             )
             self.nodes.append(node)
+        
         self.loopdata = [self.snapshot_nodes()]
         self.t = 0
 

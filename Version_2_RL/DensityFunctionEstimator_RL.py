@@ -65,7 +65,7 @@ class Density_Function_Estimator:
         Returns:
             np.ndarray: A 4x4 grid of repulsion values.
         """
-        local_grid = np.zeros((4, 4))
+        local_grid = np.zeros((5, 5))
         
         # Iterate over each source detected by the sensor and splat onto the local grid
         for source in repulsion_sources:
@@ -74,8 +74,8 @@ class Density_Function_Estimator:
                 future_pos = source['pos'] + source['velocity'] * k
                 
                 # Check if future position is within the local grid bounds
-                local_grid_x = int(np.clip((future_pos[0] - node_pos[0] + 0.5) * 4, 0, 3))
-                local_grid_y = int(np.clip((future_pos[1] - node_pos[1] + 0.5) * 4, 0, 3))
+                local_grid_x = int(np.clip((future_pos[0] - node_pos[0] + 0.5) * 4, 0, 4))
+                local_grid_y = int(np.clip((future_pos[1] - node_pos[1] + 0.5) * 4, 0, 4))
                 
                 # Apply Gaussian kernel to the local grid
                 kernel_value = np.exp(-0.5 * (k / self.sigma_f)**2)

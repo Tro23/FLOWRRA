@@ -371,7 +371,7 @@ class Flowrra_RL:
 
         logger.info("--- Training Complete ---")
 
-    def deploy(self, total_steps: int=15, visualize_every_n_steps: int=5, num_episodes: int = 1):
+    def deploy(self, total_steps: int=20, visualize_every_n_steps: int=1, num_episodes: int = 1):
         """Deployment with the attached agent."""
         if self.agent is None:
             raise ValueError("Agent not attached. Call attach_agent() before deploy().")
@@ -403,7 +403,7 @@ class Flowrra_RL:
                     except Exception as e:
                         logger.debug(f"Deployment visualization failed at step {step}: {e}")
                     
-                    time.sleep(2)  # Reduced pause for faster visualization
+                    time.sleep(50)  # Reduced pause for faster visualization
 
                 if done:
                     logger.info(f"Deployment episode {episode_num + 1} ended at step {step}")

@@ -40,9 +40,9 @@ if __name__ == '__main__':
         'batch_size': 32,       # Smaller batch size
 
         # Training & Visualization Params
-        'total_training_steps': 4000,   # More training steps
-        'episode_steps': 200,           # Shorter episodes
-        'visualize_every_n_steps': 100,
+        'total_training_steps': 24000,   # More training steps
+        'episode_steps': 800,           # Shorter episodes
+        'visualize_every_n_steps': 700,
         'model_save_path': 'flowrra_rl_agent.pth',
     }
 
@@ -108,7 +108,7 @@ if __name__ == '__main__':
     # Deployment with moderate exploration to see swarm behavior
     logger.info("--- Starting FLOWRRA RL Deployment ---")
     model.attach_agent(agent)
-    model.deploy(total_steps=config['episode_steps'], visualize_every_n_steps=50)
+    model.deploy(total_steps=20, visualize_every_n_steps=1)
     logger.info("--- Deployment Complete ---")
 
     # Create GIF

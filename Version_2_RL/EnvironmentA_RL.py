@@ -42,9 +42,6 @@ class Environment_A:
         Resets the environment, generating new, random positions for all nodes.
         This is called at the start of each new training episode.
         """
-        # A new random seed for each reset ensures a unique starting position
-        seed_value = np.random.randint(0, 10000)
-        np.random.seed(seed_value)
         
         self.nodes = []
         for i in range(self.num_nodes):

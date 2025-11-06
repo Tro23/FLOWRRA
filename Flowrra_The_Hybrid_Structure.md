@@ -71,3 +71,4 @@ This hybrid model allows the system to scale effectively while retaining a robus
 After much thought, It's clearly possible to decentralize even the density function, while we maintain the thread of coherence across the nodes. This way, there's no particular mother node, that can be targeted.
 The detailed updates will be coming soon.
 But it works just as the repulsion field is calculated by each node, which pretty much is the density function. (1 - repulsion field); hence we can offload the centralized layer across all nodes to a large degree.
+The computation would be similar to multi-threading.

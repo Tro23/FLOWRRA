@@ -65,3 +65,9 @@ The necessity of both a decentralized execution policy and a centralized recover
 | **Centralized** | System Health Monitoring/Recovery | Global, Aggregated State Metrics | Low (Intermittent) | High (Server-level) | **Guaranteed Stability & Resilience to Catastrophic Failure** |
 
 This hybrid model allows the system to scale effectively while retaining a robust mechanism against total system failure, making it an ideal choice for large-scale, dynamic, and high-stakes swarm applications like logistics and dense drone operations.
+
+
+### *Update
+After much thought, It's clearly possible to decentralize even the density function, while we maintain the thread of coherence across the nodes. This way, there's no particular mother node, that can be targeted.
+The detailed updates will be coming soon.
+But it works just as the repulsion field is calculated by each node, which pretty much is the density function. (1 - repulsion field); hence we can offload the centralized layer across all nodes to a large degree.

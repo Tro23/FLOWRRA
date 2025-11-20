@@ -5,7 +5,7 @@ Run this file to train/simulate the swarm.
 from flowrra.core import FLOWRRA_Orchestrator
 from flowrra.config import CONFIG
 from utils.blender_export import save_history_for_blender
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt 
 
 def main():
     print("Initializing FLOWRRA Exploration Swarm...")

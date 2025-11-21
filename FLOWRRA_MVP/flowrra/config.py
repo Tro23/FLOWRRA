@@ -1,36 +1,66 @@
 """
-Centralized Configuration for FLOWRRA Exploration MVP.
+Centralized Configuration for FLOWRRA Loop-GNN Swarm (V2 Mechanics).
 """
 
+# import numpy as np
+
 CONFIG = {
-    'spatial': {
-        'dimensions': 2,       # Keep 2D for MVP Exploration Demo
-        'world_bounds': (1.0, 1.0),
-        'toroidal': False,     # False for exploration (we want walls)
+    "spatial": {
+        "dimensions": 2,
+        "world_bounds": (10, 10),
+        "toroidal": True,
     },
-    'exploration': {
-        'map_resolution': 0.02, # High res for accurate % coverage
-        'sensor_range': 0.15,
-        'frontier_sample_rate': 5, # Recalculate frontiers every 5 steps (Optimization)
+    "loop": {
+        "ideal_distance": 0.6,  # Ideal distance between connected nodes
+        "stiffness": 0.5,  # Spring force holding the loop
+        "break_threshold": 1.5,  # Distance at which the loop breaks
     },
-    'rewards': {
-        'r_flow': 0.5,         # Reward for moving with the flow
-        'r_explore': 2.0,      # Big reward for discovering new tiles
-        'r_collision': 5.0,    # Penalty for hitting obstacles/peers
-        'r_idle': 0.1          # Penalty for staying still
+    # Static obstacles: (x, y, radius)
+    "obstacles": [
+        (3.0, 3.0, 0.8),
+        (7.0, 7.0, 0.8),
+        (5.0, 2.0, 0.5),
+        (2.0, 8.0, 0.6),
+        (8.0, 3.0, 0.7),
+        (4.0, 6.0, 0.5),
+    ],
+    # Moving obstacles: (x, y, radius, vx, vy)
+    "moving_obstacles": [
+        (6.0, 5.0, 0.4, 0.5, 0.3),  # Slow moving obstacle
+        (2.0, 4.0, 0.3, -0.3, 0.4),
+    ],
+    "exploration": {
+        "map_resolution": 0.2,
+        "sensor_range": 1.5,
     },
-    'node': {
-        'num_nodes': 10,
-        'move_speed': 0.02,
-        'fov_angle': 360,      # 360 vision for exploration
+    "rewards": {
+        "r_flow": 0.2,  # Movement reward
+        "r_explore": 1.5,  # New cell discovery
+        "r_collision": 10.0,  # Obstacle collision penalty
+        "r_loop_integrity": 2.0,  # Loop maintenance reward
+        "r_collapse_penalty": 5.0,  # Heavy penalty for broken loop
+        "r_idle": 0.05,  # Idle penalty
     },
-    'repulsion': {
-        'local_grid_size': (5, 5),
-        'global_grid_shape': (50, 50),
+    "wfc": {
+        "history_length": 70,  # How many steps to remember
+        "tail_length": 15,  # Size of the "Comet Tail" to smooth over
+        "collapse_threshold": 0.6,  # Coherence below this triggers collapse
+        "tau": 3,  # Consecutive failing steps before trigger
     },
-    'gnn': {
-        'hidden_dim': 128,
-        'lr': 0.001,
-        'gamma': 0.99
-    }
+    "node": {
+        "num_nodes": 12,
+        "move_speed": 0.05,
+        "fov_angle": 360,
+    },
+    "repulsion": {
+        "local_grid_size": (7, 7),
+        "global_grid_shape": (50, 50),
+    },
+    "gnn": {
+        "hidden_dim": 128,
+        "lr": 0.0003,
+        "gamma": 0.95,
+        "num_layers": 3,
+        "n_heads": 4,
+    },
 }

@@ -1,0 +1,13 @@
+{
+  "config": {
+    "world_bounds": [
+      10,
+      10
+    ],
+    "num_nodes": 12,
+    "dimensions": 2
+  },
+  "frames": [
+    {
+      "time": 0,
+      "coherence": 

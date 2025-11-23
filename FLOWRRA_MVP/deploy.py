@@ -204,7 +204,7 @@ def main():
             print("   Exiting. Train the agent first with: python main.py")
             return
 
-    deployment_steps = 200
+    deployment_steps = 3000
     print_interval = 20
 
     print(f"\n🚀 Starting deployment for {deployment_steps} steps...")

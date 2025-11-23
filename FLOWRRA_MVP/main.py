@@ -91,7 +91,7 @@ def main():
     # Initialize orchestrator in training mode
     sim = FLOWRRA_Orchestrator(mode="training")
 
-    training_steps = 3000
+    training_steps = 4000
     print_interval = 50
 
     try:
@@ -109,8 +109,8 @@ def main():
                 print(f"  Buffer Size: {stats['buffer_size']}")
 
             # Early termination on high coverage
-            if sim.map.get_coverage_percentage() > 90.0:
-                print(f"\n✅ Mission Complete: >90% coverage at step {t}")
+            if sim.map.get_coverage_percentage() > 95.0:
+                print(f"\n✅ Mission Complete: >95% coverage at step {t}")
                 break
 
     except KeyboardInterrupt:

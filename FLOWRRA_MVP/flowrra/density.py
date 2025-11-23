@@ -80,7 +80,7 @@ class DensityFunctionEstimatorND:
         self.total_collision_splats = 0
         self.total_wfc_splats = 0
 
-    def check_collision(
+    '''def check_collision(
         self,
         node_pos: np.ndarray,
         obstacles: List[Tuple[float, float, float]],
@@ -114,7 +114,7 @@ class DensityFunctionEstimatorND:
             if dist < threshold:
                 return True
 
-        return False
+        return False'''
 
     def _precompute_kernel(self):
         """Precomputes Gaussian kernel for splatting."""

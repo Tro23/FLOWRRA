@@ -42,13 +42,16 @@ class LoopStructure:
         self,
         ideal_distance: float = 0.6,
         stiffness: float = 0.5,
-        break_threshold: float = 1.5,
+        break_threshold: float = 0.35,
         dimensions: int = 2,
     ):
         self.ideal_distance = ideal_distance
         self.stiffness = stiffness
         self.break_threshold = break_threshold
         self.dimensions = dimensions
+
+        # NEW: The "Warning Zone". If distance passes this, spring becomes explonential.
+        self.elastic_limit = self.break_threshold * 0.85
 
         # Loop topology: list of connections
         self.connections: List[Connection] = []
@@ -123,12 +126,29 @@ class LoopStructure:
             if distance < 1e-6:
                 continue
 
-            # Spring force: F = k * (distance - ideal_distance) * direction
-            force_magnitude = self.stiffness * (distance - self.ideal_distance)
+            # === NEW PHYSICS LOGIC ===
             force_direction = toroidal_delta / distance
+            displacement = distance - self.ideal_distance
+
+            if distance < self.elastic_limit:
+                # ZONE 1: Linear Hooke's Law (Normal behavior)
+                # Gentle guiding force
+                force_magnitude = self.stiffness * displacement
+            else:
+                # ZONE 2: Non-Linear "Warning" Force
+                # As we approach the break threshold, force spikes exponentially.
+                # This tells the GNN: "TURN BACK NOW"
+                excess = distance - self.elastic_limit
+                scale = excess / (self.break_threshold - self.elastic_limit)
+
+                # Base stiffness + Exponential spike
+                force_magnitude = (self.stiffness * displacement) * (
+                    1.0 + 5.0 * scale**2
+                )
+
             force = force_magnitude * force_direction
 
-            # Apply equal and opposite forces
+            # Apply equal/opposite
             forces[node_a.id] += force
             forces[node_b.id] -= force
 

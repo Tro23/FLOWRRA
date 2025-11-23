@@ -1,67 +1,64 @@
 """
-Centralized Configuration for FLOWRRA Loop-GNN Swarm (V2 Mechanics).
+config.py - Stability Patch
 """
-
-# import numpy as np
 
 CONFIG = {
     "spatial": {
         "dimensions": 2,
-        "world_bounds": (7, 7),
+        "world_bounds": (1.0, 1.0),
         "toroidal": True,
     },
     "loop": {
-        "ideal_distance": 0.7,  # Ideal distance between connected nodes
-        "stiffness": 0.2,  # Spring force holding the loop
-        "break_threshold": 20.0,  # Distance at which the loop breaks
+        "ideal_distance": 0.11,
+        "stiffness": 0.50,
+        # FIX 1: Relax the breaking point.
+        # Nodes need room to stretch around the 0.07 radius obstacles.
+        "break_threshold": 0.35,
     },
-    # Static obstacles: (x, y, radius)
     "obstacles": [
-        # (3.0, 3.0, 0.8),
-        (6.5, 6.0, 0.8),
-        (6.5, 2.0, 0.5),
-        (2.0, 8.0, 0.6),
-        (7.5, 3.0, 0.7),
-        # (4.0, 6.0, 0.5),
+        (0.929, 0.857, 0.074),
+        (0.929, 0.286, 0.071),
+        (0.286, 0.543, 0.076),
+        (0.071, 0.429, 0.070),
     ],
-    # Moving obstacles: (x, y, radius, vx, vy)
     "moving_obstacles": [
-        # (6.0, 5.0, 0.4, 0.5, 0.3),  # Slow moving obstacle
-        (2.0, 4.0, 0.3, -0.3, 0.4),
+        (0.286, 0.571, 0.043, -0.0043, 0.0057),
     ],
     "exploration": {
-        "map_resolution": 1.0,
-        "sensor_range": 1.5,
+        "map_resolution": 0.02,
+        "sensor_range": 0.20,
     },
     "rewards": {
-        "r_flow": 1.5,  # Movement reward
-        "r_explore": 30.0,  # New cell discovery
-        "r_collision": 10.0,  # Obstacle collision penalty
-        "r_loop_integrity": 2.0,  # Loop maintenance reward
-        "r_collapse_penalty": 3.0,  # Heavy penalty for broken loop
-        "r_idle": 2.9,  # Idle penalty
+        "r_flow": 2.0,  # Reduced slightly
+        "r_explore": 15.0,  # REDUCED: Stop the Kamikaze behavior (was 40.0)
+        "r_collision": 45.0,  # High penalty
+        "r_loop_integrity": 10.0,  # INCREASED: Value the formation more
+        "r_collapse_penalty": 20.0,  # TRIPLED: Breaking the loop must hurt
+        "r_idle": 0.2,
+        "r_reconnection": 15.0,  # High reward for healing
     },
     "wfc": {
-        "history_length": 150,  # How many steps to remember
-        "tail_length": 50,  # Size of the "Comet Tail" to smooth over
-        "collapse_threshold": 0.4,  # Coherence below this triggers collapse
-        "tau": 8,  # Consecutive failing steps before trigger
+        "history_length": 200,
+        "tail_length": 30,
+        "collapse_threshold": 0.4,
+        "tau": 10,  # INCREASED: Give them more time to recover before reset
     },
     "node": {
         "num_nodes": 10,
-        "move_speed": 0.25,
+        "move_speed": 0.015,
         "fov_angle": 360,
     },
     "repulsion": {
-        "local_grid_size": (3, 3),
-        "global_grid_shape": (50, 50),
-        "decay_lambda": 0.99999,
-        "blur_data": 0.0,
+        "local_grid_size": (5, 5),
+        "global_grid_shape": (80, 80),
+        "decay_lambda": 0.995,
+        "blur_data": 0.1,
+        "beta": 1.5,  # Strength multiplier
     },
     "gnn": {
         "hidden_dim": 128,
-        "lr": 0.0003,
-        "gamma": 0.95,
+        "lr": 0.0002,  # SLOWER LEARNING: Prevent erratic gradient jumps
+        "gamma": 0.98,  # Look further into the future
         "num_layers": 3,
         "n_heads": 4,
     },

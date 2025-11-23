@@ -113,12 +113,9 @@ class FLOWRRA_Orchestrator:
         for obs_cfg in self.cfg.get("obstacles", []):
             if len(obs_cfg) == 3:  # (x, y, radius)
                 x, y, r = obs_cfg
-                pos = np.array(
-                    [
-                        x / self.cfg["spatial"]["world_bounds"][0],
-                        y / self.cfg["spatial"]["world_bounds"][1],
-                    ]
-                )
+
+                pos = np.array([x, y])
+
                 self.obstacle_manager.add_static_obstacle(
                     pos, r / self.cfg["spatial"]["world_bounds"][0]
                 )
@@ -127,13 +124,8 @@ class FLOWRRA_Orchestrator:
         if self.cfg.get("moving_obstacles"):
             for mov_obs in self.cfg["moving_obstacles"]:
                 x, y, r, vx, vy = mov_obs
-                pos = np.array(
-                    [
-                        x / self.cfg["spatial"]["world_bounds"][0],
-                        y / self.cfg["spatial"]["world_bounds"][1],
-                    ]
-                )
-                vel = np.array([vx, vy]) * 0.01  # Scale velocity
+                pos = np.array([x, y])
+                vel = np.array([vx, vy])  # Scale velocity
                 self.obstacle_manager.add_moving_obstacle(
                     pos, r / self.cfg["spatial"]["world_bounds"][0], vel
                 )
@@ -152,17 +144,12 @@ class FLOWRRA_Orchestrator:
 
         # MATH FIX: Circumference = N * ideal_dist = 2 * pi * r
         # Therefore r = (N * ideal_dist) / (2 * pi)
-        equilibrium_radius_world = (num_nodes * ideal_dist) / (2 * np.pi)
-
-        # Normalize radius to [0, 1] space
-        # Assuming square world bounds for simplicity, taking the first dim
-        world_size = self.cfg["spatial"]["world_bounds"][0]
-        norm_radius = equilibrium_radius_world / world_size
+        equilibrium_radius = (num_nodes * ideal_dist) / (2 * np.pi)
 
         center = np.array([0.5, 0.5] if self.dims == 2 else [0.5, 0.5, 0.5])
 
         # Safety clamp to ensure we don't spawn inside walls if ideal_dist is huge
-        norm_radius = min(norm_radius, 0.4)
+        equilibrium_radius = min(equilibrium_radius, 0.4)
 
         nodes = []
         for i in range(num_nodes):
@@ -170,9 +157,11 @@ class FLOWRRA_Orchestrator:
 
             # Position on the equilibrium ring
             if self.dims == 2:
-                offset = np.array([np.cos(angle), np.sin(angle)]) * norm_radius
+                offset = np.array([np.cos(angle), np.sin(angle)]) * equilibrium_radius
             else:
-                offset = np.array([np.cos(angle), np.sin(angle), 0]) * norm_radius
+                offset = (
+                    np.array([np.cos(angle), np.sin(angle), 0]) * equilibrium_radius
+                )
 
             # Add TINY noise just to break perfect symmetry (prevents numerical singularity)
             noise = np.random.normal(0, 0.001, self.dims)
@@ -189,7 +178,7 @@ class FLOWRRA_Orchestrator:
             nodes.append(node)
 
         print(
-            f"[Nodes] Initialized {num_nodes} nodes at Equilibrium Radius: {norm_radius:.4f} (World units: {equilibrium_radius_world:.2f})"
+            f"[Nodes] Initialized {num_nodes} nodes at Equilibrium Radius: {equilibrium_radius:.4f} (World units: {equilibrium_radius:.2f})"
         )
         return nodes
 
@@ -256,30 +245,28 @@ class FLOWRRA_Orchestrator:
 
     def calculate_coherence(self, rewards: np.ndarray, loop_integrity: float) -> float:
         """
-        Revised Coherence: Heavily prioritizes structural integrity.
-        We only care about rewards if they are catastrophically low (e.g. collision).
+        Revised Coherence:
+        A single collision shouldn't zero out the coherence of the whole swarm immediately,
+        unless the loop is also broken.
         """
-        if loop_integrity > 0.95:
-            return 1.0
-
-        # 1. Structural Integrity is the baseline (0.0 to 1.0)
+        # 1. Structural Integrity is the baseline
         base_coherence = loop_integrity
 
-        # 2. Only penalize for COLLISIONS, not just "low flow" or "idle"
-        # We assume r_collision is negative (e.g. -10).
-        # If min_reward is -10, penalty is high. If min_reward is -0.1, penalty is 0.
-        min_r = np.min(rewards)
+        # 2. Collision Penalty
+        # Count how many nodes are experiencing deep negative rewards (collisions)
+        # r_collision is 25.0, so look for values < -10
+        colliding_nodes = np.sum(rewards < -10.0)
 
-        # Softplus penalty: kicks in only when rewards are deeply negative
-        # If min_r > -2, penalty is negligible.
-        # If min_r = -10 (collision), penalty is ~0.5
-        penalty = 0.0
-        if min_r < -2.0:
-            penalty = 0.5 * (abs(min_r) / 10.0)  # Scaling relative to collision penalty
+        collision_penalty = 0.0
+        if colliding_nodes > 0:
+            # Penalize proportional to how many nodes are crashing
+            # If 1 node crashes: -0.15. If all 10 crash: -1.0
+            collision_penalty = (colliding_nodes / len(self.nodes)) * 1.5
 
-        coherence = base_coherence - penalty
+        # 3. Calculate final
+        coherence = base_coherence - collision_penalty
 
-        # Clamp to 0-1
+        # Smooth clamping
         return np.clip(coherence, 0.0, 1.0)
 
     def step(self, episode_step: int, total_episodes: int = 8000) -> float:
@@ -460,8 +447,8 @@ class FLOWRRA_Orchestrator:
                 impact_speed = np.linalg.norm(attempted_velocity)
 
                 # This teaches "don't go here" via density field learning
-                if impact_speed > 0.08:
-                    collision_severity = 0.05  # Full severity for direct collision
+                if impact_speed > 0.002:
+                    collision_severity = 0.5  # Full severity for direct collision
 
                     # Splat repulsion at collision point with forward projection
                     self.density.splat_collision_event(
@@ -497,9 +484,42 @@ class FLOWRRA_Orchestrator:
         step_rewards_array = np.array(step_rewards, dtype=np.float32)
 
         # Update map and calculate exploration reward
-        new_coverage = self.map.update(self.nodes)
+        """new_coverage = self.map.update(self.nodes)
         r_explore = new_coverage * self.cfg["rewards"]["r_explore"]
+        step_rewards_array += r_explore"""
+        # Updating Patrol mode: Once coverage > 85% maintain loop and move around.
+        # 1. Update Map & Calculate Standard Exploration
+        new_coverage_diff = self.map.update(self.nodes)
+        loop_integrity = self.loop.calculate_integrity()
+        r_loop = self.cfg["rewards"]["r_loop_integrity"] * loop_integrity
+        r_explore = new_coverage_diff * self.cfg["rewards"]["r_explore"]
+
+        # 2. Add to rewards array
         step_rewards_array += r_explore
+
+        # 3. THE "STRICT PATROL" PROTOCOL
+        # Calculate current global coverage percentage
+        current_total_coverage = self.map.get_coverage_percentage()
+
+        # Only activate if we are in "End Game" (> 90% explored)
+        if current_total_coverage > 90.0:
+            # We already calculated 'loop_integrity' a few lines above in the standard physics block
+            # Logic: We need to replace the missing "Exploration Dopamine" (usually ~15.0)
+            # to keep the agents interested.
+
+            if loop_integrity >= 0.90:
+                # VICTORY LAP: High reward for perfect formation
+                # This matches the intensity of finding new chunks
+                r_patrol = 15.0
+            elif loop_integrity >= 0.70:
+                # MEDIOCRE: Small maintenance reward
+                r_patrol = 2.0
+            else:
+                # SLACKING: Penalty for losing focus during patrol
+                # This prevents the "boredom chaos"
+                r_patrol = -5.0
+
+            step_rewards_array += r_patrol
 
         # Add reconnection bonus - distributed across all nodes
         # Reconnecting the loop is a collective achievement!
@@ -517,7 +537,7 @@ class FLOWRRA_Orchestrator:
                     node_features=last_features,
                     adj_matrix=last_adj,
                     actions=last_actions,
-                    rewards=step_rewards_array,
+                    rewards=np.clip(step_rewards_array, -50.0, 50.0) / 10.0,
                     next_node_features=node_features_array,
                     next_adj_matrix=adj_mat,
                     done=False,

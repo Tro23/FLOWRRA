@@ -91,8 +91,8 @@ def main():
     # Initialize orchestrator in training mode
     sim = FLOWRRA_Orchestrator(mode="training")
 
-    training_steps = 10000
-    print_interval = 500
+    training_steps = 3000
+    print_interval = 50
 
     try:
         for t in range(training_steps):

@@ -6,6 +6,7 @@ Enhanced FLOWRRA Orchestrator with:
 - Static and moving obstacles
 - Loop break detection and recovery
 - Enhanced metrics tracking
+- Proper collision response with WFC micro-collapse
 """
 
 from typing import Any, Dict, List
@@ -24,7 +25,8 @@ from .recovery import Wave_Function_Collapse
 
 class FLOWRRA_Orchestrator:
     """
-    Enhanced FLOWRRA orchestrator with loop structure and obstacles.
+    Enhanced FLOWRRA orchestrator with loop structure, obstacles,
+    and Gaussian exploration schedule for organic swarm expansion.
     """
 
     def __init__(self, mode="training"):
@@ -55,7 +57,7 @@ class FLOWRRA_Orchestrator:
         self.obstacle_manager = ObstacleManager(dimensions=self.dims)
         self._initialize_obstacles()
 
-        # NEW: Loop Structure
+        # NEW: Loop Structure initialized BEFORE nodes (so we can use its params)
         self.loop = LoopStructure(
             ideal_distance=self.cfg["loop"]["ideal_distance"],
             stiffness=self.cfg["loop"]["stiffness"],
@@ -63,11 +65,14 @@ class FLOWRRA_Orchestrator:
             dimensions=self.dims,
         )
 
-        # Init Nodes
+        # FIX 1: Initialize Nodes at Equilibrium
         self.nodes = self._initialize_nodes_in_loop()
 
-        # Initialize loop topology
+        # Initialize topology
         self.loop.initialize_ring_topology(len(self.nodes))
+
+        # FIX 2: Run Physics Warmup to stabilize energy before AI starts
+        self._physics_warmup(steps=100)
 
         # Calculate GNN input dimension
         input_dim = self._calculate_input_dim()
@@ -93,11 +98,14 @@ class FLOWRRA_Orchestrator:
         # Performance tracking
         self.total_reward = 0.0
         self.episode_rewards = []
+        self.training_losses = []  # Track GNN training loss
 
         # NEW: Enhanced metrics
         self.metrics_history = []
         self.loop_break_events = []
         self.wfc_trigger_events = []
+        self.collision_events = []  # Track collision-recovery events
+        self.total_reconnections = 0  # Track healing behavior
 
     def _initialize_obstacles(self):
         """Initialize static and moving obstacles from config."""
@@ -135,31 +143,106 @@ class FLOWRRA_Orchestrator:
         )
 
     def _initialize_nodes_in_loop(self) -> List[NodePositionND]:
-        """Initialize nodes in a circular formation."""
+        """
+        Initialize nodes at the 'Relaxed State' radius.
+        Calculates the exact radius needed for the spring loop to be at rest.
+        """
         num_nodes = self.cfg["node"]["num_nodes"]
-        nodes = []
+        ideal_dist = self.cfg["loop"]["ideal_distance"]
 
-        # Place nodes in a circle
+        # MATH FIX: Circumference = N * ideal_dist = 2 * pi * r
+        # Therefore r = (N * ideal_dist) / (2 * pi)
+        equilibrium_radius_world = (num_nodes * ideal_dist) / (2 * np.pi)
+
+        # Normalize radius to [0, 1] space
+        # Assuming square world bounds for simplicity, taking the first dim
+        world_size = self.cfg["spatial"]["world_bounds"][0]
+        norm_radius = equilibrium_radius_world / world_size
+
         center = np.array([0.5, 0.5] if self.dims == 2 else [0.5, 0.5, 0.5])
-        radius = 0.3  # Initial loop radius
 
+        # Safety clamp to ensure we don't spawn inside walls if ideal_dist is huge
+        norm_radius = min(norm_radius, 0.4)
+
+        nodes = []
         for i in range(num_nodes):
             angle = (i / num_nodes) * 2 * np.pi
 
+            # Position on the equilibrium ring
             if self.dims == 2:
-                offset = np.array([np.cos(angle), np.sin(angle)]) * radius
+                offset = np.array([np.cos(angle), np.sin(angle)]) * norm_radius
             else:
-                # For 3D, distribute on a ring in XY plane
-                offset = np.array([np.cos(angle), np.sin(angle), 0]) * radius
+                offset = np.array([np.cos(angle), np.sin(angle), 0]) * norm_radius
 
-            pos = center + offset
+            # Add TINY noise just to break perfect symmetry (prevents numerical singularity)
+            noise = np.random.normal(0, 0.001, self.dims)
+
+            pos = np.mod(center + offset + noise, 1.0)
+
             node = NodePositionND(i, pos, self.dims)
             node.sensor_range = self.cfg["exploration"]["sensor_range"]
             node.move_speed = self.cfg["node"]["move_speed"]
+
+            # Align orientation outward initially (optional, helps exploration)
+            # node.azimuth_idx = ... (can leave default)
+
             nodes.append(node)
 
-        print(f"[Nodes] Initialized {num_nodes} nodes in loop formation")
+        print(
+            f"[Nodes] Initialized {num_nodes} nodes at Equilibrium Radius: {norm_radius:.4f} (World units: {equilibrium_radius_world:.2f})"
+        )
         return nodes
+
+    def _physics_warmup(self, steps=100):
+        """
+        Runs the physics engine without the GNN to let springs settle.
+        Drains kinetic energy (damping) to reach a stable state.
+        """
+        print(f"[System] Running {steps} steps of physics warmup...")
+
+        for _ in range(steps):
+            # 1. Calculate Forces
+            forces = self.loop.calculate_spring_forces(self.nodes)
+
+            # 2. Apply Forces with Heavy Damping (simulating friction)
+            for node in self.nodes:
+                if node.id in forces:
+                    # Apply force
+                    node.pos = np.mod(node.pos + forces[node.id] * 0.05, 1.0)
+
+            # 3. Enforce Constraints (Reconnect immediately if broken during warmup)
+            # We force repair here because we want a valid loop to start
+            self.loop.repair_all_connections()
+
+            # FIX: Record these stable states to WFC!
+            # We simulate a "perfect" state: Coherence=1.0, Integrity=1.0
+            if _ > steps - 50:  # Only record the last 50 stable steps
+                # We create a dummy "high coherence" entry so WFC has a safe place to return to
+                self.wfc.assess_loop_coherence(
+                    coherence=1.0, nodes=self.nodes, loop_integrity=1.0
+                )
+
+        print(
+            f"[System] Warmup complete. Loop is Complete.\n WFC Memory Seeded with {len(self.wfc.history)} stable states."
+        )
+
+    def _get_current_node_features(self):
+        node_features = []
+        for node in self.nodes:
+            # (Copy logic from step 6 in your code)
+            node_detections = node.sense_nodes(self.nodes)
+            obstacle_detections = node.sense_obstacles(
+                self.obstacle_manager.get_all_states()
+            )
+            repulsion_sources = node_detections + obstacle_detections
+            local_grid = self.density.get_repulsion_potential_for_node(
+                node.pos, repulsion_sources
+            )
+            feats = node.get_state_vector(
+                local_grid, node_detections, obstacle_detections
+            )
+            node_features.append(feats)
+        return np.array(node_features, dtype=np.float32)
 
     def _calculate_input_dim(self) -> int:
         """Calculate the dimension of the GNN input vector."""
@@ -173,21 +256,35 @@ class FLOWRRA_Orchestrator:
 
     def calculate_coherence(self, rewards: np.ndarray, loop_integrity: float) -> float:
         """
-        Enhanced coherence calculation incorporating loop integrity.
-
-        Coherence = weighted combination of:
-        - Reward performance
-        - Loop integrity
+        Revised Coherence: Heavily prioritizes structural integrity.
+        We only care about rewards if they are catastrophically low (e.g. collision).
         """
-        reward_coherence = 1.0 / (1.0 + np.exp(-np.mean(rewards)))
+        if loop_integrity > 0.95:
+            return 1.0
 
-        # Combine with loop integrity (weighted)
-        coherence = 0.6 * reward_coherence + 0.4 * loop_integrity
-        return coherence
+        # 1. Structural Integrity is the baseline (0.0 to 1.0)
+        base_coherence = loop_integrity
+
+        # 2. Only penalize for COLLISIONS, not just "low flow" or "idle"
+        # We assume r_collision is negative (e.g. -10).
+        # If min_reward is -10, penalty is high. If min_reward is -0.1, penalty is 0.
+        min_r = np.min(rewards)
+
+        # Softplus penalty: kicks in only when rewards are deeply negative
+        # If min_r > -2, penalty is negligible.
+        # If min_r = -10 (collision), penalty is ~0.5
+        penalty = 0.0
+        if min_r < -2.0:
+            penalty = 0.5 * (abs(min_r) / 10.0)  # Scaling relative to collision penalty
+
+        coherence = base_coherence - penalty
+
+        # Clamp to 0-1
+        return np.clip(coherence, 0.0, 1.0)
 
     def step(self, episode_step: int, total_episodes: int = 8000) -> float:
         """
-        Execute one simulation step with loop dynamics.
+        Execute one simulation step with loop dynamics and Gaussian exploration.
         """
         # --- 1. Update Obstacles ---
         self.obstacle_manager.update_all()
@@ -207,6 +304,27 @@ class FLOWRRA_Orchestrator:
         # --- 3. Attempt Reconnections ---
         reconnected = self.loop.attempt_reconnection(
             self.nodes, self.obstacle_manager, self.step_count
+        )
+
+        # Log successful reconnections
+        if reconnected:
+            self.total_reconnections += len(reconnected)
+            self.loop_break_events.append(
+                {
+                    "timestep": self.step_count,
+                    "event_type": "reconnection",
+                    "reconnected_connections": [
+                        (c.node_a_id, c.node_b_id) for c in reconnected
+                    ],
+                }
+            )
+            print(
+                f"[Loop] Step {self.step_count}: Reconnected {len(reconnected)} connection(s)"
+            )
+
+        # Calculate reconnection bonus for reward later
+        reconnection_bonus = len(reconnected) * self.cfg["rewards"].get(
+            "r_reconnection", 0.5
         )
 
         # --- 4. Calculate Spring Forces ---
@@ -248,6 +366,7 @@ class FLOWRRA_Orchestrator:
         node_features_array = np.array(node_features, dtype=np.float32)
 
         # --- 7. GNN Action Selection ---
+        # GNN handles its own epsilon schedule internally
         actions = self.gnn.choose_actions(
             node_features=node_features_array,
             adj_matrix=adj_mat,
@@ -255,7 +374,14 @@ class FLOWRRA_Orchestrator:
             total_episodes=total_episodes,
         )
 
-        # --- 8. Physics & Reward Calculation ---
+        # Get current epsilon from GNN for tracking
+        current_epsilon = (
+            self.gnn.epsilon_gaussian(self.current_episode, total_episodes)
+            if hasattr(self.gnn, "get_current_epsilon")
+            else None
+        )
+
+        # --- 8. Physics & Reward Calculation with Collision Response ---
         step_rewards = []
 
         for i, node in enumerate(self.nodes):
@@ -271,17 +397,87 @@ class FLOWRRA_Orchestrator:
                 # Apply force as velocity modification
                 node.pos = np.mod(node.pos + force * 0.1, 1.0)  # Scale force
 
-            # Calculate movement
-            move_mag = np.linalg.norm(node.velocity())
-
-            # Collision check with obstacles
+            # NEW: Collision Response with Wave Function Collapse
             collides, obs_ids = self.obstacle_manager.check_collision(
                 node.pos, safety_margin=0.05
             )
-            r_coll = -self.cfg["rewards"]["r_collision"] if collides else 0.0
 
-            # Movement reward
-            r_flow = self.cfg["rewards"]["r_flow"] * move_mag
+            if collides:
+                # FLOWRRA Point 8: Micro-level WFC - collapse to nearby valid state
+                # Instead of hard snapback, intelligently search for valid positions
+                best_candidate = old_pos.copy()  # Fallback to previous position
+                max_attempts = 8  # Quick 8-directional search
+
+                for attempt in range(max_attempts):
+                    # Sample positions in a circle around old_pos
+                    angle = (attempt / max_attempts) * 2 * np.pi
+                    offset_mag = 0.02  # Small exploration radius
+
+                    if self.dims == 2:
+                        offset = np.array([np.cos(angle), np.sin(angle)]) * offset_mag
+                    else:
+                        # 3D: sample sphere around old position
+                        offset = np.array(
+                            [
+                                np.cos(angle) * offset_mag,
+                                np.sin(angle) * offset_mag,
+                                np.random.uniform(-1, 1) * offset_mag,
+                            ]
+                        )
+
+                    candidate = np.mod(old_pos + offset, 1.0)
+
+                    # Test candidate for collision
+                    coll_check, _ = self.obstacle_manager.check_collision(
+                        candidate, safety_margin=0.05
+                    )
+
+                    if not coll_check:
+                        # Found valid position! Collapse to it
+                        best_candidate = candidate
+                        break
+
+                # Collapse node to best valid state found
+                node.pos = best_candidate
+
+                # Heavy collision penalty - this teaches avoidance
+                r_coll = -self.cfg["rewards"]["r_collision"]
+
+                # Log collision event for WFC awareness
+                self.collision_events.append(
+                    {
+                        "timestep": self.step_count,
+                        "node_id": node.id,
+                        "attempted_pos": old_pos.copy(),
+                        "recovered_pos": best_candidate.copy(),
+                        "obstacle_ids": obs_ids,
+                    }
+                )
+
+                # CRITICAL: Add repulsion scar at collision site
+                # Estimate velocity from movement attempt
+                attempted_velocity = node.pos - old_pos  # The failed move direction
+                impact_speed = np.linalg.norm(attempted_velocity)
+
+                # This teaches "don't go here" via density field learning
+                if impact_speed > 0.08:
+                    collision_severity = 0.05  # Full severity for direct collision
+
+                    # Splat repulsion at collision point with forward projection
+                    self.density.splat_collision_event(
+                        position=node.pos.copy(),
+                        velocity=attempted_velocity,
+                        severity=collision_severity,
+                        node_id=node.id,
+                    )
+            else:
+                r_coll = 0.0
+
+            # Calculate movement (from old_pos to final pos after collision handling)
+            move_mag = np.linalg.norm(node.pos - old_pos)
+
+            # Movement reward - reward for valid movement
+            r_flow = self.cfg["rewards"]["r_flow"] * move_mag if not collides else 0.0
 
             # Idle penalty
             r_idle = -self.cfg["rewards"]["r_idle"] if move_mag < 0.001 else 0.0
@@ -305,7 +501,14 @@ class FLOWRRA_Orchestrator:
         r_explore = new_coverage * self.cfg["rewards"]["r_explore"]
         step_rewards_array += r_explore
 
+        # Add reconnection bonus - distributed across all nodes
+        # Reconnecting the loop is a collective achievement!
+        if reconnection_bonus > 0:
+            step_rewards_array += reconnection_bonus
+
         # --- 9. Store Experience (Training Mode Only) ---
+        training_loss = None  # Initialize loss tracking
+
         if self.mode == "training":
             if self.last_state is not None:
                 last_features, last_adj, last_actions = self.last_state
@@ -321,7 +524,14 @@ class FLOWRRA_Orchestrator:
                 )
 
                 if len(self.gnn.memory) >= self.gnn.batch_size:
-                    loss = self.gnn.learn()
+                    training_loss = self.gnn.learn()
+                    self.training_losses.append(
+                        {
+                            "timestep": self.step_count,
+                            "episode": self.current_episode,
+                            "loss": float(training_loss),
+                        }
+                    )
 
             self.last_state = (node_features_array, adj_mat, actions)
 
@@ -333,8 +543,9 @@ class FLOWRRA_Orchestrator:
         loop_integrity = self.loop.calculate_integrity()
         current_coherence = self.calculate_coherence(step_rewards_array, loop_integrity)
 
-        # Log to WFC
-        self.wfc.assess_loop_coherence(current_coherence, self.nodes)
+        self.wfc.assess_loop_coherence(
+            current_coherence, self.nodes, loop_integrity
+        )  # Pass integrity!
 
         # Trigger recovery if needed
         if self.wfc.needs_recovery() or not self.loop.is_loop_coherent(
@@ -345,6 +556,10 @@ class FLOWRRA_Orchestrator:
             )
             print("[WFC] Triggering recovery...")
 
+            # CRITICAL: Store pre-collapse positions for retrocausal repulsion
+            failed_positions = [node.pos.copy() for node in self.nodes]
+            failed_velocities = [node.velocity() for node in self.nodes]
+
             recovery_info = self.wfc.collapse_and_reinitialize(self.nodes)
 
             # Repair all loop connections after recovery
@@ -352,16 +567,68 @@ class FLOWRRA_Orchestrator:
 
             print(f"[WFC] Recovery complete: {recovery_info}")
 
+            # CRITICAL: Retrocausal repulsion splatting
+            # Splat repulsion along the entire failed loop path
+            # This teaches "this configuration was bad, avoid it"
+            collapse_severity = (
+                1.0 - current_coherence
+            ) * 0.15  # Worse coherence = stronger repulsion
+
+            print(
+                f"[WFC] Splatting retrocausal repulsion (severity={collapse_severity:.2f}) along failed path..."
+            )
+
+            for i, node in enumerate(self.nodes):
+                # Splat at each node's failed position with its velocity
+                self.density.splat_collision_event(
+                    position=failed_positions[i],
+                    velocity=failed_velocities[i],
+                    severity=collapse_severity,
+                    node_id=node.id,
+                    is_wfc_event=True,  # Flag as collapse event
+                )
+
             self.wfc_trigger_events.append(
                 {
                     "timestep": self.step_count,
                     "coherence": current_coherence,
                     "loop_integrity": loop_integrity,
                     "recovery_info": recovery_info,
+                    "repulsion_severity": collapse_severity,
                 }
             )
 
-            self.last_state = None
+            # Force a learning update for the crash
+            if self.mode == "training" and self.last_state is not None:
+                last_features, last_adj, last_actions = self.last_state
+
+                # Punishment reward for causing a collapse
+                collapse_penalty = np.full(len(self.nodes), -5.0)
+
+                # We use the NEW (recovered) features as the next state
+                # This teaches: "If you do X, you teleport to Safe State Y with -5 points"
+                recovered_features = (
+                    self._get_current_node_features()
+                )  # Helper needed (see below)
+                recovered_adj = build_adjacency_matrix(
+                    self.nodes, self.cfg["exploration"]["sensor_range"]
+                )
+
+                self.gnn.memory.push(
+                    node_features=last_features,
+                    adj_matrix=last_adj,
+                    actions=last_actions,
+                    rewards=collapse_penalty,
+                    next_node_features=recovered_features,
+                    next_adj_matrix=recovered_adj,
+                    done=False,
+                )
+
+            # Update last_state to the RECOVERED state so the next step makes sense
+            recovered_features = self._get_current_node_features()
+            recovered_adj = build_adjacency_matrix(
+                self.nodes, self.cfg["exploration"]["sensor_range"]
+            )
 
         # --- 11. Record State & Metrics ---
         self.record_state(episode_step, current_coherence, loop_integrity)
@@ -369,12 +636,21 @@ class FLOWRRA_Orchestrator:
         # Track metrics
         metrics = {
             "timestep": self.step_count,
+            "episode": self.current_episode,
+            "epsilon": current_epsilon,  # Track exploration rate
+            "training_loss": float(training_loss)
+            if training_loss is not None
+            else None,
             "avg_reward": float(np.mean(step_rewards_array)),
             "coherence": current_coherence,
             "loop_integrity": loop_integrity,
             "coverage": self.map.get_coverage_percentage(),
             "broken_connections": len(self.loop.get_broken_connections()),
             "total_breaks": self.loop.total_breaks,
+            "reconnections_this_step": len(reconnected) if reconnected else 0,
+            "collision_recoveries": len(
+                [e for e in self.collision_events if e["timestep"] == self.step_count]
+            ),
         }
         self.metrics_history.append(metrics)
 
@@ -412,6 +688,7 @@ class FLOWRRA_Orchestrator:
         """Get comprehensive simulation statistics."""
         coverage = self.map.get_coverage_percentage()
         loop_stats = self.loop.get_statistics()
+        density_stats = self.density.get_statistics()
 
         return {
             "step": self.step_count,
@@ -422,8 +699,15 @@ class FLOWRRA_Orchestrator:
             "buffer_size": len(self.gnn.memory) if self.mode == "training" else 0,
             "loop_integrity": loop_stats["current_integrity"],
             "total_loop_breaks": loop_stats["total_breaks_occurred"],
+            "total_reconnections": self.total_reconnections,
             "wfc_triggers": len(self.wfc_trigger_events),
+            "collision_events": len(self.collision_events),
             "num_obstacles": len(self.obstacle_manager.obstacles),
+            "density_collision_splats": density_stats["total_collision_splats"],
+            "density_wfc_splats": density_stats["total_wfc_splats"],
+            "repulsion_field_coverage": density_stats[
+                "repulsion_field_nonzero_fraction"
+            ],
         }
 
     def save_metrics(self, filepath: str):
@@ -454,8 +738,10 @@ class FLOWRRA_Orchestrator:
             "final_statistics": convert_to_serializable(self.get_statistics()),
             "loop_statistics": convert_to_serializable(self.loop.get_statistics()),
             "metrics_timeseries": convert_to_serializable(self.metrics_history),
+            "training_losses": convert_to_serializable(self.training_losses),
             "loop_break_events": convert_to_serializable(self.loop_break_events),
             "wfc_trigger_events": convert_to_serializable(self.wfc_trigger_events),
+            "collision_events": convert_to_serializable(self.collision_events),
         }
 
         with open(filepath, "w") as f:

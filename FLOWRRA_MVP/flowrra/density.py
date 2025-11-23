@@ -2,7 +2,12 @@
 density.py
 
 N-dimensional repulsion field with local grid computation.
-Supports both 2D and 3D with configurable local grid sizes.
+Enhanced with collision event splatting for retrocausal learning.
+
+Key additions:
+- splat_collision_event: Adds repulsion at failure sites
+- Forward projection along velocity (comet-tail)
+- Severity-weighted splatting
 """
 
 from typing import Any, Dict, List, Tuple
@@ -16,6 +21,9 @@ class DensityFunctionEstimatorND:
 
     Each node computes its own local grid rather than maintaining
     a global field, making this highly scalable.
+
+    Enhanced with collision learning: when collisions or WFC triggers occur,
+    repulsion is splatted to teach avoidance.
     """
 
     def __init__(
@@ -37,7 +45,7 @@ class DensityFunctionEstimatorND:
             local_grid_size: Size of local grid per node (e.g., (5,5,5))
             global_grid_shape: Full world grid for visualization only
             eta: Learning rate for repulsion splatting
-            gamma_f: Comet-tail decay factor
+            gamma_f: Comet-tail decay factor (forward projection)
             k_f: Number of future projection steps
             sigma_f: Gaussian kernel width
             decay_lambda: Global field decay rate
@@ -62,11 +70,15 @@ class DensityFunctionEstimatorND:
         self.blur_delta = blur_delta
         self.beta = beta
 
-        # Global grid (for visualization only)
+        # Global grid (for visualization + collision learning)
         self.repulsion_field = np.zeros(global_grid_shape)
 
         # Precompute Gaussian kernel for efficiency
         self._precompute_kernel()
+
+        # Track collision splatting events
+        self.total_collision_splats = 0
+        self.total_wfc_splats = 0
 
     def check_collision(
         self,
@@ -124,6 +136,120 @@ class DensityFunctionEstimatorND:
     def reset(self):
         """Resets the global repulsion field."""
         self.repulsion_field = np.zeros(self.global_grid_shape)
+        self.total_collision_splats = 0
+        self.total_wfc_splats = 0
+
+    def splat_collision_event(
+        self,
+        position: np.ndarray,
+        velocity: np.ndarray,
+        severity: float,
+        node_id: int = None,
+        is_wfc_event: bool = False,
+    ):
+        """
+        CRITICAL METHOD: Splat repulsion at collision/failure sites.
+
+        This implements retrocausal learning from the design doc:
+        - When collision occurs: splat repulsion to teach "avoid here"
+        - When WFC triggers: splat along failed path to teach "avoid this configuration"
+
+        Uses forward projection along velocity (comet-tail) to anticipate movement.
+
+        Args:
+            position: Where the failure occurred (normalized [0,1])
+            velocity: Direction of failed movement
+            severity: How bad the failure was (0-1)
+            node_id: Which node failed (for logging)
+            is_wfc_event: True if this is a WFC collapse, False if collision
+        """
+        # Track event type
+        if is_wfc_event:
+            self.total_wfc_splats += 1
+        else:
+            self.total_collision_splats += 1
+
+        # Normalize velocity for projection
+        vel_mag = np.linalg.norm(velocity)
+        if vel_mag < 1e-6:
+            # If no velocity, splat in all directions (omnidirectional repulsion)
+            velocity = np.zeros_like(position)
+        else:
+            velocity = velocity / vel_mag  # Unit direction
+
+        # Project forward along velocity (comet-tail effect)
+        for k in range(self.k_f):
+            # Future position along trajectory
+            future_pos = position + velocity * k * 0.02  # Small step size
+
+            # Toroidal wrapping
+            future_pos = np.mod(future_pos, 1.0)
+
+            # Convert to global grid coordinates
+            grid_pos = (future_pos * np.array(self.global_grid_shape)).astype(int)
+            grid_pos = np.clip(grid_pos, 0, np.array(self.global_grid_shape) - 1)
+
+            # Temporal decay: earlier projections stronger
+            temporal_weight = self.gamma_f**k
+
+            # Total weight
+            weight = self.eta * severity * temporal_weight
+
+            # Splat Gaussian kernel around this point
+            self._splat_kernel_at_grid_pos(grid_pos, weight)
+
+    def _splat_kernel_at_grid_pos(self, grid_pos: np.ndarray, weight: float):
+        """
+        Splat a Gaussian kernel at the given grid position.
+
+        Args:
+            grid_pos: Integer grid coordinates
+            weight: Amplitude of the splat
+        """
+        # Kernel size (use local_grid_size as kernel footprint)
+        kernel_half = np.array(self.local_grid_size) // 2
+
+        # Bounds for splatting
+        if self.dimensions == 2:
+            x_min = max(0, grid_pos[0] - kernel_half[0])
+            x_max = min(self.global_grid_shape[0], grid_pos[0] + kernel_half[0] + 1)
+            y_min = max(0, grid_pos[1] - kernel_half[1])
+            y_max = min(self.global_grid_shape[1], grid_pos[1] + kernel_half[1] + 1)
+
+            # Extract kernel region
+            kx_start = kernel_half[0] - (grid_pos[0] - x_min)
+            kx_end = kx_start + (x_max - x_min)
+            ky_start = kernel_half[1] - (grid_pos[1] - y_min)
+            ky_end = ky_start + (y_max - y_min)
+
+            # Splat
+            self.repulsion_field[x_min:x_max, y_min:y_max] += (
+                weight * self.kernel_template[kx_start:kx_end, ky_start:ky_end]
+            )
+
+        else:  # 3D
+            x_min = max(0, grid_pos[0] - kernel_half[0])
+            x_max = min(self.global_grid_shape[0], grid_pos[0] + kernel_half[0] + 1)
+            y_min = max(0, grid_pos[1] - kernel_half[1])
+            y_max = min(self.global_grid_shape[1], grid_pos[1] + kernel_half[1] + 1)
+            z_min = max(0, grid_pos[2] - kernel_half[2])
+            z_max = min(self.global_grid_shape[2], grid_pos[2] + kernel_half[2] + 1)
+
+            # Extract kernel region
+            kx_start = kernel_half[0] - (grid_pos[0] - x_min)
+            kx_end = kx_start + (x_max - x_min)
+            ky_start = kernel_half[1] - (grid_pos[1] - y_min)
+            ky_end = ky_start + (y_max - y_min)
+            kz_start = kernel_half[2] - (grid_pos[2] - z_min)
+            kz_end = kz_start + (z_max - z_min)
+
+            # Splat
+            self.repulsion_field[x_min:x_max, y_min:y_max, z_min:z_max] += (
+                weight
+                * self.kernel_template[
+                    kx_start:kx_end, ky_start:ky_end, kz_start:kz_end
+                ]
+            )
 
     def get_repulsion_potential_for_node(
         self, node_pos: np.ndarray, repulsion_sources: List[Dict[str, Any]]
@@ -225,7 +351,7 @@ class DensityFunctionEstimatorND:
         This aggregates all local fields onto a single global grid.
         In a fully distributed system, this step would be unnecessary.
         """
-        # Decay existing field
+        # Decay existing field (gradual forgetting)
         self.repulsion_field *= 1.0 - self.decay_lambda
 
         for node in all_nodes:
@@ -290,3 +416,15 @@ class DensityFunctionEstimatorND:
         self.repulsion_field = (
             1 - self.blur_delta
         ) * self.repulsion_field + self.blur_delta * blurred
+
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get density field statistics."""
+        return {
+            "total_collision_splats": self.total_collision_splats,
+            "total_wfc_splats": self.total_wfc_splats,
+            "repulsion_field_mean": float(np.mean(self.repulsion_field)),
+            "repulsion_field_max": float(np.max(self.repulsion_field)),
+            "repulsion_field_nonzero_fraction": float(
+                np.sum(self.repulsion_field > 0) / self.repulsion_field.size
+            ),
+        }

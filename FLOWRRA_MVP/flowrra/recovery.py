@@ -8,6 +8,7 @@ Key improvements:
 - Coherence considers both rewards and loop integrity
 - Recovery restores loop structure
 - Penalty system for returning to broken states
+- Proper validation of node counts and dimensions
 """
 
 from typing import Any, Dict, List, Optional
@@ -46,6 +47,13 @@ class Wave_Function_Collapse:
         # Track recovery performance
         self.total_collapses = 0
         self.successful_recoveries = 0
+
+        # Track why we failed to find tails
+        self.jitter_reasons = {
+            "history_too_short": 0,
+            "no_coherent_tail": 0,
+            "validation_failed": 0,
+        }
 
     def reset(self):
         """Clear history buffer."""
@@ -132,8 +140,17 @@ class Wave_Function_Collapse:
         if min_coherence is None:
             min_coherence = self.collapse_threshold
 
+        if len(self.history) < self.tail_length:
+            print(f"[WFC] History too short: {len(self.history)} < {self.tail_length}")
+            return None
+
         best_tail = None
         best_score = -1
+        best_avg_coherence = -1
+
+        # Track search statistics
+        tails_checked = 0
+        coherent_tails_found = 0
 
         # Search backwards from recent to old
         for i in range(len(self.history) - self.tail_length, -1, -1):
@@ -142,21 +159,78 @@ class Wave_Function_Collapse:
             if len(tail) < self.tail_length:
                 continue
 
+            tails_checked += 1
+
             # Check if ALL states in tail are coherent
             coherence_values = [h["coherence"] for h in tail]
             integrity_values = [h["loop_integrity"] for h in tail]
 
-            if all(c >= min_coherence for c in coherence_values):
+            avg_coherence = np.mean(coherence_values)
+            avg_integrity = np.mean(integrity_values)
+
+            # Relaxed check: require AVERAGE coherence, not ALL states
+            # This is more forgiving for noisy signals
+            if avg_coherence >= min_coherence * 0.8:  # 80% of threshold
+                coherent_tails_found += 1
+
                 # Score this tail based on quality and recency
-                avg_coherence = np.mean(coherence_values)
-                avg_integrity = np.mean(integrity_values)
                 recency_bonus = i / len(self.history)  # Prefer recent
 
                 score = 0.4 * avg_coherence + 0.4 * avg_integrity + 0.2 * recency_bonus
 
                 if score > best_score:
                     best_score = score
+                    best_avg_coherence = avg_coherence
                     best_tail = tail
+
+        print(
+            f"[WFC] Search: checked {tails_checked} tails, found {coherent_tails_found} candidates"
+        )
+        if best_tail:
+            print(
+                f"[WFC] Best tail: coherence={best_avg_coherence:.3f}, score={best_score:.3f}"
+            )
+
+        return best_tail
+
+    def _find_best_available_tail(self) -> Optional[List[Dict]]:
+        """
+        Emergency fallback: find the BEST tail in history regardless of threshold.
+
+        Used when no tail meets coherence requirements.
+        Returns the tail with highest average coherence + integrity.
+        """
+        if len(self.history) < self.tail_length:
+            return None
+
+        best_tail = None
+        best_score = -1
+
+        for i in range(len(self.history) - self.tail_length, -1, -1):
+            tail = self.history[i : i + self.tail_length]
+
+            if len(tail) < self.tail_length:
+                continue
+
+            coherence_values = [h["coherence"] for h in tail]
+            integrity_values = [h["loop_integrity"] for h in tail]
+
+            avg_coherence = np.mean(coherence_values)
+            avg_integrity = np.mean(integrity_values)
+            recency_bonus = i / len(self.history)
+
+            # Score without threshold requirement
+            score = 0.5 * avg_coherence + 0.3 * avg_integrity + 0.2 * recency_bonus
+
+            if score > best_score:
+                best_score = score
+                best_tail = tail
+
+        if best_tail:
+            avg_coh = np.mean([h["coherence"] for h in best_tail])
+            print(
+                f"[WFC] Emergency: using best available tail (coherence={avg_coh:.3f})"
+            )
 
         return best_tail
 
@@ -178,21 +252,83 @@ class Wave_Function_Collapse:
         """
         self.total_collapses += 1
 
-        # Find coherent tail
+        print(f"[WFC] Starting recovery (attempt #{self.total_collapses})")
+        print(
+            f"[WFC] History size: {len(self.history)}, tail_length: {self.tail_length}"
+        )
+
+        # Find coherent tail with primary threshold
         coherent_tail = self._find_coherent_tail()
 
-        # Fallback: try lower threshold
+        # Fallback 1: try 70% threshold
         if coherent_tail is None:
+            print(
+                f"[WFC] No tail at threshold={self.collapse_threshold:.2f}, trying 70%..."
+            )
             coherent_tail = self._find_coherent_tail(
                 min_coherence=self.collapse_threshold * 0.7
             )
 
+        # Fallback 2: try 50% threshold (very permissive)
+        if coherent_tail is None:
+            print(f"[WFC] Still none, trying 50% threshold...")
+            coherent_tail = self._find_coherent_tail(
+                min_coherence=self.collapse_threshold * 0.5
+            )
+
+        # Fallback 3: Use ANY recent sequence (best available)
+        if coherent_tail is None and len(self.history) >= self.tail_length:
+            print(f"[WFC] Using best available tail regardless of coherence...")
+            coherent_tail = self._find_best_available_tail()
+
         # Last resort: random jitter
         if coherent_tail is None:
+            print(f"[WFC] No usable history. Falling back to random jitter.")
             return self._apply_random_jitter(nodes)
+        # --- APPLY SMOOTHING ---
+        # We capture the result variable instead of returning immediately!
+        result = self._apply_manifold_smoothing(nodes, coherent_tail)
 
-        # Apply manifold smoothing
-        return self._apply_manifold_smoothing(nodes, coherent_tail)
+        # === THE AMNESIA PROTOCOL ===
+        # The physics are fixed, but the memory is still "traumatized".
+        # We must force the history to acknowledge the new stable state.
+
+        # 1. Create a synthetic "perfect" snapshot of the NOW recovered nodes
+        recovered_snapshot = {
+            "nodes": [
+                {
+                    "id": n.id,
+                    "pos": n.pos.copy(),
+                    "velocity": np.zeros(
+                        n.dimensions
+                    ),  # Reset velocity to zero in memory
+                    "azimuth_idx": n.azimuth_idx,
+                    "elevation_idx": n.elevation_idx,
+                }
+                for n in nodes
+            ],
+            "coherence": 1.0,  # Force perfect coherence score
+            "loop_integrity": 1.0,  # Force perfect integrity score
+            "timestamp": len(self.history),
+        }
+
+        # 2. Wipe the "Bad Memory"
+        # We delete the recent history that caused the crash (last 'tau' steps + buffer)
+        wipe_amount = self.tau + 5
+        if len(self.history) >= wipe_amount:
+            self.history = self.history[:-wipe_amount]
+
+        # 3. Implant "Happy Memory"
+        # Append the new stable state multiple times so WFC sees stability
+        for _ in range(self.tau + 2):
+            self.history.append(recovered_snapshot)
+
+        print(
+            f"[WFC] Amnesia Protocol: Wiped recent crash data and seeded {self.tau + 2} stable frames."
+        )
+        # === AMNESIA END ===
+
+        return result
 
     def _apply_random_jitter(self, nodes: List[Any]) -> Dict[str, Any]:
         """
@@ -239,10 +375,27 @@ class Wave_Function_Collapse:
         num_nodes = len(nodes)
         dimensions = nodes[0].dimensions
 
+        # Validate tail consistency
+        for step in coherent_tail:
+            if len(step["nodes"]) != num_nodes:
+                print(
+                    f"[WFC] WARNING: Tail has inconsistent node count. Expected {num_nodes}, got {len(step['nodes'])}"
+                )
+                return self._apply_random_jitter(nodes)
+
         # Extract positions and orientations across tail
-        positions_over_time = np.array(
-            [[n_data["pos"] for n_data in step["nodes"]] for step in coherent_tail]
-        )  # Shape: (tail_len, num_nodes, dimensions)
+        positions_over_time = np.zeros((len(coherent_tail), num_nodes, dimensions))
+
+        for t, step in enumerate(coherent_tail):
+            for n_idx, n_data in enumerate(step["nodes"]):
+                pos = n_data["pos"]
+                # Validate position dimensionality
+                if len(pos) != dimensions:
+                    print(
+                        f"[WFC] WARNING: Position dimension mismatch. Expected {dimensions}, got {len(pos)}"
+                    )
+                    return self._apply_random_jitter(nodes)
+                positions_over_time[t, n_idx, :] = pos
 
         azimuths_over_time = np.array(
             [
@@ -263,6 +416,13 @@ class Wave_Function_Collapse:
         # weights shape: (tail_len,)
         # positions shape: (tail_len, num_nodes, dimensions)
         smoothed_positions = np.einsum("t,tnd->nd", weights, positions_over_time)
+
+        # Validate smoothed positions
+        if smoothed_positions.shape != (num_nodes, dimensions):
+            print(
+                f"[WFC] ERROR: Smoothed positions shape mismatch. Expected ({num_nodes}, {dimensions}), got {smoothed_positions.shape}"
+            )
+            return self._apply_random_jitter(nodes)
 
         # For orientations, use circular mean (accounting for wraparound)
         # Convert to complex numbers on unit circle
@@ -285,7 +445,7 @@ class Wave_Function_Collapse:
             node.azimuth_idx = int(smoothed_azimuths[i])
 
             # For 3D, also recover elevation (simple average since no wraparound)
-            if node.dimensions == 3:
+            if dimensions == 3:
                 elevations = [
                     step["nodes"][i]["elevation_idx"] for step in coherent_tail
                 ]
@@ -304,6 +464,8 @@ class Wave_Function_Collapse:
             "tail_coherence_min": float(np.min(tail_coherences)),
             "tail_integrity_mean": float(np.mean(tail_integrities)),
             "tail_integrity_min": float(np.min(tail_integrities)),
+            "recovered_nodes": num_nodes,
+            "dimensions": dimensions,
             "success": True,
         }
 

@@ -382,7 +382,7 @@ class GNNAgent:
         t: int,
         total_episodes: int,
         eps_min: float = 0.05,
-        eps_peak: float = 0.8,
+        eps_peak: float = 0.9,
         mu: float = None,
         sigma: float = None,
     ) -> float:
@@ -403,7 +403,7 @@ class GNNAgent:
         episode_number: int,
         total_episodes: int,
         eps_min: float = 0.05,
-        eps_peak: float = 0.8,
+        eps_peak: float = 0.9,
     ) -> np.ndarray:
         """
         Choose actions for all nodes using epsilon-greedy.

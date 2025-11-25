@@ -109,8 +109,10 @@ def main():
                 print(f"  Buffer Size: {stats['buffer_size']}")
 
             # Early termination on high coverage
-            if sim.map.get_coverage_percentage() > 95.0:
-                print(f"\n✅ Mission Complete: >95% coverage at step {t}")
+            if sim.map.get_coverage_percentage() > 99.5 and t >= int(
+                training_steps * 2 / 3
+            ):
+                print(f"\n✅ Mission Complete: >99.5% coverage and {t} steps covered")
                 break
 
     except KeyboardInterrupt:

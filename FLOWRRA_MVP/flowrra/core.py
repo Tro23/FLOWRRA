@@ -149,7 +149,7 @@ class FLOWRRA_Orchestrator:
         center = np.array([0.5, 0.5] if self.dims == 2 else [0.5, 0.5, 0.5])
 
         # Safety clamp to ensure we don't spawn inside walls if ideal_dist is huge
-        equilibrium_radius = min(equilibrium_radius, 0.4)
+        equilibrium_radius = min(equilibrium_radius, 0.3)
 
         nodes = []
         for i in range(num_nodes):
@@ -166,7 +166,7 @@ class FLOWRRA_Orchestrator:
             # Add TINY noise just to break perfect symmetry (prevents numerical singularity)
             noise = np.random.normal(0, 0.001, self.dims)
 
-            pos = np.mod(center + offset + noise, 1.0)
+            pos = np.mod(center + offset + noise, 0.7)
 
             node = NodePositionND(i, pos, self.dims)
             node.sensor_range = self.cfg["exploration"]["sensor_range"]
@@ -502,7 +502,7 @@ class FLOWRRA_Orchestrator:
         current_total_coverage = self.map.get_coverage_percentage()
 
         # Only activate if we are in "End Game" (> 90% explored)
-        if current_total_coverage > 90.0:
+        if current_total_coverage > 35.00:
             # We already calculated 'loop_integrity' a few lines above in the standard physics block
             # Logic: We need to replace the missing "Exploration Dopamine" (usually ~15.0)
             # to keep the agents interested.

@@ -10,23 +10,29 @@ CONFIG = {
     },
     "loop": {
         "ideal_distance": 0.11,
-        "stiffness": 0.50,
+        "stiffness": 0.40,
         # FIX 1: Relax the breaking point.
         # Nodes need room to stretch around the 0.07 radius obstacles.
-        "break_threshold": 0.35,
+        "break_threshold": 0.28,
     },
     "obstacles": [
-        (0.929, 0.857, 0.074),
-        (0.929, 0.286, 0.071),
-        (0.286, 0.543, 0.076),
-        (0.071, 0.429, 0.070),
+        (0.629, 0.557, 0.020),
+        (0.529, 0.286, 0.020),
+        (0.286, 0.543, 0.020),
+        (0.071, 0.429, 0.020),
+        (0.029, 0.208, 0.020),
+        (0.786, 0.304, 0.020),
+        (0.471, 0.502, 0.020),
     ],
     "moving_obstacles": [
-        (0.286, 0.571, 0.043, -0.0043, 0.0057),
+        (0.286, 0.571, 0.020, -0.0043, 0.0057),
+        (0.599, 0.341, 0.020, -0.0033, 0.0035),
+        (0.386, 0.571, 0.020, -0.0056, 0.0066),
+        (0.786, 0.443, 0.020, -0.0056, 0.0066),
     ],
     "exploration": {
-        "map_resolution": 0.02,
-        "sensor_range": 0.20,
+        "map_resolution": 0.01,
+        "sensor_range": 0.25,
     },
     "rewards": {
         "r_flow": 2.0,  # Reduced slightly
@@ -44,16 +50,16 @@ CONFIG = {
         "tau": 10,  # INCREASED: Give them more time to recover before reset
     },
     "node": {
-        "num_nodes": 10,
+        "num_nodes": 15,
         "move_speed": 0.015,
         "fov_angle": 360,
     },
     "repulsion": {
         "local_grid_size": (5, 5),
-        "global_grid_shape": (80, 80),
+        "global_grid_shape": (100, 100),
         "decay_lambda": 0.995,
         "blur_data": 0.1,
-        "beta": 1.5,  # Strength multiplier
+        "beta": 2.0,  # Strength multiplier
     },
     "gnn": {
         "hidden_dim": 128,

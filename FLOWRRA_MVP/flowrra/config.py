@@ -9,8 +9,8 @@ CONFIG = {
         "toroidal": True,
     },
     "loop": {
-        "ideal_distance": 0.11,
-        "stiffness": 0.40,
+        "ideal_distance": 0.08,
+        "stiffness": 0.35,
         # FIX 1: Relax the breaking point.
         # Nodes need room to stretch around the 0.07 radius obstacles.
         "break_threshold": 0.28,
@@ -36,22 +36,22 @@ CONFIG = {
     },
     "rewards": {
         "r_flow": 2.0,  # Reduced slightly
-        "r_explore": 15.0,  # REDUCED: Stop the Kamikaze behavior (was 40.0)
-        "r_collision": 45.0,  # High penalty
+        "r_explore": 10.0,  # REDUCED: Stop the Kamikaze behavior (was 40.0)
+        "r_collision": 40.0,  # High penalty
         "r_loop_integrity": 10.0,  # INCREASED: Value the formation more
         "r_collapse_penalty": 20.0,  # TRIPLED: Breaking the loop must hurt
-        "r_idle": 0.2,
-        "r_reconnection": 15.0,  # High reward for healing
+        "r_idle": 1.0,
+        "r_reconnection": 10.0,  # High reward for healing
     },
     "wfc": {
-        "history_length": 200,
-        "tail_length": 30,
+        "history_length": 150,
+        "tail_length": 20,
         "collapse_threshold": 0.4,
         "tau": 10,  # INCREASED: Give them more time to recover before reset
     },
     "node": {
-        "num_nodes": 15,
-        "move_speed": 0.015,
+        "num_nodes": 10,
+        "move_speed": 0.017,
         "fov_angle": 360,
     },
     "repulsion": {

@@ -182,7 +182,7 @@ class FLOWRRA_Orchestrator:
         )
         return nodes
 
-    def _physics_warmup(self, steps=100):
+    def _physics_warmup(self, steps=80):
         """
         Runs the physics engine without the GNN to let springs settle.
         Drains kinetic energy (damping) to reach a stable state.
@@ -233,6 +233,50 @@ class FLOWRRA_Orchestrator:
             node_features.append(feats)
         return np.array(node_features, dtype=np.float32)
 
+    def detect_and_unstick_nodes(self):
+        """
+        Detect nodes that haven't moved in a while and give them a kick.
+        Add this method around line 150 in core.py
+        """
+        if not hasattr(self, "node_position_history"):
+            self.node_position_history = {n.id: [] for n in self.nodes}
+            self.node_stuck_counters = {n.id: 0 for n in self.nodes}
+
+        for node in self.nodes:
+            # Track last 10 positions
+            history = self.node_position_history[node.id]
+            history.append(node.pos.copy())
+            if len(history) > 10:
+                history.pop(0)
+
+            # Check if stuck (moved less than 0.01 units in last 10 steps)
+            if len(history) >= 10:
+                total_movement = sum(
+                    np.linalg.norm(history[i] - history[i - 1])
+                    for i in range(1, len(history))
+                )
+
+                if total_movement < 0.01:  # Barely moved
+                    self.node_stuck_counters[node.id] += 1
+
+                    if self.node_stuck_counters[node.id] > 5:
+                        # UNSTICK: Apply strong random displacement
+                        kick_magnitude = 0.08
+                        random_direction = np.random.uniform(-1, 1, self.dims)
+                        random_direction = random_direction / np.linalg.norm(
+                            random_direction
+                        )
+
+                        node.pos = np.mod(
+                            node.pos + random_direction * kick_magnitude, 1.0
+                        )
+
+                        print(f"[Unstick] Node {node.id} was stuck - applied kick")
+                        self.node_stuck_counters[node.id] = 0
+                        history.clear()
+                else:
+                    self.node_stuck_counters[node.id] = 0
+
     def _calculate_input_dim(self) -> int:
         """Calculate the dimension of the GNN input vector."""
         dummy_rep = np.zeros(np.prod(self.cfg["repulsion"]["local_grid_size"]))
@@ -275,6 +319,9 @@ class FLOWRRA_Orchestrator:
         """
         # --- 1. Update Obstacles ---
         self.obstacle_manager.update_all()
+
+        # After obstacle updates, before loop breaks check stuck nodes
+        self.detect_and_unstick_nodes()
 
         # --- 2. Check Loop Breaks ---
         broken = self.loop.check_breaks(
@@ -379,10 +426,23 @@ class FLOWRRA_Orchestrator:
             node.apply_directional_action(action_id, dt=1.0)
 
             # Add spring force influence
+            # Update: WITH obstacle-aware damping
             if node.id in spring_forces:
                 force = spring_forces[node.id]
-                # Apply force as velocity modification
-                node.pos = np.mod(node.pos + force * 0.1, 1.0)  # Scale force
+
+                # Check if node is near obstacles
+                near_obstacle = False
+                for obs in self.obstacle_manager.obstacles:
+                    dist = np.linalg.norm(node.pos - obs.pos) - obs.radius
+                    if dist < 0.08:  # Within danger zone
+                        near_obstacle = True
+                        break
+
+                # Reduce spring force near obstacles to allow escape
+                force_scale = 0.05 if near_obstacle else 0.1
+                node.pos = np.mod(
+                    node.pos + force * force_scale, 1.0
+                )  # Scale Force Influence
 
             # NEW: Collision Response with Wave Function Collapse
             collides, obs_ids = self.obstacle_manager.check_collision(
@@ -392,40 +452,64 @@ class FLOWRRA_Orchestrator:
             if collides:
                 # FLOWRRA Point 8: Micro-level WFC - collapse to nearby valid state
                 # Instead of hard snapback, intelligently search for valid positions
-                best_candidate = old_pos.copy()  # Fallback to previous position
-                max_attempts = 8  # Quick 8-directional search
+                # IMPROVED: Momentum-based escape with larger search radius
+                best_candidate = old_pos.copy()
+                best_distance_from_obstacle = 0.0  # Track how far we get from obstacles
+
+                # Calculate attempted movement direction (momentum)
+                attempted_dir = node.pos - old_pos
+                attempted_mag = np.linalg.norm(attempted_dir)
+
+                if attempted_mag > 0.0001:
+                    attempted_dir = attempted_dir / attempted_mag
+                else:
+                    # If no movement, use a random direction
+                    angle = np.random.uniform(0, 2 * np.pi)
+                    attempted_dir = np.array([np.cos(angle), np.sin(angle)])
+
+                max_attempts = 16  # Increased from 8
+                search_radius = 0.04  # DOUBLED from 0.02
 
                 for attempt in range(max_attempts):
-                    # Sample positions in a circle around old_pos
                     angle = (attempt / max_attempts) * 2 * np.pi
-                    offset_mag = 0.02  # Small exploration radius
 
-                    if self.dims == 2:
-                        offset = np.array([np.cos(angle), np.sin(angle)]) * offset_mag
-                    else:
-                        # 3D: sample sphere around old position
-                        offset = np.array(
-                            [
-                                np.cos(angle) * offset_mag,
-                                np.sin(angle) * offset_mag,
-                                np.random.uniform(-1, 1) * offset_mag,
-                            ]
-                        )
+                    # Mix radial search with momentum direction
+                    radial_offset = (
+                        np.array([np.cos(angle), np.sin(angle)]) * search_radius
+                    )
+                    momentum_offset = attempted_dir * search_radius * 0.5
+
+                    # Combine: 70% radial exploration, 30% momentum direction
+                    offset = radial_offset * 0.7 + momentum_offset * 0.3
 
                     candidate = np.mod(old_pos + offset, 1.0)
 
-                    # Test candidate for collision
-                    coll_check, _ = self.obstacle_manager.check_collision(
-                        candidate, safety_margin=0.05
+                    # Test candidate
+                    coll_check, coll_obs_ids = self.obstacle_manager.check_collision(
+                        candidate,
+                        safety_margin=0.03,  # Reduced safety margin slightly
                     )
 
                     if not coll_check:
-                        # Found valid position! Collapse to it
-                        best_candidate = candidate
-                        break
+                        # Calculate distance to nearest obstacle to pick BEST candidate
+                        min_dist = float("inf")
+                        for obs in self.obstacle_manager.obstacles:
+                            dist = np.linalg.norm(candidate - obs.pos) - obs.radius
+                            min_dist = min(min_dist, dist)
 
-                # Collapse node to best valid state found
+                        if min_dist > best_distance_from_obstacle:
+                            best_candidate = candidate
+                            best_distance_from_obstacle = min_dist
+
+                # Collapse to best candidate found
                 node.pos = best_candidate
+
+                # If we're STILL stuck (best_distance is very small), add extra random kick
+                if best_distance_from_obstacle < 0.05:
+                    # Emergency escape: large random displacement
+                    random_kick = np.random.uniform(-0.06, 0.06, self.dims)
+                    node.pos = np.mod(node.pos + random_kick, 1.0)
+                    print(f"[Emergency] Node {node.id} received random escape kick")
 
                 # Heavy collision penalty - this teaches avoidance
                 r_coll = -self.cfg["rewards"]["r_collision"]
@@ -502,18 +586,18 @@ class FLOWRRA_Orchestrator:
         current_total_coverage = self.map.get_coverage_percentage()
 
         # Only activate if we are in "End Game" (> 90% explored)
-        if current_total_coverage > 35.00:
+        if current_total_coverage > 25.00 and current_total_coverage <= 45:
             # We already calculated 'loop_integrity' a few lines above in the standard physics block
             # Logic: We need to replace the missing "Exploration Dopamine" (usually ~15.0)
             # to keep the agents interested.
 
-            if loop_integrity >= 0.90:
+            if loop_integrity >= 0.80:
                 # VICTORY LAP: High reward for perfect formation
                 # This matches the intensity of finding new chunks
                 r_patrol = 15.0
-            elif loop_integrity >= 0.70:
+            elif loop_integrity >= 0.60:
                 # MEDIOCRE: Small maintenance reward
-                r_patrol = 2.0
+                r_patrol = 4.0
             else:
                 # SLACKING: Penalty for losing focus during patrol
                 # This prevents the "boredom chaos"

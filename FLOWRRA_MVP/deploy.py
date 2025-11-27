@@ -228,7 +228,9 @@ def main():
                 print(f"Average Reward: {avg_reward}")
 
             # Early termination on high coverage
-            if sim.map.get_coverage_percentage() > 99.0:
+            if sim.map.get_coverage_percentage() > 99.0 and t >= int(
+                deployment_steps * 2 / 3
+            ):
                 print("\n" + "=" * 70)
                 print(f"  🎉 MISSION COMPLETE: >95% coverage achieved at step {t}!")
                 print(f"Average Reward: {avg_reward}")
@@ -267,10 +269,10 @@ def main():
         print("   ⚠️  Low loop integrity (<0.70)")
 
     if final_stats["wfc_triggers"] <= 30:
-        print("   ✅ Minimal WFC triggers (≤2)")
+        print("   ✅ Minimal WFC triggers (≤30)")
         success_metrics += 1
     elif final_stats["wfc_triggers"] <= 60:
-        print("   ✓  Acceptable WFC triggers (≤5)")
+        print("   ✓  Acceptable WFC triggers (≤60)")
         success_metrics += 0.5
     else:
         print("   ⚠️  Many WFC triggers (>5)")

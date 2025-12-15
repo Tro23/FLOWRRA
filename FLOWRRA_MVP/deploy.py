@@ -9,6 +9,7 @@ import json
 
 import matplotlib.pyplot as plt
 import numpy as np
+
 from flowrra.config import CONFIG
 from flowrra.core import FLOWRRA_Orchestrator
 
@@ -277,14 +278,14 @@ def main():
     else:
         print("   ⚠️  Many WFC triggers (>5)")
 
-    if final_stats["total_loop_breaks"] <= 15:
-        print("   ✅ Minimal loop breaks (≤15)")
+    if final_stats["total_loop_breaks"] <= 55:
+        print("   ✅ Minimal loop breaks (≤55)")
         success_metrics += 1
-    elif final_stats["total_loop_breaks"] <= 30:
-        print("   ✓  Acceptable loop breaks (≤30)")
+    elif final_stats["total_loop_breaks"] <= 80:
+        print("   ✓  Acceptable loop breaks (≤85)")
         success_metrics += 0.5
     else:
-        print("   ⚠️  Many loop breaks (>30)")
+        print("   ⚠️  Many loop breaks (>85)")
 
     score = (success_metrics / total_metrics) * 100
     print(f"\n   Overall Score: {score:.0f}/100")

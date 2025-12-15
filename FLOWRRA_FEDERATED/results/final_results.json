@@ -1,0 +1,118 @@
+{
+  "total_episodes": 2000,
+  "final_avg_reward": 0.0,
+  "best_reward": 31.834743673801423,
+  "federation": {
+    "step": 800000,
+    "num_holons": 4,
+    "total_breaches": 1137674,
+    "breaches_per_step": 1.4220925,
+    "grid_size": 2
+  },
+  "holons": {
+    "0": {
+      "holon_id": 0,
+      "partition_id": 0,
+      "steps": 800000,
+      "num_nodes": 10,
+      "avg_reward": 3132.53914642334,
+      "total_breaches": 284375,
+      "boundary_repulsion_active": true,
+      "orchestrator_stats": {
+        "step": 4,
+        "mode": "training",
+        "coverage": 33.2,
+        "avg_reward": 3132.53914642334,
+        "num_nodes": 10,
+        "buffer_size": 3,
+        "loop_integrity": 1.0,
+        "total_loop_breaks": 0,
+        "total_reconnections": 0,
+        "wfc_triggers": 0,
+        "collision_events": 0,
+        "num_obstacles": 0,
+        "density_collision_splats": 0,
+        "density_wfc_splats": 0,
+        "repulsion_field_coverage": 0.0
+      }
+    },
+    "1": {
+      "holon_id": 1,
+      "partition_id": 1,
+      "steps": 800000,
+      "num_nodes": 10,
+      "avg_reward": 2531.0149658203127,
+      "total_breaches": 284372,
+      "boundary_repulsion_active": true,
+      "orchestrator_stats": {
+        "step": 5,
+        "mode": "training",
+        "coverage": 33.48,
+        "avg_reward": 2531.0149658203127,
+        "num_nodes": 10,
+        "buffer_size": 4,
+        "loop_integrity": 1.0,
+        "total_loop_breaks": 0,
+        "total_reconnections": 0,
+        "wfc_triggers": 0,
+        "collision_events": 0,
+        "num_obstacles": 0,
+        "density_collision_splats": 0,
+        "density_wfc_splats": 0,
+        "repulsion_field_coverage": 0.0
+      }
+    },
+    "2": {
+      "holon_id": 2,
+      "partition_id": 2,
+      "steps": 800000,
+      "num_nodes": 10,
+      "avg_reward": 2513.0149658203127,
+      "total_breaches": 284370,
+      "boundary_repulsion_active": true,
+      "orchestrator_stats": {
+        "step": 5,
+        "mode": "training",
+        "coverage": 33.239999999999995,
+        "avg_reward": 2513.0149658203127,
+        "num_nodes": 10,
+        "buffer_size": 4,
+        "loop_integrity": 1.0,
+        "total_loop_breaks": 0,
+        "total_reconnections": 0,
+        "wfc_triggers": 0,
+        "collision_events": 0,
+        "num_obstacles": 0,
+        "density_collision_splats": 0,
+        "density_wfc_splats": 0,
+        "repulsion_field_coverage": 0.0016666666666666668
+      }
+    },
+    "3": {
+      "holon_id": 3,
+      "partition_id": 3,
+      "steps": 800000,
+      "num_nodes": 10,
+      "avg_reward": 2197.5472723642984,
+      "total_breaches": 284557,
+      "boundary_repulsion_active": true,
+      "orchestrator_stats": {
+        "step": 6,
+        "mode": "training",
+        "coverage": 34.839999999999996,
+        "avg_reward": 2197.5472723642984,
+        "num_nodes": 10,
+        "buffer_size": 5,
+        "loop_integrity": 1.0,
+        "total_loop_breaks": 0,
+        "total_reconnections": 0,
+        "wfc_triggers": 0,
+        "collision_events": 0,
+        "num_obstacles": 0,
+        "density_collision_splats": 0,
+        "density_wfc_splats": 0,
+        "repulsion_field_coverage": 0.0022222222222222222
+      }
+    }
+  }
+}

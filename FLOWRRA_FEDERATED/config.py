@@ -1,45 +1,38 @@
 """
-config.py - COMPLETE VERSION
+config.py - DIMENSION-SAFE VERSION
 
-Configuration for Federated FLOWRRA System with Phase 2 support.
-
-Supports both:
-- Phase 1: Standard GNN (agent.py)
-- Phase 2: Recurrent GNN (r_gnn_agent.py)
+Critical Fix: Ensures repulsion grids match spatial dimensions
 """
-
-# Import numpy for validation
-import numpy as np
 
 CONFIG = {
     # ==================== FEDERATION LAYER ====================
     "federation": {
-        "num_holons": 4,  # Must be perfect square (4, 9, 16, etc.)
-        "world_bounds": (1.0, 1.0),  # Global space size
-        "breach_threshold": 0.03,  # Distance that triggers breach alert (increased for stability)
-        "coordination_mode": "positional",  # 'positional' or 'topological' (future)
-        "enable_dynamic_splitting": False,  # Phase 2 feature
+        "num_holons": 4,
+        "world_bounds": (1.0, 1.0),  # 2D only for now
+        "breach_threshold": 0.1,
+        "coordination_mode": "positional",
+        "enable_dynamic_splitting": False,
     },
     # ==================== HOLON CONFIG ====================
     "holon": {
-        "mode": "training",  # 'training' or 'deployment'
-        "independent_training": True,  # Each holon trains separately
-        "share_experience": False,  # Phase 3: federated learning
-        "use_r_gnn": False,  # Set True to enable Phase 2 R-GNN
+        "mode": "training",
+        "independent_training": True,
+        "share_experience": False,
+        "use_r_gnn": False,
     },
     # ==================== NODE CONFIG ====================
     "node": {
-        "total_nodes": 40,  # Total across all holons
-        "num_nodes_per_holon": None,  # Auto-calculated: total_nodes / num_holons
+        "total_nodes": 40,
+        "num_nodes_per_holon": None,  # Auto-calculated
         "move_speed": 0.015,
         "sensor_range": 0.15,
     },
     # ==================== SPATIAL CONFIG ====================
     "spatial": {
-        "dimensions": 2,  # 2D or 3D
-        "world_bounds": (1.0, 1.0),  # Should match federation.world_bounds
+        "dimensions": 2,  # CRITICAL: Must be 2 for federated mode
+        "world_bounds": (1.0, 1.0),
     },
-    # ==================== GNN CONFIG (Phase 1) ====================
+    # ==================== GNN CONFIG ====================
     "gnn": {
         "hidden_dim": 128,
         "num_layers": 3,
@@ -49,23 +42,11 @@ CONFIG = {
         "dropout": 0.1,
         "buffer_capacity": 15000,
     },
-    # ==================== R-GNN CONFIG (Phase 2) ====================
-    "r_gnn": {
-        "hidden_dim": 128,
-        "num_gat_layers": 3,
-        "n_heads": 4,
-        "lstm_layers": 1,  # Number of LSTM layers
-        "sequence_length": 4,  # Temporal sequence length
-        "lr": 0.0003,
-        "gamma": 0.95,
-        "dropout": 0.1,
-        "buffer_capacity": 15000,
-    },
     # ==================== LOOP STRUCTURE ====================
     "loop": {
-        "ideal_distance": 0.12,  # Adjusted for federated spacing
+        "ideal_distance": 0.10,
         "stiffness": 0.5,
-        "break_threshold": 0.35,
+        "break_threshold": 0.22,
     },
     # ==================== REWARDS ====================
     "rewards": {
@@ -74,15 +55,15 @@ CONFIG = {
         "r_idle": 0.5,
         "r_loop_integrity": 5.0,
         "r_collapse_penalty": 10.0,
-        "r_explore": 15.0,
+        "r_explore": 5.0,
         "r_reconnection": 0.5,
-        # NEW: Boundary breach penalty
-        "r_boundary_breach": 3.0,  # Per breach
+        "r_boundary_breach": 3.0,
     },
     # ==================== REPULSION FIELD ====================
     "repulsion": {
-        "local_grid_size": (5, 5),  # 2D only for now
-        "global_grid_shape": (60, 60),  # 2D only
+        # CRITICAL FIX: These will be auto-adjusted based on dimensions
+        "local_grid_size": (5, 5),  # Start as 2D, validated below
+        "global_grid_shape": (60, 60),  # Start as 2D, validated below
         "eta": 0.5,
         "gamma_f": 0.9,
         "k_f": 5,
@@ -105,45 +86,69 @@ CONFIG = {
     },
     # ==================== OBSTACLES ====================
     "obstacles": [
-        # (x, y, radius) - Scaled by world_bounds
-        # Example: Central obstacle
-        # (0.5, 0.5, 0.1),
+        (0.629, 0.557),
+        (0.529, 0.286),
+        (0.286, 0.543),
+        (0.071, 0.429),
+        (0.029, 0.208),
+        (0.786, 0.304),
+        (0.471, 0.502),
+        (0.829, 0.457),
+        (0.779, 0.506),
+        (0.236, 0.103),
+        (0.771, 0.709),
+        (0.329, 0.478),
+        (0.406, 0.494),
+        (0.571, 0.122),
     ],
-    "moving_obstacles": [
-        # (x, y, radius, vx, vy)
-        # Example: Horizontal mover
-        # (0.3, 0.5, 0.08, 0.001, 0.0),
-    ],
+    "moving_obstacles": [],
     # ==================== TRAINING ====================
     "training": {
-        "num_episodes": 1000,  # Reduced for faster federated training
-        "steps_per_episode": 400,
+        "num_episodes": 1000,
+        "steps_per_episode": 200,
         "target_update_frequency": 100,
         "save_frequency": 100,
         "metrics_save_frequency": 20,
     },
     # ==================== VISUALIZATION ====================
     "visualization": {
-        "show_partitions": True,  # Draw holon boundaries
-        "show_breach_alerts": True,  # Highlight breached nodes
-        "partition_color_scheme": "rainbow",  # Color holons differently
-        "render_frequency": 50,  # Render every N steps (0 = disabled)
+        "show_partitions": True,
+        "show_breach_alerts": True,
+        "partition_color_scheme": "rainbow",
+        "render_frequency": 50,
+        "save_history": True,  # NEW: Save for deployment visualization
     },
 }
 
 
 def validate_config(cfg: dict) -> dict:
-    """Validate configuration and auto-calculate derived values."""
+    """Validate configuration and ensure dimension consistency."""
+    import math
+
+    import numpy as np
+
+    # Get dimensions
+    dims = cfg["spatial"]["dimensions"]
+
+    # CRITICAL FIX: Ensure repulsion grids match dimensions
+    if dims == 2:
+        # Force 2D grids
+        cfg["repulsion"]["local_grid_size"] = (5, 5)
+        cfg["repulsion"]["global_grid_shape"] = (60, 60)
+        print(f"[Config] Forced 2D repulsion grids")
+    elif dims == 3:
+        cfg["repulsion"]["local_grid_size"] = (5, 5, 5)
+        cfg["repulsion"]["global_grid_shape"] = (60, 60, 60)
+        print(f"[Config] Using 3D repulsion grids")
 
     # Calculate nodes per holon
     total_nodes = cfg["node"]["total_nodes"]
     num_holons = cfg["federation"]["num_holons"]
 
     if total_nodes % num_holons != 0:
-        # Adjust total nodes to be evenly divisible
         adjusted = (total_nodes // num_holons) * num_holons
         print(
-            f"[Config] WARNING: Adjusted total_nodes from {total_nodes} to {adjusted} (evenly divisible by {num_holons})"
+            f"[Config] WARNING: Adjusted total_nodes from {total_nodes} to {adjusted}"
         )
         cfg["node"]["total_nodes"] = adjusted
 
@@ -151,58 +156,35 @@ def validate_config(cfg: dict) -> dict:
 
     # Ensure world_bounds match
     if cfg["spatial"]["world_bounds"] != cfg["federation"]["world_bounds"]:
-        print(
-            f"[Config] WARNING: Syncing spatial.world_bounds to federation.world_bounds"
-        )
+        print(f"[Config] Syncing spatial.world_bounds to federation.world_bounds")
         cfg["spatial"]["world_bounds"] = cfg["federation"]["world_bounds"]
 
     # Validate num_holons is perfect square
-    import math
-
     sqrt_holons = int(math.sqrt(num_holons))
     if sqrt_holons**2 != num_holons:
         raise ValueError(f"num_holons must be perfect square, got {num_holons}")
 
-    # Validate repulsion grid dimensions match spatial dimensions
-    dims = cfg["spatial"]["dimensions"]
-    if dims == 2:
-        # Ensure 2D grids
-        if len(cfg["repulsion"]["local_grid_size"]) != 2:
-            cfg["repulsion"]["local_grid_size"] = cfg["repulsion"]["local_grid_size"][
-                :2
-            ]
-        if len(cfg["repulsion"]["global_grid_shape"]) != 2:
-            cfg["repulsion"]["global_grid_shape"] = cfg["repulsion"][
-                "global_grid_shape"
-            ][:2]
-
-    # Validate loop parameters for federated setup
+    # Validate loop parameters
     nodes_per_holon = cfg["node"]["num_nodes_per_holon"]
     ideal_dist = cfg["loop"]["ideal_distance"]
-
-    # Calculate expected equilibrium radius
     equilibrium_radius = (nodes_per_holon * ideal_dist) / (2 * np.pi)
 
-    # Check if it fits in holon bounds
     holon_width = cfg["federation"]["world_bounds"][0] / sqrt_holons
-    max_radius = holon_width / 2 * 0.8  # 80% of holon half-width
+    max_radius = holon_width / 2 * 0.8
 
     if equilibrium_radius > max_radius:
-        # Adjust ideal_distance to fit
         adjusted_ideal_dist = (max_radius * 2 * np.pi) / nodes_per_holon
         print(
-            f"[Config] WARNING: ideal_distance {ideal_dist:.3f} too large for holon size"
+            f"[Config] WARNING: Adjusted ideal_distance from {ideal_dist:.3f} to {adjusted_ideal_dist:.3f}"
         )
-        print(f"[Config] Adjusted to {adjusted_ideal_dist:.3f} to fit equilibrium ring")
         cfg["loop"]["ideal_distance"] = adjusted_ideal_dist
 
     print(f"\n[Config] Validated:")
+    print(f"  Dimensions: {dims}D")
+    print(f"  Repulsion grids: {cfg['repulsion']['local_grid_size']}")
     print(f"  Total nodes: {cfg['node']['total_nodes']}")
     print(f"  Nodes per holon: {cfg['node']['num_nodes_per_holon']}")
     print(f"  Holons: {num_holons} ({sqrt_holons}x{sqrt_holons} grid)")
-    print(
-        f"  Agent type: {'R-GNN (Phase 2)' if cfg['holon']['use_r_gnn'] else 'GNN (Phase 1)'}"
-    )
     print()
 
     return cfg

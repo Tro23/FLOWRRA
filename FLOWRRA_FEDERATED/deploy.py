@@ -1,226 +1,282 @@
 """
 deploy.py
 
-Runs the Federated System in inference mode using trained checkpoints
-and a saved initial state from training.
-Generates a JSON file representing the world state for Blender visualization
-(optional, can be removed if not needed).
+Deployment script for trained federated FLOWRRA system.
+
+Loads trained models and runs in deployment mode with visualization support.
+
+Usage:
+    python deploy.py --deployment-file deployment/deployment_ep1000.json
+    python deploy.py --deployment-file deployment/deployment_ep1000.json --steps 500
 """
 
 import argparse
 import json
-import sys
+import time
 from pathlib import Path
+from typing import Dict, List
 
 import numpy as np
 
-# Assuming you have a standard config.py
 from config import CONFIG
 from federation.manager import FederationManager
 from holon.holon_core import Holon
 from holon.node import NodePositionND
 
 
-def convert_to_serializable(obj):
-    """Helper to serialize numpy objects for JSON."""
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    if isinstance(obj, (np.float32, np.float64)):
-        return float(obj)
-    return str(obj)
+class DeploymentRunner:
+    """
+    Runs trained federated FLOWRRA system in deployment mode.
+    """
+
+    def __init__(self, deployment_file: str):
+        # Load deployment data
+        print(f"\n[Deploy] Loading deployment data from {deployment_file}")
+        with open(deployment_file, "r") as f:
+            self.deployment_data = json.load(f)
+
+        self.cfg = self.deployment_data["config"]
+
+        # Override mode to deployment
+        self.cfg["holon"]["mode"] = "deployment"
+
+        print(f"[Deploy] Loaded {len(self.deployment_data['nodes'])} nodes")
+        print(f"[Deploy] Dimensions: {self.deployment_data['metadata']['dimensions']}D")
+
+        # Initialize Federation
+        self.federation = FederationManager(
+            num_holons=self.cfg["federation"]["num_holons"],
+            world_bounds=self.cfg["federation"]["world_bounds"],
+            breach_threshold=self.cfg["federation"]["breach_threshold"],
+            coordination_mode=self.cfg["federation"]["coordination_mode"],
+        )
+
+        # Initialize Holons
+        self.holons: Dict[int, Holon] = {}
+        self._initialize_holons_from_deployment()
+
+        # Trajectory tracking
+        self.trajectory_history = []
+        self.step_count = 0
+
+        print("[Deploy] System ready for deployment\n")
+
+    def _initialize_holons_from_deployment(self):
+        """Recreate holons from deployment data."""
+        partition_assignments = self.federation.get_partition_assignments()
+
+        # Group nodes by holon_id
+        nodes_by_holon = {}
+        for node_data in self.deployment_data["nodes"]:
+            holon_id = node_data["holon_id"]
+            if holon_id not in nodes_by_holon:
+                nodes_by_holon[holon_id] = []
+            nodes_by_holon[holon_id].append(node_data)
+
+        # Create holons
+        for partition_id, partition in partition_assignments.items():
+            holon = Holon(
+                holon_id=partition_id,
+                partition_id=partition_id,
+                spatial_bounds={"x": partition.bounds_x, "y": partition.bounds_y},
+                config=self.cfg,
+                mode="deployment",
+            )
+
+            # Recreate nodes
+            node_list = []
+            for node_data in nodes_by_holon[partition_id]:
+                node = NodePositionND(
+                    id=node_data["id"],
+                    pos=np.array(node_data["pos"]),
+                    dimensions=node_data["dimensions"],
+                )
+                node.last_pos = np.array(node_data["last_pos"])
+                node.sensor_range = node_data.get(
+                    "sensor_range", self.cfg["node"]["sensor_range"]
+                )
+                node.move_speed = node_data.get(
+                    "move_speed", self.cfg["node"]["move_speed"]
+                )
+
+                node_list.append(node)
+
+            # Initialize orchestrator with nodes
+            holon.initialize_orchestrator_with_nodes(node_list)
+
+            # Load trained model if available
+            episode_num = self.deployment_data["metadata"]["episode"]
+            checkpoint_path = Path(
+                f"checkpoints/holon_{partition_id}_ep{episode_num}.pt"
+            )
+            if checkpoint_path.exists():
+                holon.load(str(checkpoint_path))
+                print(
+                    f"[Deploy] Loaded trained model for Holon {partition_id} from {checkpoint_path}"
+                )  # Added citation of path
+            else:
+                print(
+                    f"[Deploy] ⚠️ Warning: No trained model found for Holon {partition_id} at {checkpoint_path}. Running with initial model."
+                )
+
+            self.holons[partition_id] = holon
+
+        print(f"[Deploy] Initialized {len(self.holons)} holons from deployment data")
+
+    def run_step(self, step: int) -> Dict:
+        """Execute one deployment step and collect data."""
+        # Holons execute
+        holon_rewards = []
+        for holon in self.holons.values():
+            reward = holon.step(step, total_episodes=1)  # Single episode in deployment
+            holon_rewards.append(reward)
+
+        # Federation cycle
+        holon_states = {
+            holon_id: holon.get_state_summary()
+            for holon_id, holon in self.holons.items()
+        }
+
+        breach_alerts = self.federation.step(holon_states)
+
+        # Send breach alerts
+        for holon_id, alerts in breach_alerts.items():
+            if alerts:
+                self.holons[holon_id].receive_breach_alerts(alerts)
+
+        # Collect snapshot for visualization
+        snapshot = self._collect_snapshot(step)
+
+        self.step_count += 1
+
+        return snapshot
+
+    def _collect_snapshot(self, step: int) -> Dict:
+        """Collect current state snapshot for visualization."""
+        all_nodes = []
+        all_connections = []
+
+        for holon_id, holon in self.holons.items():
+            # Collect node positions
+            for node in holon.nodes:
+                all_nodes.append(
+                    {"id": node.id, "pos": node.pos.tolist(), "holon_id": holon_id}
+                )
+
+            # Collect loop connections
+            if holon.orchestrator:
+                for conn in holon.orchestrator.loop.connections:
+                    all_connections.append(
+                        {
+                            "node_a": conn.node_a_id,
+                            "node_b": conn.node_b_id,
+                            "broken": conn.is_broken,
+                        }
+                    )
+
+        return {
+            "time": step,
+            "nodes": all_nodes,
+            "connections": all_connections,
+            "holons": [
+                {
+                    "holon_id": h_id,
+                    "bounds": {
+                        "x_min": h.x_min,
+                        "x_max": h.x_max,
+                        "y_min": h.y_min,
+                        "y_max": h.y_max,
+                    },
+                }
+                for h_id, h in self.holons.items()
+            ],
+        }
+
+    def run(self, num_steps: int, save_interval: int = 50):
+        """Run deployment for specified steps."""
+        print(f"\n[Deploy] Starting deployment run for {num_steps} steps")
+
+        start_time = time.time()
+
+        for step in range(num_steps):
+            snapshot = self.run_step(step)
+            self.trajectory_history.append(snapshot)
+
+            # Progress update
+            if (step + 1) % save_interval == 0:
+                elapsed = time.time() - start_time
+                print(f"[Deploy] Step {step + 1}/{num_steps} ({elapsed:.1f}s)")
+
+        elapsed_total = time.time() - start_time
+        print(f"\n[Deploy] Completed {num_steps} steps in {elapsed_total:.1f}s")
+
+        # Save trajectory
+        self.save_trajectory()
+
+    def save_trajectory(self):
+        """Save full trajectory for visualization."""
+        output_dir = Path("deployment")
+        output_dir.mkdir(exist_ok=True)
+
+        trajectory_data = {
+            "metadata": self.deployment_data["metadata"],
+            "config": self.cfg,
+            "trajectory": self.trajectory_history,
+            "holons": self.deployment_data["holons"],
+        }
+
+        filepath = output_dir / f"trajectory_{self.step_count}_steps.json"
+
+        with open(filepath, "w") as f:
+            json.dump(trajectory_data, f, indent=2)
+
+        print(f"\n[Deploy] ✅ Saved trajectory to {filepath}")
+        print(
+            f"[Deploy] 📊 Trajectory contains {len(self.trajectory_history)} snapshots"
+        )
+        print(f"[Deploy] Ready for web visualization!")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Federated FLOWRRA Deployment")
+    parser = argparse.ArgumentParser(description="FLOWRRA Deployment Runner")
     parser.add_argument(
-        "--episode",
-        type=int,
-        required=True,
-        help="The training episode number to load (e.g., 2000)",
-    )
-    parser.add_argument(
-        "--steps",
-        type=int,
-        default=500,
-        help="Number of simulation steps to run",
-    )
-    # New argument to specify the initial state file
-    parser.add_argument(
-        "--state_file",
+        "--deployment-file",
         type=str,
-        # Default path based on the main.py saving convention
-        default=None,
-        help="Path to the JSON file containing the initial node state (e.g., deployment_states/initial_state_ep2000.json)",
+        required=True,
+        help="Path to deployment JSON file",
     )
+    parser.add_argument(
+        "--steps", type=int, default=500, help="Number of deployment steps to run"
+    )
+    parser.add_argument(
+        "--save-interval", type=int, default=50, help="Progress update interval"
+    )
+
     args = parser.parse_args()
 
-    # Determine state file path
-    state_file_path = (
-        Path(args.state_file)
-        if args.state_file
-        else Path("deployment_states") / f"initial_state_ep{args.episode}.json"
-    )
+    # Check if deployment file exists
+    if not Path(args.deployment_file).exists():
+        print(f"[Deploy] ERROR: Deployment file not found: {args.deployment_file}")
+        return 1
 
-    print("=" * 60)
-    print(f"=== DEPLOYMENT MODE: EPISODE {args.episode} ===")
-    print("=" * 60)
+    try:
+        # Create deployment runner
+        runner = DeploymentRunner(args.deployment_file)
 
-    # 1. Load Initial Node State (New Logic)
-    if not state_file_path.exists():
-        print(f"[Fatal] Initial state file not found at: {state_file_path}")
-        print(
-            "Please ensure main.py was run successfully and the state file was created."
-        )
-        sys.exit(1)
+        # Run deployment
+        runner.run(args.steps, args.save_interval)
 
-    with open(state_file_path, "r") as f:
-        state_data = json.load(f)
-        all_node_states = state_data["nodes"]
-        # Optionally, check or load config from the state file
-        # deployed_config = state_data["config"]
+        print("\n[Deploy] Deployment complete! ✨")
 
-    print(
-        f"[Deploy] Loaded initial state for {len(all_node_states)} nodes from {state_file_path.name}"
-    )
+    except Exception as e:
+        print(f"\n[Deploy] ERROR: {e}")
+        import traceback
 
-    # Group nodes by holon_id
-    holon_node_map = {}
-    for state in all_node_states:
-        hid = state["holon_id"]
-        if hid not in holon_node_map:
-            holon_node_map[hid] = []
-        holon_node_map[hid].append(state)
+        traceback.print_exc()
+        return 1
 
-    # 2. Setup Federation Manager (matches main.py)
-    fed_manager = FederationManager(
-        num_holons=CONFIG["federation"]["num_holons"],
-        world_bounds=CONFIG["federation"]["world_bounds"],
-        breach_threshold=CONFIG["federation"]["breach_threshold"],
-        coordination_mode="positional",
-    )
-
-    holons = {}
-    partitions = fed_manager.get_partition_assignments()
-
-    # 3. Init Holons, Load Models, and Initialize Nodes from State File
-    for pid, part in partitions.items():
-        # Initialize Holon Wrapper
-        holon = Holon(
-            holon_id=pid,
-            partition_id=pid,
-            spatial_bounds={"x": part.bounds_x, "y": part.bounds_y},
-            config=CONFIG,
-            mode="deployment",
-        )
-
-        try:
-            # Reconstruct REAL NodePositionND nodes from saved state
-            holon_nodes = []
-
-            for node_state in holon_node_map.get(pid, []):
-                node = NodePositionND(
-                    id=node_state["id"],
-                    pos=np.array(node_state["pos"]),
-                    dimensions=node_state["dimensions"],
-                )
-
-                # Crucially, set the last_pos to enable velocity calculation
-                node.last_pos = np.array(node_state["last_pos"])
-
-                # Set config parameters (assuming they are in CONFIG)
-                node.sensor_range = CONFIG["node"]["sensor_range"]
-                node.move_speed = CONFIG["node"]["move_speed"]
-
-                holon_nodes.append(node)
-
-            # Initialize Orchestrator with the saved nodes
-            holon.initialize_orchestrator_with_nodes(holon_nodes)
-
-            # Load Checkpoint (must match main.py save path)
-            checkpoint_path = Path("checkpoints") / f"holon_{pid}_ep{args.episode}.pt"
-
-            if not checkpoint_path.exists():
-                print(f"[Error] Checkpoint not found: {checkpoint_path}")
-                print("Make sure you ran main.py --mode training first.")
-                sys.exit(1)
-
-            holon.load(str(checkpoint_path))
-            holons[pid] = holon
-            print(
-                f"[Success] Loaded Holon {pid} from {checkpoint_path.name} with {len(holon_nodes)} nodes."
-            )
-
-        except Exception as e:
-            print(f"[Fatal] Failed to initialize Holon {pid}: {e}")
-            import traceback
-
-            traceback.print_exc()
-            return
-
-    # 4. Run Simulation (Inference)
-    # ... (Rest of the simulation logic remains the same as before) ...
-
-    history_frames = []
-    steps = args.steps
-    print(f"\n[Deploy] Simulating {steps} steps...")
-
-    for t in range(steps):
-        # Federation Step Data
-        holon_states = {}
-        frame_nodes = []
-
-        # Step all holons
-        for hid, holon in holons.items():
-            # Run a step in deployment mode (no training update)
-            holon.step(t, total_episodes=1)
-
-            # Aggregate data for visualization
-            for n in holon.nodes:
-                frame_nodes.append(
-                    {
-                        "id": n.id,
-                        "pos": n.pos.tolist(),
-                        "holon_id": hid,
-                    }
-                )
-
-            holon_states[hid] = holon.get_state_summary()
-
-        # Federation Checks
-        alerts = fed_manager.step(holon_states)
-        for hid, alert_list in alerts.items():
-            if alert_list:
-                holons[hid].receive_breach_alerts(alert_list)
-
-        # Build Frame
-        frame = {
-            "step": t,
-            "nodes": frame_nodes,
-            "stats": {
-                "breaches": fed_manager.total_breaches,
-            },
-        }
-        history_frames.append(frame)
-
-        if t % 50 == 0 and t > 0:
-            print(f"  Step {t}/{steps} complete...")
-
-    # 5. Export
-    output_filename = f"deployment_viz_ep{args.episode}_from_trained_state.json"
-    output = {
-        "config": {
-            "world_bounds": CONFIG["federation"]["world_bounds"],
-            "num_nodes": CONFIG["node"]["total_nodes"],
-            "episode": args.episode,
-        },
-        "frames": history_frames,
-    }
-
-    with open(output_filename, "w") as f:
-        json.dump(output, f, indent=2, default=convert_to_serializable)
-
-    print(f"\n[Done] Saved visualization data to: {output_filename}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    exit(main())

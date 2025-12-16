@@ -231,6 +231,62 @@ class FederatedFLOWRRA:
 
         return avg_episode_reward
 
+    def create_deployment_file(self, episode: int):
+        """Create a JSON file containing all necessary data for deployment."""
+        output_dir = Path("deployment")
+        output_dir.mkdir(exist_ok=True)
+
+        # 1. Collect Node Data
+        all_nodes_data = []
+        for holon_id, holon in self.holons.items():
+            for node in holon.nodes:
+                all_nodes_data.append(
+                    {
+                        "id": node.id,
+                        "holon_id": holon_id,
+                        "pos": node.pos.tolist(),
+                        "last_pos": node.last_pos.tolist(),
+                        "dimensions": node.dimensions,
+                        "sensor_range": node.sensor_range,
+                        "move_speed": node.move_speed,
+                    }
+                )
+
+        # 2. Collect Holon Data (for bounds visualization in deployment)
+        holon_data = [
+            {
+                "holon_id": h_id,
+                "x_min": h.x_min,
+                "x_max": h.x_max,
+                "y_min": h.y_min,
+                "y_max": h.y_max,
+                "center": h.center.tolist(),
+            }
+            for h_id, h in self.holons.items()
+        ]
+
+        # 3. Compile Deployment Data
+        deployment_data = {
+            "metadata": {
+                "episode": episode,  # CRITICAL: This is the episode the model was saved at
+                "timestamp": time.time(),
+                "dimensions": self.cfg["spatial"]["dimensions"],
+                "total_nodes": self.cfg["node"]["total_nodes"],
+            },
+            "config": self.cfg,
+            "nodes": all_nodes_data,
+            "holons": holon_data,
+        }
+
+        # Determine filename based on the final episode
+        filepath = output_dir / f"deployment_ep{episode}.json"
+
+        with open(filepath, "w") as f:
+            json.dump(deployment_data, f, indent=2)
+
+        print(f"\n[Main] ✅ Deployment file created at {filepath}")
+        return filepath
+
     def train(self, num_episodes: int):
         """Run full training loop."""
         print(f"\n[Main] Starting training for {num_episodes} episodes")
@@ -248,8 +304,11 @@ class FederatedFLOWRRA:
                 self.save_metrics()
 
         print(f"\n[Main] Training complete!")
+        self.save_checkpoint(num_episodes)
         self.save_final_results()
-        self.save_final_state(num_episodes)
+
+        # Create Deployment File
+        self.create_deployment_file(num_episodes)
 
     def save_checkpoint(self, episode: int):
         """Save holon models and federation state."""
@@ -325,48 +384,6 @@ class FederatedFLOWRRA:
         print(f"Best Reward: {final_stats['best_reward']:.3f}")
         print(f"Total Breaches: {final_stats['federation']['total_breaches']}")
         print("=" * 70 + "\n")
-
-    def save_final_state(self, episode: int):
-        """Save the final positions and states of all nodes for deployment."""
-        state_dir = Path("deployment_states")
-        state_dir.mkdir(exist_ok=True)
-
-        all_node_states = []
-
-        for holon_id, holon in self.holons.items():
-            # Nodes are stored in the holon.nodes list
-            for node in holon.nodes:
-                # We save the essential state needed to reconstruct the node
-                node_state = {
-                    "id": node.id,
-                    "pos": node.pos.tolist(),
-                    "last_pos": node.last_pos.tolist(),  # Important for velocity calculation
-                    "dimensions": node.dimensions,
-                    "holon_id": holon_id,
-                    # Add other necessary config/state data if needed,
-                    # e.g., sensor_range, move_speed, etc., but they are usually global config.
-                }
-                all_node_states.append(node_state)
-
-        filepath = state_dir / f"initial_state_ep{episode}.json"
-
-        def convert_numpy(obj):
-            """Helper for JSON dumping numpy arrays."""
-            if isinstance(obj, np.ndarray):
-                return obj.tolist()
-            raise TypeError(
-                f"Object of type {type(obj).__name__} is not JSON serializable"
-            )
-
-        with open(filepath, "w") as f:
-            json.dump(
-                {"nodes": all_node_states, "config": self.cfg},
-                f,
-                indent=2,
-                default=convert_numpy,
-            )
-
-        print(f"\n[Main] Saved final node state to {filepath}")
 
 
 def main():

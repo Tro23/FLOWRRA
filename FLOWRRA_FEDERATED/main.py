@@ -8,6 +8,7 @@ FIXES:
 - Correct holon initialization sequence
 - Better error handling
 - Phase 2 R-GNN support hooks
+- Fixed visualization method signature
 
 Usage:
     python main.py --episodes 2000 --holons 4 --nodes 40
@@ -19,6 +20,8 @@ import time
 from pathlib import Path
 from typing import Dict, List
 
+import matplotlib.patches as patches
+import matplotlib.pyplot as plt
 import numpy as np
 
 from config import CONFIG
@@ -165,6 +168,167 @@ class FederatedFLOWRRA:
 
         print(f"[Main] Node distribution complete\n")
 
+    def plot_federation_training_results(self):
+        """Generate federation-wide training visualization."""
+
+        print("[Viz] Creating federation training overview...")
+
+        fig, axes = plt.subplots(3, 3, figsize=(18, 12))
+
+        # ROW 1: Per-Holon Rewards
+        for holon_id, holon in self.holons.items():
+            if holon.orchestrator and hasattr(holon.orchestrator, "metrics_history"):
+                if len(holon.orchestrator.metrics_history) > 0:
+                    rewards = [
+                        m.get("avg_reward", 0)
+                        for m in holon.orchestrator.metrics_history
+                    ]
+                    axes[0, 0].plot(rewards, label=f"Holon {holon_id}", alpha=0.7)
+        axes[0, 0].set_title("Per-Holon Average Reward")
+        axes[0, 0].legend()
+        axes[0, 0].set_xlabel("Step")
+        axes[0, 0].set_ylabel("Reward")
+        axes[0, 0].grid(alpha=0.3)
+
+        # Federation Average Reward
+        if len(self.episode_rewards) > 0:
+            axes[0, 1].plot(self.episode_rewards, color="darkblue", linewidth=2)
+        axes[0, 1].set_title("Federation Average Reward")
+        axes[0, 1].set_xlabel("Episode")
+        axes[0, 1].set_ylabel("Reward")
+        axes[0, 1].grid(alpha=0.3)
+
+        # Total Breaches Over Time
+        if len(self.federation_metrics) > 0:
+            breach_counts = [
+                m.get("total_breaches", 0) for m in self.federation_metrics
+            ]
+            if breach_counts:
+                axes[0, 2].plot(breach_counts, color="red", linewidth=2)
+        axes[0, 2].set_title("Total Boundary Breaches")
+        axes[0, 2].set_xlabel("Metric Save Point")
+        axes[0, 2].set_ylabel("Breaches")
+        axes[0, 2].grid(alpha=0.3)
+
+        # ROW 2: Coherence & Integrity per Holon
+        for holon_id, holon in self.holons.items():
+            if holon.orchestrator and hasattr(holon.orchestrator, "metrics_history"):
+                if len(holon.orchestrator.metrics_history) > 0:
+                    coherence = [
+                        m.get("coherence", 0)
+                        for m in holon.orchestrator.metrics_history
+                    ]
+                    axes[1, 0].plot(coherence, label=f"Holon {holon_id}", alpha=0.7)
+        axes[1, 0].set_title("System Coherence (All Holons)")
+        axes[1, 0].axhline(
+            y=0.4, linestyle="--", color="red", alpha=0.5, label="Threshold"
+        )
+        axes[1, 0].legend()
+        axes[1, 0].set_xlabel("Step")
+        axes[1, 0].set_ylabel("Coherence")
+        axes[1, 0].grid(alpha=0.3)
+
+        # Loop Integrity
+        for holon_id, holon in self.holons.items():
+            if holon.orchestrator and hasattr(holon.orchestrator, "metrics_history"):
+                if len(holon.orchestrator.metrics_history) > 0:
+                    integrity = [
+                        m.get("loop_integrity", 0)
+                        for m in holon.orchestrator.metrics_history
+                    ]
+                    axes[1, 1].plot(integrity, label=f"Holon {holon_id}", alpha=0.7)
+        axes[1, 1].set_title("Loop Integrity (All Holons)")
+        axes[1, 1].legend()
+        axes[1, 1].set_xlabel("Step")
+        axes[1, 1].set_ylabel("Integrity [0-1]")
+        axes[1, 1].grid(alpha=0.3)
+
+        # Coverage (combined across all holons)
+        for holon_id, holon in self.holons.items():
+            if holon.orchestrator and hasattr(holon.orchestrator, "metrics_history"):
+                if len(holon.orchestrator.metrics_history) > 0:
+                    coverage = [
+                        m.get("coverage", 0) for m in holon.orchestrator.metrics_history
+                    ]
+                    axes[1, 2].plot(coverage, label=f"Holon {holon_id}", alpha=0.7)
+        axes[1, 2].set_title("Map Coverage (Per Holon)")
+        axes[1, 2].legend()
+        axes[1, 2].set_xlabel("Step")
+        axes[1, 2].set_ylabel("Coverage %")
+        axes[1, 2].grid(alpha=0.3)
+
+        # ROW 3: Training Dynamics
+        # Training Loss per Holon
+        has_loss_data = False
+        for holon_id, holon in self.holons.items():
+            if holon.orchestrator and hasattr(holon.orchestrator, "metrics_history"):
+                losses = [
+                    m.get("training_loss")
+                    for m in holon.orchestrator.metrics_history
+                    if m.get("training_loss") is not None
+                ]
+                if losses:
+                    axes[2, 0].plot(losses, label=f"Holon {holon_id}", alpha=0.7)
+                    has_loss_data = True
+        if has_loss_data:
+            axes[2, 0].set_title("GNN Training Loss")
+            axes[2, 0].legend()
+        else:
+            axes[2, 0].set_title("GNN Training Loss (No Data Yet)")
+        axes[2, 0].set_xlabel("Training Step")
+        axes[2, 0].set_ylabel("Loss")
+        axes[2, 0].grid(alpha=0.3)
+
+        # Epsilon Schedule (should be same for all, just show one)
+        first_holon = list(self.holons.values())[0]
+        if first_holon.orchestrator and hasattr(
+            first_holon.orchestrator, "metrics_history"
+        ):
+            epsilons = [
+                m.get("epsilon")
+                for m in first_holon.orchestrator.metrics_history
+                if m.get("epsilon") is not None
+            ]
+            if epsilons:
+                axes[2, 1].plot(epsilons, color="purple", linewidth=2)
+                axes[2, 1].set_title("Exploration Rate (ε)")
+            else:
+                axes[2, 1].set_title("Exploration Rate (ε) - No Data Yet")
+        axes[2, 1].set_xlabel("Step")
+        axes[2, 1].set_ylabel("Epsilon")
+        axes[2, 1].grid(alpha=0.3)
+
+        # Total WFC Triggers Across Federation
+        wfc_counts = []
+        holon_ids = []
+        for holon_id, holon in self.holons.items():
+            if holon.orchestrator and hasattr(holon.orchestrator, "wfc_trigger_events"):
+                wfc_counts.append(len(holon.orchestrator.wfc_trigger_events))
+                holon_ids.append(holon_id)
+
+        if wfc_counts:
+            axes[2, 2].bar(
+                range(len(wfc_counts)), wfc_counts, color="orange", alpha=0.7
+            )
+            axes[2, 2].set_xticks(range(len(wfc_counts)))
+            axes[2, 2].set_xticklabels([f"H{hid}" for hid in holon_ids])
+        axes[2, 2].set_title("WFC Triggers Per Holon")
+        axes[2, 2].set_xlabel("Holon ID")
+        axes[2, 2].set_ylabel("Count")
+        axes[2, 2].grid(alpha=0.3, axis="y")
+
+        plt.suptitle(
+            "FLOWRRA Federation Training Overview", fontsize=16, fontweight="bold"
+        )
+        plt.tight_layout()
+        plt.savefig(
+            "results/federation_training_overview.png", dpi=150, bbox_inches="tight"
+        )
+        plt.close()
+        print(
+            "[Viz] ✅ Saved federation training overview to results/federation_training_overview.png"
+        )
+
     def train_episode(self, episode_num: int, total_episodes: int) -> float:
         """
         Execute one training episode.
@@ -268,7 +432,7 @@ class FederatedFLOWRRA:
         # 3. Compile Deployment Data
         deployment_data = {
             "metadata": {
-                "episode": episode,  # CRITICAL: This is the episode the model was saved at
+                "episode": episode,
                 "timestamp": time.time(),
                 "dimensions": self.cfg["spatial"]["dimensions"],
                 "total_nodes": self.cfg["node"]["total_nodes"],
@@ -287,6 +451,112 @@ class FederatedFLOWRRA:
         print(f"\n[Main] ✅ Deployment file created at {filepath}")
         return filepath
 
+    def visualize_federated_map(self, episode: int, save_path: str = None):
+        """
+        Stitches all holons together into a single global view using
+        actual attributes from core.py and loop.py.
+        """
+
+        fig, ax = plt.subplots(figsize=(12, 12))
+
+        # Use world bounds from config (usually 1.0, 1.0)
+        bounds = self.cfg["federation"]["world_bounds"]
+        ax.set_xlim(0, bounds[0])
+        ax.set_ylim(0, bounds[1])
+        ax.set_title(f"FLOWRRA Federated Global Map - Episode {episode}", fontsize=15)
+
+        # 1. Draw Holon Partitions & Their Internal Obstacles
+        for h_id, holon in self.holons.items():
+            # Draw boundary box for the Holon partition
+            rect = patches.Rectangle(
+                (holon.x_min, holon.y_min),
+                holon.x_max - holon.x_min,
+                holon.y_max - holon.y_min,
+                linewidth=2,
+                edgecolor="black",
+                facecolor="none",
+                linestyle="--",
+                alpha=0.3,
+                zorder=1,
+            )
+            ax.add_patch(rect)
+            ax.text(
+                holon.x_min + 0.01,
+                holon.y_max - 0.03,
+                f"HOLON-{h_id}",
+                fontsize=10,
+                fontweight="bold",
+                color="black",
+                alpha=0.6,
+            )
+
+            # Draw Obstacles using the Obstacle objects in ObstacleManager
+            # Based on obstacles.py: ObstacleManager.obstacles is a List[Obstacle]
+            for obs in holon.orchestrator.obstacle_manager.obstacles:
+                circle = patches.Circle(
+                    obs.pos,  # Accessing .pos attribute of Obstacle object
+                    obs.radius,  # Accessing .radius attribute
+                    color="red",
+                    alpha=0.25,
+                    zorder=2,
+                )
+                ax.add_patch(circle)
+
+        # 2. Draw Nodes and Connections
+        for h_id, holon in self.holons.items():
+            if not holon.nodes:
+                continue
+
+            # Create a lookup for node positions by ID within this holon
+            node_positions = {node.id: node.pos for node in holon.nodes}
+
+            # Draw Connections based on loop.py LoopStructure
+            # We iterate through the Connection objects
+            for conn in holon.orchestrator.loop.connections:
+                if (
+                    conn.node_a_id in node_positions
+                    and conn.node_b_id in node_positions
+                ):
+                    p1 = node_positions[conn.node_a_id]
+                    p2 = node_positions[conn.node_b_id]
+
+                    # Draw line. Color changes if the connection is broken
+                    color = "red" if conn.is_broken else "cyan"
+                    alpha = 0.8 if not conn.is_broken else 0.3
+
+                    ax.plot(
+                        [p1[0], p2[0]],
+                        [p1[1], p2[1]],
+                        color=color,
+                        alpha=alpha,
+                        linewidth=1.5,
+                        zorder=3,
+                    )
+
+            # Draw the actual nodes
+            all_pos = np.array([n.pos for n in holon.nodes])
+            ax.scatter(
+                all_pos[:, 0],
+                all_pos[:, 1],
+                s=40,
+                c="blue",
+                edgecolors="white",
+                linewidth=0.8,
+                zorder=4,
+                label=f"Holon {h_id}" if h_id == 0 else "",
+            )
+
+        ax.set_aspect("equal")
+        plt.xlabel("Global X Coordinate")
+        plt.ylabel("Global Y Coordinate")
+        plt.grid(True, which="both", linestyle=":", alpha=0.5)
+
+        if save_path:
+            plt.savefig(save_path, bbox_inches="tight")
+            plt.close()
+        else:
+            plt.show()
+
     def train(self, num_episodes: int):
         """Run full training loop."""
         print(f"\n[Main] Starting training for {num_episodes} episodes")
@@ -303,9 +573,27 @@ class FederatedFLOWRRA:
             if episode % self.cfg["training"]["metrics_save_frequency"] == 0:
                 self.save_metrics()
 
+            """# Save Visualization of Federated Map
+            if episode % 5 == 0:
+                self.visualize_federated_map(episode=episode)"""
+
         print(f"\n[Main] Training complete!")
+
         self.save_checkpoint(num_episodes)
         self.save_final_results()
+
+        # NEW: Generate visualizations
+        print("\n[Main] Generating training visualizations...")
+
+        # Per-holon detailed metrics
+        for holon_id, holon in self.holons.items():
+            if holon.orchestrator:
+                holon.orchestrator.save_metrics(
+                    f"metrics/holon_{holon_id}_detailed.json"
+                )
+
+        # Federation overview
+        self.plot_federation_training_results()
 
         # Create Deployment File
         self.create_deployment_file(num_episodes)

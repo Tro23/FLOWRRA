@@ -67,6 +67,57 @@ class Holon:
             f"  Bounds: x=[{self.x_min:.2f}, {self.x_max:.2f}], y=[{self.y_min:.2f}, {self.y_max:.2f}]"
         )
 
+    def _to_local(self, global_pos: np.ndarray) -> np.ndarray:
+        """Translate global coordinates to local [0,1] scale."""
+        lx = (global_pos[0] - self.x_min) / (self.x_max - self.x_min)
+        ly = (global_pos[1] - self.y_min) / (self.y_max - self.y_min)
+        return np.array([lx, ly])
+
+    def _to_global(self, local_pos: np.ndarray) -> np.ndarray:
+        """Translate local [0,1] coordinates back to global scale."""
+        gx = local_pos[0] * (self.x_max - self.x_min) + self.x_min
+        gy = local_pos[1] * (self.y_max - self.y_min) + self.y_min
+        return np.array([gx, gy])
+
+    def _localize_internal_obstacles(self):
+        """
+        Consolidated: Filters global obstacles and translates them into the
+        local 1.0x1.0 space of the orchestrator.
+        """
+        if self.orchestrator is None:
+            return
+
+        self.orchestrator.obstacle_manager.obstacles = []
+
+        # Get obstacles from config
+        global_obstacles_raw = self.cfg.get("obstacles", [])
+
+        # Holon dimensions
+        w = self.x_max - self.x_min
+        h = self.y_max - self.y_min
+
+        for obs_cfg in global_obstacles_raw:
+            # Assuming obs_cfg is [x, y, r]
+            ox, oy, orad = obs_cfg
+
+            # 1. Check if obstacle overlaps with this quadrant
+            if (
+                ox + orad > self.x_min
+                and ox - orad < self.x_max
+                and oy + orad > self.y_min
+                and oy - orad < self.y_max
+            ):
+                # 2. Translate position to local 0.0-1.0
+                local_pos = self._to_local(np.array([ox, oy]))
+
+                # 3. Scale the radius (Local Radius = Global Radius / Holon Width)
+                local_radius = orad / w
+
+                # 4. Add to local orchestrator
+                self.orchestrator.obstacle_manager.add_static_obstacle(
+                    local_pos, local_radius
+                )
+
     def initialize_orchestrator_with_nodes(self, initial_nodes: List[NodePositionND]):
         """Initialize FLOWRRA orchestrator with pre-created nodes."""
         # Validate all nodes have correct dimensions
@@ -85,6 +136,27 @@ class Holon:
         # Create orchestrator
         self.orchestrator = FLOWRRA_Orchestrator(mode=self.mode)
         self.orchestrator.cfg.update(self.cfg)
+
+        # --- NEW: Localize Obstacles ---
+        # Clear default obstacles from the internal manager
+        self.orchestrator.obstacle_manager.obstacles = []
+
+        global_obstacles = self.cfg.get("obstacles", [])
+        for obs_cfg in global_obstacles:
+            x, y, r = obs_cfg
+            # Check if obstacle overlaps with this Holon's bounds
+            if (self.x_min - r <= x <= self.x_max + r) and (
+                self.y_min - r <= y <= self.y_max + r
+            ):
+                # Add the obstacle to the Holon's local orchestrator
+                # Note: core.py's check_collision expects coordinates in the same scale as node.pos
+                self.orchestrator.obstacle_manager.add_static_obstacle(
+                    np.array([x, y]), r / self.cfg["spatial"]["world_bounds"][0]
+                )
+
+        print(
+            f"[Holon {self.holon_id}] Localized {len(self.orchestrator.obstacle_manager.obstacles)} obstacles."
+        )
 
         # Override nodes
         self.orchestrator.nodes = self.nodes
@@ -117,77 +189,75 @@ class Holon:
                     )
 
     def _apply_boundary_constraints(self):
-        """Apply boundary constraint responses with dimension safety."""
-        if not self.current_breaches:
-            self.boundary_repulsion_active = False
-            return
+        """Apply boundary constraints that keep nodes inside THIS holon."""
+        # Note: This is called in Phase 4 (Global Space)
+        for node in self.nodes:
+            # Instead of np.mod(1.0) which wraps the whole world,
+            # we CLIP to this Holon's specific bounds.
+            node.pos[0] = np.clip(node.pos[0], self.x_min, self.x_max)
+            node.pos[1] = np.clip(node.pos[1], self.y_min, self.y_max)
 
-        for alert in self.current_breaches:
-            node_id = alert["node_id"]
-
-            # Find node
-            node = next((n for n in self.nodes if n.id == node_id), None)
-            if node is None:
-                continue
-
-            # CRITICAL FIX: Ensure correction vector matches node dimensions
-            correction = alert["suggested_correction"]
-
-            # Validate correction dimension
-            if len(correction) != self.dimensions:
-                print(
-                    f"[Holon {self.holon_id}] WARNING: Correction vector dimension mismatch"
-                )
-                # Truncate or pad to match
-                if len(correction) > self.dimensions:
-                    correction = correction[: self.dimensions]
-                else:
-                    correction = np.pad(
-                        correction, (0, self.dimensions - len(correction))
+        # Apply Splat repulsion for breaches if alerts exist
+        if self.current_breaches:
+            for alert in self.current_breaches:
+                node_id = alert["node_id"]
+                node = next((n for n in self.nodes if n.id == node_id), None)
+                if node:
+                    # Splat using LOCAL coordinates so the local Density Map
+                    # inside core.py understands where the 'pain' is coming from.
+                    local_pos = self._to_local(node.pos)
+                    self.density.splat_collision_event(
+                        position=local_pos,
+                        velocity=alert["suggested_correction"],
+                        severity=alert["severity"] * 0.4,
+                        node_id=node.id,
                     )
 
-            correction_magnitude = 0.008
-
-            # Apply correction with dimension-safe modulo
-            new_pos = node.pos + correction * correction_magnitude
-            node.pos = np.mod(new_pos, 1.0)
-
-            # Splat repulsion
-            try:
-                self.density.splat_collision_event(
-                    position=node.pos.copy(),
-                    velocity=correction,
-                    severity=alert["severity"] * 0.4,
-                    node_id=node.id,
-                    is_wfc_event=False,
-                )
-            except Exception as e:
-                print(
-                    f"[Holon {self.holon_id}] WARNING: Could not splat repulsion: {e}"
-                )
-
     def step(self, episode_step: int, total_episodes: int = 8000) -> float:
-        """Execute one simulation step."""
+        """Execute one simulation step with Coordinate Normalization."""
         if self.orchestrator is None:
             raise RuntimeError(f"Holon {self.holon_id}: orchestrator not initialized!")
 
         self.steps_taken += 1
 
-        # Apply boundary constraints
-        self._apply_boundary_constraints()
+        # --- PHASE 1: NORMALIZE (Global -> Local) ---
+        # We tell the nodes they are in a 1.0 x 1.0 world before the Orchestrator sees them
+        for node in self.nodes:
+            node.pos = self._to_local(node.pos)
 
-        # Run orchestrator step
+        # Capture WFC state in local space
+        pre_step_wfc_count = len(self.orchestrator.wfc_trigger_events)
+
+        # --- PHASE 2: ORCHESTRATE (The Delusion) ---
+        # Core.py runs its logic thinking it has a full 1.0x1.0 world.
+        # This includes GNN inference and Spring Physics.
         avg_reward = self.orchestrator.step(episode_step, total_episodes)
 
-        # Breach penalty
+        # --- PHASE 3: DENORMALIZE (Local -> Global) ---
+        # Map positions back to the true Federation world coordinates
+        for node in self.nodes:
+            node.pos = self._to_global(node.pos)
+
+        # --- PHASE 4: ENFORCE (The Cage) ---
+        # Now that we are in global space, apply the 'Hard Wall' constraints
+        # we wrote earlier to prevent leaking into other holons.
+        self._apply_boundary_constraints()
+
+        # WFC Reporting Logic (Kept from your current code)
+        if len(self.orchestrator.wfc_trigger_events) > pre_step_wfc_count:
+            latest_event = self.orchestrator.wfc_trigger_events[-1]
+            integrity = latest_event.get("loop_integrity", 0.0)
+            print(
+                f"Holon-{self.holon_id} loop integrity failed ({integrity:.2f}), WFC initiated!"
+            )
+
+        # Breach penalty (Federation layer punishment)
         if self.current_breaches:
             breach_penalty = (
                 -len(self.current_breaches) * self.cfg["rewards"]["r_boundary_breach"]
             )
             avg_reward += breach_penalty
-
-        # Clear breaches
-        self.current_breaches = []
+            self.current_breaches = []  # Clear for next step
 
         # Track performance
         self.avg_reward = (

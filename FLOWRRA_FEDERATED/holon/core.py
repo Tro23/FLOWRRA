@@ -176,7 +176,7 @@ class FLOWRRA_Orchestrator:
             # Add TINY noise just to break perfect symmetry (prevents numerical singularity)
             noise = np.random.normal(0, 0.001, self.dims)
 
-            pos = np.mod(center + offset + noise, 0.7)
+            pos = center + offset + noise
 
             node = NodePositionND(i, pos, self.dims)
             node.sensor_range = self.cfg["exploration"]["sensor_range"]
@@ -207,7 +207,7 @@ class FLOWRRA_Orchestrator:
             for node in self.nodes:
                 if node.id in forces:
                     # Apply force
-                    node.pos = np.mod(node.pos + forces[node.id] * 0.05, 1.0)
+                    node.pos = node.pos + forces[node.id] * 0.05
 
             # 3. Enforce Constraints (Reconnect immediately if broken during warmup)
             # We force repair here because we want a valid loop to start
@@ -277,9 +277,7 @@ class FLOWRRA_Orchestrator:
                             random_direction
                         )
 
-                        node.pos = np.mod(
-                            node.pos + random_direction * kick_magnitude, 1.0
-                        )
+                        node.pos = node.pos + random_direction * kick_magnitude
 
                         print(f"[Unstick] Node {node.id} was stuck - applied kick")
                         self.node_stuck_counters[node.id] = 0
@@ -450,9 +448,7 @@ class FLOWRRA_Orchestrator:
 
                 # Reduce spring force near obstacles to allow escape
                 force_scale = 0.05 if near_obstacle else 0.1
-                node.pos = np.mod(
-                    node.pos + force * force_scale, 1.0
-                )  # Scale Force Influence
+                node.pos = node.pos + force * force_scale  # Scale Force Influence
 
             # NEW: Collision Response with Wave Function Collapse
             collides, obs_ids = self.obstacle_manager.check_collision(
@@ -492,7 +488,7 @@ class FLOWRRA_Orchestrator:
                     # Combine: 70% radial exploration, 30% momentum direction
                     offset = radial_offset * 0.7 + momentum_offset * 0.3
 
-                    candidate = np.mod(old_pos + offset, 1.0)
+                    candidate = old_pos + offset
 
                     # Test candidate
                     coll_check, coll_obs_ids = self.obstacle_manager.check_collision(
@@ -518,7 +514,7 @@ class FLOWRRA_Orchestrator:
                 if best_distance_from_obstacle < 0.05:
                     # Emergency escape: large random displacement
                     random_kick = np.random.uniform(-0.06, 0.06, self.dims)
-                    node.pos = np.mod(node.pos + random_kick, 1.0)
+                    node.pos = node.pos + random_kick
                     print(f"[Emergency] Node {node.id} received random escape kick")
 
                 # Heavy collision penalty - this teaches avoidance

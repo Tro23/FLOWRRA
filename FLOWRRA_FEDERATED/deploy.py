@@ -126,10 +126,26 @@ class DeploymentRunner:
     def run_step(self, step: int) -> Dict:
         """Execute one deployment step and collect data."""
         # Holons execute
-        holon_rewards = []
+        holon_metrics = []
         for holon in self.holons.values():
             reward = holon.step(step, total_episodes=1)  # Single episode in deployment
-            holon_rewards.append(reward)
+
+            # Accessing the orchestrator's current metrics
+            # We use .get() or default to 0.0 to prevent crashes
+            # This prevents the "unbounded" growth issue
+            current_coherence = 0.0
+            current_integrity = 0.0
+
+            if holon.orchestrator and hasattr(holon.orchestrator, "metrics_history"):
+                history = holon.orchestrator.metrics_history
+                if history:  # Ensure the list isn't empty
+                    latest = history[-1]
+                    current_coherence = latest.get("coherence", 0.0)
+                    current_integrity = latest.get("loop_integrity", 0.0)
+
+            holon_metrics.append(
+                {"coherence": current_coherence, "integrity": current_integrity}
+            )
 
         # Federation cycle
         holon_states = {
@@ -144,14 +160,26 @@ class DeploymentRunner:
             if alerts:
                 self.holons[holon_id].receive_breach_alerts(alerts)
 
+        # Calculate global averages for this specific frame
+        avg_coherence = (
+            float(sum(m["coherence"] for m in holon_metrics) / len(holon_metrics))
+            if holon_metrics
+            else 0
+        )
+        avg_integrity = (
+            float(sum(m["integrity"] for m in holon_metrics) / len(holon_metrics))
+            if holon_metrics
+            else 0
+        )
+
         # Collect snapshot for visualization
-        snapshot = self._collect_snapshot(step)
+        snapshot = self._collect_snapshot(step, avg_coherence, avg_integrity)
 
         self.step_count += 1
 
         return snapshot
 
-    def _collect_snapshot(self, step: int) -> Dict:
+    def _collect_snapshot(self, step: int, coherence: float, integrity: float) -> Dict:
         """Collect current state snapshot for visualization."""
         all_nodes = []
         all_connections = []
@@ -178,6 +206,8 @@ class DeploymentRunner:
             "time": step,
             "nodes": all_nodes,
             "connections": all_connections,
+            "coherence": float(coherence),
+            "loop_integrity": float(integrity),
             "holons": [
                 {
                     "holon_id": h_id,

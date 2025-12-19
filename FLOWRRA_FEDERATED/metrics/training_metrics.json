@@ -1,86 +1,32 @@
 {
   "episode_rewards": [
-    115.2276688090316,
-    5.7881413808465005,
-    4.2139603701536545,
-    9.418091835500672,
-    5.7040725030307655,
-    4.075161685317289,
-    3.756803224827163,
-    4.17663559702225,
-    4.181221872093156,
-    4.466878391609061,
-    4.718362898232881,
-    5.036086906790733,
-    4.639007358849049,
-    4.65735611230135,
-    2.13682248800993,
-    1.941428643465042,
-    1.9880909734964372,
-    1.687620863218326,
-    1.7024055366474204,
-    1.8481237882375716,
-    1.7200138491392136,
-    1.932856730222702,
-    4.199216538728215,
-    4.5102449636929665,
-    4.7549661785364155,
-    4.915523572564125,
-    4.9410456093586985,
-    4.997101864814758,
-    4.9823989272117615,
-    5.015870937108994,
-    4.97857214987278,
-    4.949706507921219,
-    4.98192013502121,
-    4.9199528127908705,
-    4.708559122204315,
-    2.248499600291252,
-    1.9665795570611955,
-    2.634759987951256,
-    4.5265926196589135,
-    4.563919884264469,
-    4.112151354909875,
-    4.597207341538742,
-    4.57156698889099,
-    4.608249450952281,
-    4.743991245925426,
-    4.564908915490378,
-    4.6329018427734265,
-    4.210959669351578,
-    4.654826480746269,
-    4.524828533411491,
-    3.970146878659725,
-    3.3484718396072277,
-    1.8156914436817169,
-    2.8609268268942833,
-    1.9070867657661439,
-    1.8272961401939392,
-    1.9811825406551362,
-    3.0033991032838823,
-    4.711700423359871,
-    4.664039761305321
+    222.61545154325665,
+    13.822213481664658,
+    4.142214757502079,
+    0.1247186616063118,
+    3.273294446095824,
+    -9.140796392634511,
+    -9.864717914238572,
+    -9.504384816288947,
+    -10.037670175656677,
+    -9.272076112627984,
+    -9.769719618037342,
+    -11.315978410914541,
+    -15.131341837644577,
+    -15.129207040071487,
+    -15.165007075667381,
+    -15.038125338554382,
+    -15.083712906241416,
+    -15.184844135046005,
+    -15.08143994152546,
+    -15.074981496930123
   ],
   "federation_metrics": [
     {
-      "step": 2000,
+      "step": 8000,
       "num_holons": 4,
-      "total_breaches": 149,
-      "breaches_per_step": 0.0745,
-      "grid_size": 2
-    },
-    {
-      "step": 4000,
-      "num_holons": 4,
-      "total_breaches": 177,
-      "breaches_per_step": 0.04425,
-      "grid_size": 2
-    },
-    {
-      "step": 6000,
-      "num_holons": 4,
-      "total_breaches": 208,
-      "breaches_per_step": 0.034666666666666665,
+      "total_breaches": 268,
+      "breaches_per_step": 0.0335,
       "grid_size": 2
     }
   ],
@@ -89,79 +35,27 @@
       {
         "holon_id": 0,
         "partition_id": 0,
-        "steps": 2000,
-        "num_nodes": 10,
-        "avg_reward": 5.341635963562426,
-        "total_breaches": 149,
+        "steps": 8000,
+        "num_nodes": 8,
+        "avg_reward": 8.913795839816286,
+        "total_breaches": 227,
         "boundary_repulsion_active": true,
         "orchestrator_stats": {
-          "step": 2000,
+          "step": 8000,
           "mode": "training",
           "coverage": 100.0,
-          "avg_reward": 5.56513596356241,
-          "num_nodes": 10,
-          "buffer_size": 2041,
-          "loop_integrity": 0.6,
-          "total_loop_breaks": 165,
-          "total_reconnections": 4,
-          "wfc_triggers": 42,
-          "collision_events": 596,
-          "num_obstacles": 6,
-          "density_collision_splats": 596,
-          "density_wfc_splats": 420,
-          "repulsion_field_coverage": 0.9338888888888889
-        }
-      },
-      {
-        "holon_id": 0,
-        "partition_id": 0,
-        "steps": 4000,
-        "num_nodes": 10,
-        "avg_reward": 3.5465749098004475,
-        "total_breaches": 177,
-        "boundary_repulsion_active": true,
-        "orchestrator_stats": {
-          "step": 4000,
-          "mode": "training",
-          "coverage": 100.0,
-          "avg_reward": 3.679324909800431,
-          "num_nodes": 10,
-          "buffer_size": 4045,
-          "loop_integrity": 0.7,
-          "total_loop_breaks": 185,
-          "total_reconnections": 9,
-          "wfc_triggers": 46,
-          "collision_events": 649,
-          "num_obstacles": 6,
-          "density_collision_splats": 649,
-          "density_wfc_splats": 460,
-          "repulsion_field_coverage": 0.9908333333333333
-        }
-      },
-      {
-        "holon_id": 0,
-        "partition_id": 0,
-        "steps": 6000,
-        "num_nodes": 10,
-        "avg_reward": 2.4365411051861137,
-        "total_breaches": 208,
-        "boundary_repulsion_active": true,
-        "orchestrator_stats": {
-          "step": 6000,
-          "mode": "training",
-          "coverage": 100.0,
-          "avg_reward": 2.540541105186101,
-          "num_nodes": 10,
-          "buffer_size": 6063,
-          "loop_integrity": 0.8,
-          "total_loop_breaks": 250,
-          "total_reconnections": 17,
-          "wfc_triggers": 64,
-          "collision_events": 964,
-          "num_obstacles": 6,
-          "density_collision_splats": 964,
-          "density_wfc_splats": 640,
-          "repulsion_field_coverage": 0.9977777777777778
+          "avg_reward": 9.027295839816333,
+          "num_nodes": 8,
+          "buffer_size": 9213,
+          "loop_integrity": 0.625,
+          "total_loop_breaks": 3728,
+          "total_reconnections": 19,
+          "wfc_triggers": 1214,
+          "collision_events": 2804,
+          "num_obstacles": 5,
+          "density_collision_splats": 2803,
+          "density_wfc_splats": 9712,
+          "repulsion_field_coverage": 0.9683333333333334
         }
       }
     ],
@@ -169,79 +63,27 @@
       {
         "holon_id": 1,
         "partition_id": 1,
-        "steps": 2000,
-        "num_nodes": 10,
-        "avg_reward": 10.81562172885333,
-        "total_breaches": 0,
-        "boundary_repulsion_active": false,
+        "steps": 8000,
+        "num_nodes": 8,
+        "avg_reward": 0.4939786936044957,
+        "total_breaches": 27,
+        "boundary_repulsion_active": true,
         "orchestrator_stats": {
-          "step": 2000,
+          "step": 8000,
           "mode": "training",
           "coverage": 100.0,
-          "avg_reward": 10.815621728853323,
-          "num_nodes": 10,
-          "buffer_size": 1999,
+          "avg_reward": 0.5074786936044693,
+          "num_nodes": 8,
+          "buffer_size": 10280,
           "loop_integrity": 1.0,
-          "total_loop_breaks": 0,
-          "total_reconnections": 0,
-          "wfc_triggers": 0,
-          "collision_events": 376,
+          "total_loop_breaks": 9118,
+          "total_reconnections": 5,
+          "wfc_triggers": 2281,
+          "collision_events": 561,
           "num_obstacles": 5,
-          "density_collision_splats": 376,
-          "density_wfc_splats": 0,
-          "repulsion_field_coverage": 0.6505555555555556
-        }
-      },
-      {
-        "holon_id": 1,
-        "partition_id": 1,
-        "steps": 4000,
-        "num_nodes": 10,
-        "avg_reward": 7.894467139758604,
-        "total_breaches": 0,
-        "boundary_repulsion_active": false,
-        "orchestrator_stats": {
-          "step": 4000,
-          "mode": "training",
-          "coverage": 100.0,
-          "avg_reward": 7.8944671397586355,
-          "num_nodes": 10,
-          "buffer_size": 3999,
-          "loop_integrity": 1.0,
-          "total_loop_breaks": 0,
-          "total_reconnections": 0,
-          "wfc_triggers": 0,
-          "collision_events": 435,
-          "num_obstacles": 5,
-          "density_collision_splats": 435,
-          "density_wfc_splats": 0,
-          "repulsion_field_coverage": 0.7980555555555555
-        }
-      },
-      {
-        "holon_id": 1,
-        "partition_id": 1,
-        "steps": 6000,
-        "num_nodes": 10,
-        "avg_reward": 6.926814610943492,
-        "total_breaches": 0,
-        "boundary_repulsion_active": false,
-        "orchestrator_stats": {
-          "step": 6000,
-          "mode": "training",
-          "coverage": 100.0,
-          "avg_reward": 6.9268146109435085,
-          "num_nodes": 10,
-          "buffer_size": 5999,
-          "loop_integrity": 1.0,
-          "total_loop_breaks": 0,
-          "total_reconnections": 0,
-          "wfc_triggers": 0,
-          "collision_events": 476,
-          "num_obstacles": 5,
-          "density_collision_splats": 476,
-          "density_wfc_splats": 0,
-          "repulsion_field_coverage": 0.9075
+          "density_collision_splats": 561,
+          "density_wfc_splats": 18248,
+          "repulsion_field_coverage": 0.9002777777777777
         }
       }
     ],
@@ -249,79 +91,27 @@
       {
         "holon_id": 2,
         "partition_id": 2,
-        "steps": 2000,
-        "num_nodes": 10,
-        "avg_reward": 11.028294641376,
-        "total_breaches": 0,
-        "boundary_repulsion_active": false,
+        "steps": 8000,
+        "num_nodes": 8,
+        "avg_reward": -1.9401077476442015,
+        "total_breaches": 7,
+        "boundary_repulsion_active": true,
         "orchestrator_stats": {
-          "step": 2000,
+          "step": 8000,
           "mode": "training",
-          "coverage": 100.0,
-          "avg_reward": 11.028294641376007,
-          "num_nodes": 10,
-          "buffer_size": 1999,
-          "loop_integrity": 1.0,
-          "total_loop_breaks": 0,
-          "total_reconnections": 0,
-          "wfc_triggers": 0,
-          "collision_events": 201,
-          "num_obstacles": 3,
-          "density_collision_splats": 201,
-          "density_wfc_splats": 0,
-          "repulsion_field_coverage": 0.22916666666666666
-        }
-      },
-      {
-        "holon_id": 2,
-        "partition_id": 2,
-        "steps": 4000,
-        "num_nodes": 10,
-        "avg_reward": 8.013705231309164,
-        "total_breaches": 0,
-        "boundary_repulsion_active": false,
-        "orchestrator_stats": {
-          "step": 4000,
-          "mode": "training",
-          "coverage": 100.0,
-          "avg_reward": 8.01370523130917,
-          "num_nodes": 10,
-          "buffer_size": 3999,
-          "loop_integrity": 1.0,
-          "total_loop_breaks": 0,
-          "total_reconnections": 0,
-          "wfc_triggers": 0,
-          "collision_events": 227,
-          "num_obstacles": 3,
-          "density_collision_splats": 227,
-          "density_wfc_splats": 0,
-          "repulsion_field_coverage": 0.5622222222222222
-        }
-      },
-      {
-        "holon_id": 2,
-        "partition_id": 2,
-        "steps": 6000,
-        "num_nodes": 10,
-        "avg_reward": 6.991864182719024,
-        "total_breaches": 0,
-        "boundary_repulsion_active": false,
-        "orchestrator_stats": {
-          "step": 6000,
-          "mode": "training",
-          "coverage": 100.0,
-          "avg_reward": 6.99186418271903,
-          "num_nodes": 10,
-          "buffer_size": 5999,
-          "loop_integrity": 1.0,
-          "total_loop_breaks": 0,
-          "total_reconnections": 0,
-          "wfc_triggers": 0,
-          "collision_events": 290,
-          "num_obstacles": 3,
-          "density_collision_splats": 290,
-          "density_wfc_splats": 0,
-          "repulsion_field_coverage": 0.7397222222222222
+          "coverage": 87.47,
+          "avg_reward": -1.936607747644186,
+          "num_nodes": 8,
+          "buffer_size": 10526,
+          "loop_integrity": 0.625,
+          "total_loop_breaks": 7699,
+          "total_reconnections": 3,
+          "wfc_triggers": 2527,
+          "collision_events": 554,
+          "num_obstacles": 4,
+          "density_collision_splats": 554,
+          "density_wfc_splats": 20216,
+          "repulsion_field_coverage": 0.5238888888888888
         }
       }
     ],
@@ -329,79 +119,27 @@
       {
         "holon_id": 3,
         "partition_id": 3,
-        "steps": 2000,
-        "num_nodes": 10,
-        "avg_reward": 11.087235913944415,
-        "total_breaches": 0,
-        "boundary_repulsion_active": false,
+        "steps": 8000,
+        "num_nodes": 8,
+        "avg_reward": 3.369111149832585,
+        "total_breaches": 7,
+        "boundary_repulsion_active": true,
         "orchestrator_stats": {
-          "step": 2000,
+          "step": 8000,
           "mode": "training",
           "coverage": 100.0,
-          "avg_reward": 11.087235913944431,
-          "num_nodes": 10,
-          "buffer_size": 1999,
-          "loop_integrity": 1.0,
-          "total_loop_breaks": 0,
-          "total_reconnections": 0,
-          "wfc_triggers": 0,
-          "collision_events": 155,
-          "num_obstacles": 3,
-          "density_collision_splats": 155,
-          "density_wfc_splats": 0,
-          "repulsion_field_coverage": 0.8561111111111112
-        }
-      },
-      {
-        "holon_id": 3,
-        "partition_id": 3,
-        "steps": 4000,
-        "num_nodes": 10,
-        "avg_reward": 7.92647699784139,
-        "total_breaches": 0,
-        "boundary_repulsion_active": false,
-        "orchestrator_stats": {
-          "step": 4000,
-          "mode": "training",
-          "coverage": 100.0,
-          "avg_reward": 7.926476997841382,
-          "num_nodes": 10,
-          "buffer_size": 3999,
-          "loop_integrity": 1.0,
-          "total_loop_breaks": 0,
-          "total_reconnections": 0,
-          "wfc_triggers": 0,
-          "collision_events": 364,
-          "num_obstacles": 3,
-          "density_collision_splats": 364,
-          "density_wfc_splats": 0,
-          "repulsion_field_coverage": 0.975
-        }
-      },
-      {
-        "holon_id": 3,
-        "partition_id": 3,
-        "steps": 6000,
-        "num_nodes": 10,
-        "avg_reward": 6.9196985234509585,
-        "total_breaches": 0,
-        "boundary_repulsion_active": false,
-        "orchestrator_stats": {
-          "step": 6000,
-          "mode": "training",
-          "coverage": 100.0,
-          "avg_reward": 6.919698523450953,
-          "num_nodes": 10,
-          "buffer_size": 5999,
-          "loop_integrity": 1.0,
-          "total_loop_breaks": 0,
-          "total_reconnections": 0,
-          "wfc_triggers": 0,
-          "collision_events": 461,
-          "num_obstacles": 3,
-          "density_collision_splats": 461,
-          "density_wfc_splats": 0,
-          "repulsion_field_coverage": 0.98
+          "avg_reward": 3.3726111498326063,
+          "num_nodes": 8,
+          "buffer_size": 9976,
+          "loop_integrity": 0.5,
+          "total_loop_breaks": 7909,
+          "total_reconnections": 15,
+          "wfc_triggers": 1977,
+          "collision_events": 233,
+          "num_obstacles": 5,
+          "density_collision_splats": 233,
+          "density_wfc_splats": 15816,
+          "repulsion_field_coverage": 0.8855555555555555
         }
       }
     ]
@@ -424,9 +162,9 @@
       "use_r_gnn": false
     },
     "node": {
-      "total_nodes": 40,
-      "num_nodes_per_holon": 10,
-      "move_speed": 0.015,
+      "total_nodes": 32,
+      "num_nodes_per_holon": 8,
+      "move_speed": 0.01,
       "sensor_range": 0.15
     },
     "spatial": {
@@ -440,25 +178,25 @@
       "hidden_dim": 128,
       "num_layers": 3,
       "n_heads": 4,
-      "lr": 0.0003,
-      "gamma": 0.95,
+      "lr": 0.0001,
+      "gamma": 0.98,
       "dropout": 0.1,
       "buffer_capacity": 15000
     },
     "loop": {
-      "ideal_distance": 0.1,
-      "stiffness": 0.5,
-      "break_threshold": 0.22
+      "ideal_distance": 0.11,
+      "stiffness": 0.45,
+      "break_threshold": 0.23
     },
     "rewards": {
-      "r_flow": 1.0,
-      "r_collision": 25.0,
-      "r_idle": 0.5,
-      "r_loop_integrity": 5.0,
-      "r_collapse_penalty": 10.0,
-      "r_explore": 5.0,
-      "r_reconnection": 0.5,
-      "r_boundary_breach": 3.0
+      "r_flow": 2.0,
+      "r_collision": 35.0,
+      "r_idle": 1.0,
+      "r_loop_integrity": 10.0,
+      "r_collapse_penalty": 20.0,
+      "r_explore": 10.0,
+      "r_reconnection": 10.0,
+      "r_boundary_breach": 4.0
     },
     "repulsion": {
       "local_grid_size": [
@@ -473,96 +211,121 @@
       "gamma_f": 0.9,
       "k_f": 5,
       "sigma_f": 0.05,
-      "decay_lambda": 0.01,
-      "blur_delta": 0.2,
-      "beta": 0.7
+      "decay_lambda": 0.9,
+      "blur_delta": 0.1,
+      "beta": 2.0
     },
     "exploration": {
-      "map_resolution": 0.02,
+      "map_resolution": 0.01,
       "sensor_range": 0.15
     },
     "wfc": {
       "history_length": 200,
       "tail_length": 15,
-      "collapse_threshold": 0.6,
+      "collapse_threshold": 0.55,
       "tau": 3
     },
     "obstacles": [
       [
-        0.629,
-        0.557,
-        0.02
+        0.029,
+        0.257,
+        0.008
       ],
       [
-        0.529,
-        0.286,
-        0.02
+        0.129,
+        0.486,
+        0.008
       ],
       [
-        0.286,
-        0.543,
-        0.02
+        0.486,
+        0.143,
+        0.008
       ],
       [
         0.071,
         0.429,
-        0.02
+        0.008
       ],
       [
         0.029,
         0.208,
-        0.02
+        0.008
       ],
       [
+        0.029,
+        0.657,
+        0.008
+      ],
+      [
+        0.129,
         0.786,
-        0.304,
-        0.02
+        0.008
       ],
       [
-        0.471,
-        0.502,
-        0.02
+        0.486,
+        0.843,
+        0.008
+      ],
+      [
+        0.071,
+        0.882,
+        0.008
+      ],
+      [
+        0.629,
+        0.257,
+        0.008
       ],
       [
         0.829,
-        0.457,
-        0.02
+        0.486,
+        0.008
       ],
       [
-        0.779,
-        0.506,
-        0.02
-      ],
-      [
-        0.236,
-        0.103,
-        0.02
-      ],
-      [
-        0.771,
-        0.709,
-        0.02
-      ],
-      [
-        0.329,
-        0.478,
-        0.02
-      ],
-      [
-        0.406,
-        0.494,
-        0.02
+        0.986,
+        0.143,
+        0.008
       ],
       [
         0.571,
-        0.122,
-        0.02
+        0.429,
+        0.008
+      ],
+      [
+        0.729,
+        0.208,
+        0.008
+      ],
+      [
+        0.629,
+        0.557,
+        0.008
+      ],
+      [
+        0.829,
+        0.786,
+        0.008
+      ],
+      [
+        0.986,
+        0.643,
+        0.008
+      ],
+      [
+        0.571,
+        0.829,
+        0.008
+      ],
+      [
+        0.729,
+        0.908,
+        0.008
       ]
     ],
     "moving_obstacles": [],
     "training": {
-      "num_episodes": 60,
-      "steps_per_episode": 100,
+      "num_episodes": 20,
+      "steps_per_episode": 400,
       "target_update_frequency": 100,
       "save_frequency": 100,
       "metrics_save_frequency": 20

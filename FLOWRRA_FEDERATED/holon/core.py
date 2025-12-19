@@ -511,9 +511,9 @@ class FLOWRRA_Orchestrator:
                 node.pos = best_candidate
 
                 # If we're STILL stuck (best_distance is very small), add extra random kick
-                if best_distance_from_obstacle < 0.05:
+                if best_distance_from_obstacle < 0.09:
                     # Emergency escape: large random displacement
-                    random_kick = np.random.uniform(-0.06, 0.06, self.dims)
+                    random_kick = np.random.uniform(-0.09, 0.09, self.dims)
                     node.pos = node.pos + random_kick
                     print(f"[Emergency] Node {node.id} received random escape kick")
 

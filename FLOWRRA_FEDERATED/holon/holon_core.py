@@ -89,31 +89,27 @@ class Holon:
 
         self.orchestrator.obstacle_manager.obstacles = []
 
-        # Get obstacles from config
-        global_obstacles_raw = self.cfg.get("obstacles", [])
+        # --- FIXED: Localize Obstacles for "The Delusion" ---
+        self.orchestrator.obstacle_manager.obstacles = []
+        global_obstacles = self.cfg.get("obstacles", [])
 
-        # Holon dimensions
-        w = self.x_max - self.x_min
-        h = self.y_max - self.y_min
+        # Calculate Holon width for radius scaling
+        h_width = self.x_max - self.x_min
 
-        for obs_cfg in global_obstacles_raw:
-            # Assuming obs_cfg is [x, y, r]
-            ox, oy, orad = obs_cfg
-
-            # 1. Check if obstacle overlaps with this quadrant
-            if (
-                ox + orad > self.x_min
-                and ox - orad < self.x_max
-                and oy + orad > self.y_min
-                and oy - orad < self.y_max
+        for obs_cfg in global_obstacles:
+            x, y, r = obs_cfg
+            # 1. Check if obstacle overlaps with this Holon's bounds
+            if (self.x_min - r <= x <= self.x_max + r) and (
+                self.y_min - r <= y <= self.y_max + r
             ):
-                # 2. Translate position to local 0.0-1.0
-                local_pos = self._to_local(np.array([ox, oy]))
+                # 2. FIX: Translate Global Pos to Local [0,1]
+                local_pos = self._to_local(np.array([x, y]))
 
-                # 3. Scale the radius (Local Radius = Global Radius / Holon Width)
-                local_radius = orad / w
+                # 3. FIX: Scale Radius relative to Holon size, not World size
+                # If the holon is 0.5 wide, a 0.05 radius obstacle
+                # is actually 0.1 wide in local [0,1] space.
+                local_radius = r / h_width
 
-                # 4. Add to local orchestrator
                 self.orchestrator.obstacle_manager.add_static_obstacle(
                     local_pos, local_radius
                 )
@@ -139,20 +135,7 @@ class Holon:
 
         # --- NEW: Localize Obstacles ---
         # Clear default obstacles from the internal manager
-        self.orchestrator.obstacle_manager.obstacles = []
-
-        global_obstacles = self.cfg.get("obstacles", [])
-        for obs_cfg in global_obstacles:
-            x, y, r = obs_cfg
-            # Check if obstacle overlaps with this Holon's bounds
-            if (self.x_min - r <= x <= self.x_max + r) and (
-                self.y_min - r <= y <= self.y_max + r
-            ):
-                # Add the obstacle to the Holon's local orchestrator
-                # Note: core.py's check_collision expects coordinates in the same scale as node.pos
-                self.orchestrator.obstacle_manager.add_static_obstacle(
-                    np.array([x, y]), r / self.cfg["spatial"]["world_bounds"][0]
-                )
+        self._localize_internal_obstacles()
 
         print(
             f"[Holon {self.holon_id}] Localized {len(self.orchestrator.obstacle_manager.obstacles)} obstacles."
@@ -162,7 +145,24 @@ class Holon:
         self.orchestrator.nodes = self.nodes
 
         # Initialize loop
-        self.orchestrator.loop.initialize_ring_topology(len(self.nodes))
+        # --- FIXED: Manual Ring Initialization with Offset IDs ---
+        self.orchestrator.loop.connections.clear()
+        num_local_nodes = len(self.nodes)
+
+        for i in range(num_local_nodes):
+            # Get the ACTUAL global IDs of the neighbors
+            node_a_id = self.nodes[i].id
+            node_b_id = self.nodes[(i + 1) % num_local_nodes].id
+
+            # Create the connection using the real IDs
+            from holon.loop import Connection  # Ensure import exists
+
+            conn = Connection(
+                node_a_id=node_a_id,
+                node_b_id=node_b_id,
+                ideal_distance=self.orchestrator.loop.ideal_distance,
+            )
+            self.orchestrator.loop.connections.append(conn)
 
         # Warmup
         self.orchestrator._physics_warmup(steps=50)

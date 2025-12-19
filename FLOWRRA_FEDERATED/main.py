@@ -451,23 +451,21 @@ class FederatedFLOWRRA:
         print(f"\n[Main] ✅ Deployment file created at {filepath}")
         return filepath
 
-    def visualize_federated_map(self, episode: int, save_path: str = None):
+    def visualize_federated_map(self, episode: int):
         """
-        Stitches all holons together into a single global view using
-        actual attributes from core.py and loop.py.
+        Stitches all holons together into a single global view.
+        FIX: Re-projects localized obstacles back to global space for the render.
         """
-
         fig, ax = plt.subplots(figsize=(12, 12))
-
-        # Use world bounds from config (usually 1.0, 1.0)
         bounds = self.cfg["federation"]["world_bounds"]
         ax.set_xlim(0, bounds[0])
         ax.set_ylim(0, bounds[1])
         ax.set_title(f"FLOWRRA Federated Global Map - Episode {episode}", fontsize=15)
+        save_path = Path("federated_maps")
+        save_path.mkdir(exist_ok=True)
 
-        # 1. Draw Holon Partitions & Their Internal Obstacles
         for h_id, holon in self.holons.items():
-            # Draw boundary box for the Holon partition
+            # 1. Draw Holon Partition Boundary
             rect = patches.Rectangle(
                 (holon.x_min, holon.y_min),
                 holon.x_max - holon.x_min,
@@ -477,63 +475,41 @@ class FederatedFLOWRRA:
                 facecolor="none",
                 linestyle="--",
                 alpha=0.3,
-                zorder=1,
             )
             ax.add_patch(rect)
-            ax.text(
-                holon.x_min + 0.01,
-                holon.y_max - 0.03,
-                f"HOLON-{h_id}",
-                fontsize=10,
-                fontweight="bold",
-                color="black",
-                alpha=0.6,
-            )
 
-            # Draw Obstacles using the Obstacle objects in ObstacleManager
-            # Based on obstacles.py: ObstacleManager.obstacles is a List[Obstacle]
+            # 2. Draw Obstacles (Translated back to Global Space)
             for obs in holon.orchestrator.obstacle_manager.obstacles:
+                # Re-denormalize the local position back to the global quadrant
+                global_obs_pos = holon._to_global(obs.pos).tolist()
+                # Re-scale radius: local_r * holon_width = global_r
+                global_radius = obs.radius * (holon.x_max - holon.x_min)
+
                 circle = patches.Circle(
-                    obs.pos,  # Accessing .pos attribute of Obstacle object
-                    obs.radius,  # Accessing .radius attribute
-                    color="red",
-                    alpha=0.25,
-                    zorder=2,
+                    global_obs_pos, global_radius, color="red", alpha=0.25, zorder=2
                 )
                 ax.add_patch(circle)
 
-        # 2. Draw Nodes and Connections
-        for h_id, holon in self.holons.items():
-            if not holon.nodes:
-                continue
-
-            # Create a lookup for node positions by ID within this holon
+            # 3. Draw Nodes and Connections
             node_positions = {node.id: node.pos for node in holon.nodes}
-
-            # Draw Connections based on loop.py LoopStructure
-            # We iterate through the Connection objects
             for conn in holon.orchestrator.loop.connections:
                 if (
                     conn.node_a_id in node_positions
                     and conn.node_b_id in node_positions
                 ):
-                    p1 = node_positions[conn.node_a_id]
-                    p2 = node_positions[conn.node_b_id]
-
-                    # Draw line. Color changes if the connection is broken
-                    color = "red" if conn.is_broken else "cyan"
-                    alpha = 0.8 if not conn.is_broken else 0.3
-
+                    p1, p2 = (
+                        node_positions[conn.node_a_id],
+                        node_positions[conn.node_b_id],
+                    )
                     ax.plot(
                         [p1[0], p2[0]],
                         [p1[1], p2[1]],
-                        color=color,
-                        alpha=alpha,
+                        color="red" if conn.is_broken else "cyan",
+                        alpha=0.8,
                         linewidth=1.5,
                         zorder=3,
                     )
 
-            # Draw the actual nodes
             all_pos = np.array([n.pos for n in holon.nodes])
             ax.scatter(
                 all_pos[:, 0],
@@ -541,18 +517,13 @@ class FederatedFLOWRRA:
                 s=40,
                 c="blue",
                 edgecolors="white",
-                linewidth=0.8,
                 zorder=4,
-                label=f"Holon {h_id}" if h_id == 0 else "",
             )
 
-        ax.set_aspect("equal")
-        plt.xlabel("Global X Coordinate")
-        plt.ylabel("Global Y Coordinate")
-        plt.grid(True, which="both", linestyle=":", alpha=0.5)
-
+        plt.grid(True, linestyle=":", alpha=0.5)
+        save_path = save_path / f"Visualization_episode_{episode}.png"
         if save_path:
-            plt.savefig(save_path, bbox_inches="tight")
+            plt.savefig(save_path)
             plt.close()
         else:
             plt.show()
@@ -573,9 +544,9 @@ class FederatedFLOWRRA:
             if episode % self.cfg["training"]["metrics_save_frequency"] == 0:
                 self.save_metrics()
 
-            """# Save Visualization of Federated Map
-            if episode % 5 == 0:
-                self.visualize_federated_map(episode=episode)"""
+            # Save Visualization of Federated Map
+            if episode % 10 == 0:
+                self.visualize_federated_map(episode=episode)
 
         print(f"\n[Main] Training complete!")
 

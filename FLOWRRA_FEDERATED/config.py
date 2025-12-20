@@ -70,7 +70,7 @@ CONFIG = {
         "sigma_f": 0.05,
         "decay_lambda": 0.9,
         "blur_delta": 0.1,
-        "beta": 2.0,
+        "beta": 0.3,
     },
     # ==================== EXPLORATION ====================
     "exploration": {
@@ -79,8 +79,8 @@ CONFIG = {
     },
     # ==================== WFC RECOVERY ====================
     "wfc": {
-        "history_length": 200,
-        "tail_length": 15,
+        "history_length": 150,
+        "tail_length": 8,
         "collapse_threshold": 0.55,
         "tau": 3,
     },
@@ -110,7 +110,7 @@ CONFIG = {
     # ==================== TRAINING ====================
     "training": {
         "num_episodes": 100,
-        "steps_per_episode": 400,
+        "steps_per_episode": 500,
         "target_update_frequency": 100,
         "save_frequency": 100,
         "metrics_save_frequency": 20,

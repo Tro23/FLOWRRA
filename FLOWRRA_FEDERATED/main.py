@@ -279,24 +279,51 @@ class FederatedFLOWRRA:
         axes[2, 0].set_ylabel("Loss")
         axes[2, 0].grid(alpha=0.3)
 
-        # Epsilon Schedule (should be same for all, just show one)
-        first_holon = list(self.holons.values())[0]
-        if first_holon.orchestrator and hasattr(
-            first_holon.orchestrator, "metrics_history"
-        ):
-            epsilons = [
-                m.get("epsilon")
-                for m in first_holon.orchestrator.metrics_history
-                if m.get("epsilon") is not None
-            ]
-            if epsilons:
-                axes[2, 1].plot(epsilons, color="purple", linewidth=2)
-                axes[2, 1].set_title("Exploration Rate (ε)")
-            else:
-                axes[2, 1].set_title("Exploration Rate (ε) - No Data Yet")
-        axes[2, 1].set_xlabel("Step")
-        axes[2, 1].set_ylabel("Epsilon")
-        axes[2, 1].grid(alpha=0.3)
+        # WFC Recovery Mode Distribution
+        wfc_spatial = []
+        wfc_temporal = []
+        holon_ids_wfc = []
+
+        for holon_id, holon in self.holons.items():
+            if holon.orchestrator and hasattr(holon.orchestrator, "wfc"):
+                wfc_stats = holon.orchestrator.wfc.get_statistics()
+                wfc_spatial.append(wfc_stats.get("spatial_recoveries", 0))
+                wfc_temporal.append(wfc_stats.get("temporal_recoveries", 0))
+                holon_ids_wfc.append(holon_id)
+
+        if wfc_spatial or wfc_temporal:
+            x = np.arange(len(holon_ids_wfc))
+            width = 0.35
+
+            axes[2, 1].bar(
+                x - width / 2,
+                wfc_spatial,
+                width,
+                label="Spatial (Forward)",
+                color="green",
+                alpha=0.7,
+            )
+            axes[2, 1].bar(
+                x + width / 2,
+                wfc_temporal,
+                width,
+                label="Temporal (Backward)",
+                color="purple",
+                alpha=0.7,
+            )
+
+            axes[2, 1].set_xticks(x)
+            axes[2, 1].set_xticklabels([f"H{hid}" for hid in holon_ids_wfc])
+            axes[2, 1].set_title("WFC Recovery Modes")
+            axes[2, 1].set_xlabel("Holon ID")
+            axes[2, 1].set_ylabel("Count")
+            axes[2, 1].legend()
+            axes[2, 1].grid(alpha=0.3, axis="y")
+        else:
+            axes[2, 1].set_title("WFC Recovery Modes (No Data Yet)")
+            axes[2, 1].set_xlabel("Holon ID")
+            axes[2, 1].set_ylabel("Count")
+            axes[2, 1].grid(alpha=0.3)
 
         # Total WFC Triggers Across Federation
         wfc_counts = []

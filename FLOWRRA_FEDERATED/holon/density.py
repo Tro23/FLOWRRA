@@ -251,7 +251,7 @@ class DensityFunctionEstimatorND:
                 ]
             )
 
-    def get_repulsion_potential_for_node(
+    def get_affordance_potential_for_node(
         self, node_pos: np.ndarray, repulsion_sources: List[Dict[str, Any]]
     ) -> np.ndarray:
         """
@@ -304,8 +304,14 @@ class DensityFunctionEstimatorND:
                     local_grid[tuple(local_indices)] += (
                         self.eta * temporal_weight * spatial_weight
                     )
+        # THE AFFORDANCE FLIP
+        # Clip to [0,1] to ensure we don't subtract into negative space
+        normalized_repulsion = np.clip(local_grid, 0.0, 1.0)
 
-        return self.beta * local_grid
+        # Open world is 1.0; Obstacles drop the potential toward ( 1- beta)
+        affordance_field = 1.0 - (self.beta * normalized_repulsion)
+
+        return affordance_field
 
     def _world_to_local_grid(
         self, relative_pos: np.ndarray, local_extent: float
@@ -361,7 +367,7 @@ class DensityFunctionEstimatorND:
             )
 
             # Compute local field
-            local_grid = self.get_repulsion_potential_for_node(
+            local_grid = self.get_affordance_potential_for_node(
                 node_pos=node.pos, repulsion_sources=all_detections
             )
 

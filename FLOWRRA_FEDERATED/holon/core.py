@@ -52,6 +52,9 @@ class FLOWRRA_Orchestrator:
             tail_length=self.cfg["wfc"]["tail_length"],
             collapse_threshold=self.cfg["wfc"]["collapse_threshold"],
             tau=self.cfg["wfc"]["tau"],
+            # NEW: Pass grid parameters for spatial collapse
+            global_grid_shape=self.cfg["repulsion"]["global_grid_shape"],
+            local_grid_size=self.cfg["repulsion"]["local_grid_size"],
         )
 
         # NEW: Obstacle Manager
@@ -234,7 +237,7 @@ class FLOWRRA_Orchestrator:
                 self.obstacle_manager.get_all_states()
             )
             repulsion_sources = node_detections + obstacle_detections
-            local_grid = self.density.get_repulsion_potential_for_node(
+            local_grid = self.density.get_affordance_potential_for_node(
                 node.pos, repulsion_sources
             )
             feats = node.get_state_vector(
@@ -378,8 +381,9 @@ class FLOWRRA_Orchestrator:
             all_obstacle_states=self.obstacle_manager.get_all_states(),
         )
 
-        # --- 6. Build State Representations ---
+        # --- 6. Build State Representations & Store Local Grids ---
         node_features = []
+        local_grids = []  # NEW: Store grids for WFC spatial collapse
         adj_mat = build_adjacency_matrix(
             self.nodes, self.cfg["exploration"]["sensor_range"]
         )
@@ -391,11 +395,14 @@ class FLOWRRA_Orchestrator:
                 self.obstacle_manager.get_all_states()
             )
 
-            # Get repulsion field
+            # Get affordance field
             repulsion_sources = node_detections + obstacle_detections
-            local_grid = self.density.get_repulsion_potential_for_node(
+            local_grid = self.density.get_affordance_potential_for_node(
                 node_pos=node.pos, repulsion_sources=repulsion_sources
             )
+
+            # Store grid for spatial collapse
+            local_grids.append(local_grid)
 
             # Construct state vector
             feats = node.get_state_vector(
@@ -416,11 +423,9 @@ class FLOWRRA_Orchestrator:
             total_episodes=total_episodes,
         )
 
-        # Get current epsilon from GNN for tracking
-        current_epsilon = (
-            self.gnn.epsilon_gaussian(self.current_episode, total_episodes)
-            if hasattr(self.gnn, "get_current_epsilon")
-            else None
+        # Get current epsilon for tracking
+        current_epsilon = self.gnn.epsilon_gaussian(
+            self.current_episode, total_episodes
         )
 
         # --- 8. Physics & Reward Calculation with Collision Response ---
@@ -649,20 +654,19 @@ class FLOWRRA_Orchestrator:
             if self.step_count % 100 == 0:
                 self.gnn.update_target_network()
 
-        # --- 10. Enhanced WFC with Loop Awareness ---
+        # --- 10. Enhanced WFC with Loop Awareness & Spatial Collapse ---
         loop_integrity = self.loop.calculate_integrity()
         current_coherence = self.calculate_coherence(step_rewards_array, loop_integrity)
 
-        self.wfc.assess_loop_coherence(
-            current_coherence, self.nodes, loop_integrity
-        )  # Pass integrity!
+        self.wfc.assess_loop_coherence(current_coherence, self.nodes, loop_integrity)
 
         # Trigger recovery if needed
         if self.wfc.needs_recovery() or not self.loop.is_loop_coherent(
             min_integrity=0.5
         ):
             print(
-                f"\n[!] Step {episode_step}: System unstable (coherence={current_coherence:.2f}, integrity={loop_integrity:.2f})"
+                f"\n[!] Step {episode_step}: System unstable "
+                f"(coherence={current_coherence:.2f}, integrity={loop_integrity:.2f})"
             )
             print("[WFC] Triggering recovery...")
 
@@ -670,33 +674,40 @@ class FLOWRRA_Orchestrator:
             failed_positions = [node.pos.copy() for node in self.nodes]
             failed_velocities = [node.velocity() for node in self.nodes]
 
-            recovery_info = self.wfc.collapse_and_reinitialize(self.nodes)
+            # Call WFC with local grids for spatial collapse attempt
+            recovery_info = self.wfc.collapse_and_reinitialize(
+                nodes=self.nodes,
+                local_grids=local_grids,  # NEW: Pass grids for spatial collapse
+                ideal_dist=self.cfg["loop"]["ideal_distance"],
+            )
 
             # Repair all loop connections after recovery
             self.loop.repair_all_connections()
 
             print(f"[WFC] Recovery complete: {recovery_info}")
 
-            # CRITICAL: Retrocausal repulsion splatting
-            # Splat repulsion along the entire failed loop path
-            # This teaches "this configuration was bad, avoid it"
-            collapse_severity = (
-                1.0 - current_coherence
-            ) * 0.15  # Worse coherence = stronger repulsion
+            # RETROCAUSAL REPULSION SPLATTING
+            # Initialize before conditional
+            collapse_severity = 0.0
+            # Only splat if TEMPORAL recovery (spatial doesn't need it)
+            if recovery_info.get("reinit_from") != "spatial_affordance":
+                # diag = self.wfc.diagnose_spatial_failure(self.nodes, local_grids)
+                # print(f"[WFC Diagnostics] {diag}")
+                collapse_severity = (1.0 - current_coherence) * 0.15
 
-            print(
-                f"[WFC] Splatting retrocausal repulsion (severity={collapse_severity:.2f}) along failed path..."
-            )
-
-            for i, node in enumerate(self.nodes):
-                # Splat at each node's failed position with its velocity
-                self.density.splat_collision_event(
-                    position=failed_positions[i],
-                    velocity=failed_velocities[i],
-                    severity=collapse_severity,
-                    node_id=node.id,
-                    is_wfc_event=True,  # Flag as collapse event
+                print(
+                    f"[WFC] Splatting retrocausal repulsion "
+                    f"(severity={collapse_severity:.2f}) along failed path..."
                 )
+
+                for i, node in enumerate(self.nodes):
+                    self.density.splat_collision_event(
+                        position=failed_positions[i],
+                        velocity=failed_velocities[i],
+                        severity=collapse_severity,
+                        node_id=node.id,
+                        is_wfc_event=True,
+                    )
 
             self.wfc_trigger_events.append(
                 {
@@ -704,41 +715,43 @@ class FLOWRRA_Orchestrator:
                     "coherence": current_coherence,
                     "loop_integrity": loop_integrity,
                     "recovery_info": recovery_info,
-                    "repulsion_severity": collapse_severity,
+                    "repulsion_severity": collapse_severity
+                    if recovery_info.get("reinit_from") != "spatial_affordance"
+                    else 0.0,
                 }
             )
 
-            # Force a learning update for the crash
+            # Force a learning update for the crash (only for temporal)
             if self.mode == "training" and self.last_state is not None:
-                last_features, last_adj, last_actions = self.last_state
+                if recovery_info.get("reinit_from") != "spatial_affordance":
+                    last_features, last_adj, last_actions = self.last_state
 
-                # Punishment reward for causing a collapse
-                collapse_penalty = np.full(len(self.nodes), -5.0)
+                    # Punishment reward for causing a collapse
+                    collapse_penalty = np.full(len(self.nodes), -5.0)
 
-                # We use the NEW (recovered) features as the next state
-                # This teaches: "If you do X, you teleport to Safe State Y with -5 points"
-                recovered_features = (
-                    self._get_current_node_features()
-                )  # Helper needed (see below)
+                    # Get recovered state features
+                    recovered_features = self._get_current_node_features()
+                    recovered_adj = build_adjacency_matrix(
+                        self.nodes, self.cfg["exploration"]["sensor_range"]
+                    )
+
+                    self.gnn.memory.push(
+                        node_features=last_features,
+                        adj_matrix=last_adj,
+                        actions=last_actions,
+                        rewards=collapse_penalty,
+                        next_node_features=recovered_features,
+                        next_adj_matrix=recovered_adj,
+                        done=False,
+                    )
+
+            # Update last_state to recovered state
+            if recovery_info.get("reinit_from") != "spatial_affordance":
+                recovered_features = self._get_current_node_features()
                 recovered_adj = build_adjacency_matrix(
                     self.nodes, self.cfg["exploration"]["sensor_range"]
                 )
-
-                self.gnn.memory.push(
-                    node_features=last_features,
-                    adj_matrix=last_adj,
-                    actions=last_actions,
-                    rewards=collapse_penalty,
-                    next_node_features=recovered_features,
-                    next_adj_matrix=recovered_adj,
-                    done=False,
-                )
-
-            # Update last_state to the RECOVERED state so the next step makes sense
-            recovered_features = self._get_current_node_features()
-            recovered_adj = build_adjacency_matrix(
-                self.nodes, self.cfg["exploration"]["sensor_range"]
-            )
+                self.last_state = (recovered_features, recovered_adj, actions)
 
         # --- 11. Record State & Metrics ---
         self.record_state(episode_step, current_coherence, loop_integrity)

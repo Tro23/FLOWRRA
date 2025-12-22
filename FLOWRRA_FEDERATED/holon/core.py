@@ -660,6 +660,10 @@ class FLOWRRA_Orchestrator:
 
         self.wfc.assess_loop_coherence(current_coherence, self.nodes, loop_integrity)
 
+        # NEW: Track recovery mode for differential rewards
+        recovery_mode = None
+        wfc_recovery_bonus = 0.0
+
         # Trigger recovery if needed
         if self.wfc.needs_recovery() or not self.loop.is_loop_coherent(
             min_integrity=0.5
@@ -677,8 +681,9 @@ class FLOWRRA_Orchestrator:
             # Call WFC with local grids for spatial collapse attempt
             recovery_info = self.wfc.collapse_and_reinitialize(
                 nodes=self.nodes,
-                local_grids=local_grids,  # NEW: Pass grids for spatial collapse
+                local_grids=local_grids,
                 ideal_dist=self.cfg["loop"]["ideal_distance"],
+                config=self.cfg,  # NEW: Pass full config for tuning
             )
 
             # Repair all loop connections after recovery
@@ -686,13 +691,33 @@ class FLOWRRA_Orchestrator:
 
             print(f"[WFC] Recovery complete: {recovery_info}")
 
+            # NEW: Determine recovery mode and calculate differential reward
+            recovery_mode = recovery_info.get("reinit_from")
+
+            if recovery_mode == "spatial_affordance":
+                # SPATIAL RECOVERY: Big reward for forward-looking solution!
+                wfc_recovery_bonus = self.cfg["rewards"]["r_reconnection_spatial"]
+                print(
+                    f"[WFC Reward] +{wfc_recovery_bonus:.1f} for SPATIAL recovery! 🎉"
+                )
+
+            elif recovery_mode == "coherent_tail":
+                # TEMPORAL RECOVERY: Small reward for backward-looking fallback
+                wfc_recovery_bonus = self.cfg["rewards"]["r_reconnection_temporal"]
+                print(
+                    f"[WFC Reward] +{wfc_recovery_bonus:.1f} for temporal recovery (fallback)"
+                )
+
+            else:
+                # RANDOM JITTER: No reward (failure mode)
+                wfc_recovery_bonus = 0.0
+                print(f"[WFC Reward] No bonus - random jitter used")
+
             # RETROCAUSAL REPULSION SPLATTING
-            # Initialize before conditional
             collapse_severity = 0.0
+
             # Only splat if TEMPORAL recovery (spatial doesn't need it)
-            if recovery_info.get("reinit_from") != "spatial_affordance":
-                # diag = self.wfc.diagnose_spatial_failure(self.nodes, local_grids)
-                # print(f"[WFC Diagnostics] {diag}")
+            if recovery_mode != "spatial_affordance":
                 collapse_severity = (1.0 - current_coherence) * 0.15
 
                 print(
@@ -715,21 +740,29 @@ class FLOWRRA_Orchestrator:
                     "coherence": current_coherence,
                     "loop_integrity": loop_integrity,
                     "recovery_info": recovery_info,
-                    "repulsion_severity": collapse_severity
-                    if recovery_info.get("reinit_from") != "spatial_affordance"
-                    else 0.0,
+                    "recovery_mode": recovery_mode,
+                    "recovery_bonus": wfc_recovery_bonus,
+                    "repulsion_severity": collapse_severity,
                 }
             )
 
             # Force a learning update for the crash (only for temporal)
             if self.mode == "training" and self.last_state is not None:
-                if recovery_info.get("reinit_from") != "spatial_affordance":
+                if recovery_mode != "spatial_affordance":
                     last_features, last_adj, last_actions = self.last_state
 
-                    # Punishment reward for causing a collapse
-                    collapse_penalty = np.full(len(self.nodes), -5.0)
+                    # NEW: Differential punishment
+                    # Temporal recovery gets moderate penalty (you failed but recovered)
+                    # Random jitter gets heavy penalty (you failed completely)
+                    if recovery_mode == "coherent_tail":
+                        collapse_penalty = np.full(
+                            len(self.nodes), -2.0
+                        )  # Moderate penalty
+                    else:
+                        collapse_penalty = np.full(
+                            len(self.nodes), -8.0
+                        )  # Heavy penalty
 
-                    # Get recovered state features
                     recovered_features = self._get_current_node_features()
                     recovered_adj = build_adjacency_matrix(
                         self.nodes, self.cfg["exploration"]["sensor_range"]
@@ -746,12 +779,19 @@ class FLOWRRA_Orchestrator:
                     )
 
             # Update last_state to recovered state
-            if recovery_info.get("reinit_from") != "spatial_affordance":
+            if recovery_mode != "spatial_affordance":
                 recovered_features = self._get_current_node_features()
                 recovered_adj = build_adjacency_matrix(
                     self.nodes, self.cfg["exploration"]["sensor_range"]
                 )
                 self.last_state = (recovered_features, recovered_adj, actions)
+
+        # NEW: Apply WFC recovery bonus to all nodes (collective achievement!)
+        if wfc_recovery_bonus > 0:
+            step_rewards_array += wfc_recovery_bonus
+            print(
+                f"[Reward] All nodes receive +{wfc_recovery_bonus:.1f} for {recovery_mode} recovery"
+            )
 
         # --- 11. Record State & Metrics ---
         self.record_state(episode_step, current_coherence, loop_integrity)

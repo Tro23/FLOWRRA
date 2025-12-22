@@ -164,22 +164,37 @@ class Wave_Function_Collapse:
         return float(np.mean(integrity_scores))
 
     def _spatial_affordance_collapse(
-        self, nodes: List[Any], local_grids: List[np.ndarray], ideal_dist: float = 0.8
+        self,
+        nodes: List[Any],
+        local_grids: List[np.ndarray],
+        ideal_dist: float = 0.6,
+        config: dict = None,  # NEW: Accept config for tuning
     ) -> bool:
         """
-        FIXED: Forward-looking collapse using current affordance field.
+        TUNABLE: Forward-looking collapse using current affordance field.
 
-        Key improvements:
-        - Larger search radius matching local grid extent
-        - More samples for better coverage
-        - Proper toroidal distance calculations
-        - Weighted scoring (affordance + integrity)
+        Uses config parameters for search radius, samples, and thresholds.
         """
-        # Search parameters
-        search_radius = self.local_extent * 0.9  # Search 70% of local grid coverage
-        samples = 32  # Increased from 12 for better coverage
+        # Get tuning parameters from config (with fallbacks)
+        if config is None:
+            search_radius_mult = 0.9
+            samples = 32
+            integrity_threshold = 0.7
+            improvement_min = 1.05
+        else:
+            wfc_cfg = config.get("wfc", {})
+            search_radius_mult = wfc_cfg.get("spatial_search_radius_mult", 0.9)
+            samples = wfc_cfg.get("spatial_samples", 32)
+            integrity_threshold = wfc_cfg.get("spatial_accept_threshold", 0.65)
+            improvement_min = wfc_cfg.get("spatial_improvement_min", 1.03)
 
-        print(f"[WFC Spatial] Search radius: {search_radius:.4f}, samples: {samples}")
+        # Search parameters
+        search_radius = self.local_extent * search_radius_mult
+
+        print(
+            f"[WFC Spatial] radius={search_radius:.4f}, samples={samples}, "
+            f"integrity_thresh={integrity_threshold:.2f}, improvement_min={improvement_min:.2f}"
+        )
 
         new_positions = []
         improvement_scores = []
@@ -194,14 +209,11 @@ class Wave_Function_Collapse:
             for sample_idx in range(samples):
                 # Generate candidate with uniform distribution over search radius
                 angle = (sample_idx / samples) * 2 * np.pi
-                radius = search_radius * np.sqrt(
-                    np.random.uniform(0, 1)
-                )  # Uniform disk sampling
+                radius = search_radius * np.sqrt(np.random.uniform(0, 1))
 
                 if node.dimensions == 2:
                     jitter = np.array([radius * np.cos(angle), radius * np.sin(angle)])
                 else:  # 3D
-                    # For 3D, add vertical component
                     elevation = np.random.uniform(-search_radius, search_radius)
                     jitter = np.array(
                         [radius * np.cos(angle), radius * np.sin(angle), elevation]
@@ -234,7 +246,7 @@ class Wave_Function_Collapse:
                     best_pos = candidate_pos
 
             # Track improvement
-            improvement = best_score / max(current_aff, 0.01)  # Avoid div by zero
+            improvement = best_score / max(current_aff, 0.01)
             improvement_scores.append(improvement)
             new_positions.append(best_pos)
 
@@ -243,37 +255,39 @@ class Wave_Function_Collapse:
         avg_improvement = np.mean(improvement_scores)
 
         print(
-            f"[WFC Spatial] Virtual integrity: {virtual_integrity:.3f}, Avg improvement: {avg_improvement:.3f}"
+            f"[WFC Spatial] Virtual integrity: {virtual_integrity:.3f}, "
+            f"Avg improvement: {avg_improvement:.3f}"
         )
 
-        # Accept if integrity is good AND we improved affordance
+        # NEW: Use configurable thresholds
         if (
-            virtual_integrity > 0.7 and avg_improvement > 1.05
-        ):  # At least 5% improvement
+            virtual_integrity > integrity_threshold
+            and avg_improvement > improvement_min
+        ):
             for i, node in enumerate(nodes):
                 node.pos = new_positions[i].copy()
-                node.last_pos = new_positions[i].copy()  # Reset velocity tracking
+                node.last_pos = new_positions[i].copy()
 
-            print(f"[WFC Spatial] SUCCESS! Moved to better configuration")
+            print(f"[WFC Spatial] ✅ SUCCESS! Moved to better configuration")
             self.spatial_recoveries += 1
             return True
         else:
-            print(f"[WFC Spatial] REJECTED - insufficient improvement")
+            print(
+                f"[WFC Spatial] ❌ REJECTED - "
+                f"integrity={virtual_integrity:.3f} (need >{integrity_threshold:.2f}), "
+                f"improvement={avg_improvement:.3f} (need >{improvement_min:.2f})"
+            )
             return False
 
     def collapse_and_reinitialize(
         self,
         nodes: List[Any],
         local_grids: Optional[List[np.ndarray]] = None,
-        ideal_dist: float = 0.8,
+        ideal_dist: float = 0.6,
+        config: dict = None,  # NEW: Accept config
     ) -> Dict[str, Any]:
         """
         Main recovery method with dual-mode collapse.
-
-        Priority:
-        1. Try spatial collapse (forward-looking)
-        2. Fallback to temporal collapse (backward-looking)
-        3. Last resort: random jitter
         """
         self.total_collapses += 1
 
@@ -283,9 +297,10 @@ class Wave_Function_Collapse:
         if local_grids is not None and len(local_grids) == len(nodes):
             print(f"[WFC] Attempting SPATIAL collapse...")
 
-            if self._spatial_affordance_collapse(nodes, local_grids, ideal_dist):
-                # Spatial collapse succeeded - no amnesia needed!
-                # The agents moved to a better position based on current field
+            # NEW: Pass config for tunable parameters
+            if self._spatial_affordance_collapse(
+                nodes, local_grids, ideal_dist, config=config
+            ):
                 self.successful_recoveries += 1
 
                 return {

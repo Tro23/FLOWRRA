@@ -200,6 +200,7 @@ class GNNPolicy(nn.Module):
         else:
             final_dim = hidden_dim * n_heads
 
+        # HEAD 1: ACTION POLICY
         self.action_decoder = nn.Sequential(
             nn.Linear(final_dim, hidden_dim),
             nn.ReLU(),
@@ -207,9 +208,17 @@ class GNNPolicy(nn.Module):
             nn.Linear(hidden_dim, action_size),
         )
 
-    def forward(
-        self, node_features: torch.Tensor, adj_matrix: torch.Tensor
-    ) -> torch.Tensor:
+        # HEAD 2: STABILITY PREDICTOR
+        # Predicts the scalar loop Integrity (0.0 to 1.0)
+        # We Pool node features to get the graph-level prediction
+        self.stability_head = nn.Sequential(
+            nn.Linear(final_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid(),  # Integrity is [0, 1]
+        )
+
+    def forward(self, node_features: torch.Tensor, adj_matrix: torch.Tensor):
         """
         Args:
             node_features: [batch, num_nodes, node_feature_dim]
@@ -231,7 +240,12 @@ class GNNPolicy(nn.Module):
         # Decode actions: [B, N, action_size]
         q_values = self.action_decoder(h)
 
-        return q_values
+        # Decode Stability (Global)
+        # Mean pool over nodes to get graph representation
+        h_graph = torch.mean(h, dim=1)
+        stability_pred = self.stability_head(h_graph)
+
+        return q_values, stability_pred
 
 
 # =============================================================================
@@ -255,6 +269,7 @@ class GraphReplayBuffer:
         next_node_features: np.ndarray,
         next_adj_matrix: np.ndarray,
         done: bool,
+        integrity: float,
     ):
         """Store a transition."""
         self.buffer.append(
@@ -266,6 +281,7 @@ class GraphReplayBuffer:
                 next_node_features.copy(),
                 next_adj_matrix.copy(),
                 bool(done),
+                integrity,
             )
         )
 
@@ -273,9 +289,16 @@ class GraphReplayBuffer:
         """Sample a batch of transitions."""
         batch = random.sample(self.buffer, batch_size)
 
-        node_feats, adjs, actions, rewards, next_node_feats, next_adjs, dones = zip(
-            *batch
-        )
+        (
+            node_feats,
+            adjs,
+            actions,
+            rewards,
+            next_node_feats,
+            next_adjs,
+            dones,
+            integrity,
+        ) = zip(*batch)
 
         # Convert to tensors
         node_feats_t = torch.from_numpy(np.array(node_feats, dtype=np.float32)).to(
@@ -289,6 +312,9 @@ class GraphReplayBuffer:
         ).to(DEVICE)
         next_adjs_t = torch.from_numpy(np.array(next_adjs, dtype=np.float32)).to(DEVICE)
         dones_t = torch.from_numpy(np.array(dones, dtype=np.uint8)).to(DEVICE)
+        integrity_target = (
+            torch.FloatTensor(np.array(integrity)).unsqueeze(-1).to(DEVICE)
+        )
 
         return (
             node_feats_t,
@@ -298,6 +324,7 @@ class GraphReplayBuffer:
             next_node_feats_t,
             next_adjs_t,
             dones_t,
+            integrity_target,
         )
 
     def __len__(self) -> int:
@@ -329,6 +356,7 @@ class GNNAgent:
         buffer_capacity: int = 15000,
         dropout: float = 0.1,
         seed: int = None,
+        stability_coef: float = 0.5,  # Weight for auxilary loss
     ):
         if seed is not None:
             random.seed(seed)
@@ -339,6 +367,8 @@ class GNNAgent:
 
         self.action_size = action_size
         self.gamma = gamma
+        self.stability_coef = stability_coef
+        self.steps_done = 0
 
         # Policy and target networks
         self.policy_net = GNNPolicy(
@@ -436,10 +466,10 @@ class GNNAgent:
                     .to(DEVICE)
                 )
 
-                q_values = self.policy_net(node_feat_t, adj_t).squeeze(
-                    0
+                q_values, _ = self.policy_net(
+                    node_feat_t, adj_t
                 )  # [num_nodes, action_size]
-                actions = q_values.argmax(dim=1).cpu().numpy()
+                actions = q_values.argmax(dim=2).cpu().numpy().flatten()
 
             self.policy_net.train()
             return actions
@@ -454,20 +484,32 @@ class GNNAgent:
             return 0.0
 
         # Sample batch
-        node_feats, adjs, actions, rewards, next_node_feats, next_adjs, dones = (
-            self.memory.sample(self.batch_size)
-        )
+        (
+            node_feats,
+            adjs,
+            actions,
+            rewards,
+            next_node_feats,
+            next_adjs,
+            dones,
+            integrity,
+        ) = self.memory.sample(self.batch_size)
 
         B, N, _ = node_feats.shape
 
         # Current Q-values
-        q_values = self.policy_net(node_feats, adjs)  # [B, N, A]
+        q_values, curr_stability = self.policy_net(node_feats, adjs)  # [B, N, A]
         actions_idx = actions.unsqueeze(-1)  # [B, N, 1]
         q_values_taken = q_values.gather(2, actions_idx).squeeze(-1)  # [B, N]
 
+        # Integrity target [B, 1]
+        integrity_target = (
+            torch.FloatTensor(np.array(integrity)).unsqueeze(-1).to(DEVICE)
+        )
+
         # Target Q-values
         with torch.no_grad():
-            next_q_values = self.target_net(next_node_feats, next_adjs)  # [B, N, A]
+            next_q_values, _ = self.target_net(next_node_feats, next_adjs)  # [B, N, A]
             next_q_values_max, _ = next_q_values.max(dim=2)  # [B, N]
 
             # Broadcast done mask: [B] -> [B, N]
@@ -475,7 +517,14 @@ class GNNAgent:
             targets = rewards + (self.gamma * next_q_values_max * (1.0 - done_mask))
 
         # Compute loss
-        loss = self.criterion(q_values_taken, targets)
+        q_loss = self.criterion(q_values_taken, targets)
+
+        # --- 2. Compute Stability Loss (Auxiliary) ---
+        # Predict current integrity vs actual integrity
+        stability_loss = F.mse_loss(curr_stability.view(-1), integrity_target.view(-1))
+
+        # --- 3. Total Loss ---
+        loss = q_loss + (self.stability_coef * stability_loss)
 
         # Optimize
         self.optimizer.zero_grad()

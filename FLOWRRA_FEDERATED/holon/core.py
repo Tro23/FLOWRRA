@@ -91,6 +91,7 @@ class FLOWRRA_Orchestrator:
             hidden_dim=self.cfg["gnn"]["hidden_dim"],
             lr=self.cfg["gnn"].get("lr", 0.0003),
             gamma=self.cfg["gnn"].get("gamma", 0.95),
+            stability_coef=self.cfg["gnn"].get("stability_coef", 0.5),
         )
 
         # State tracking
@@ -243,7 +244,9 @@ class FLOWRRA_Orchestrator:
             feats = node.get_state_vector(
                 local_grid, node_detections, obstacle_detections
             )
+
             node_features.append(feats)
+
         return np.array(node_features, dtype=np.float32)
 
     def detect_and_unstick_nodes(self):
@@ -292,11 +295,12 @@ class FLOWRRA_Orchestrator:
         """Calculate the dimension of the GNN input vector."""
         dummy_rep = np.zeros(np.prod(self.cfg["repulsion"]["local_grid_size"]))
         dummy_detections = []
-        return len(
+        base_dim = len(
             self.nodes[0].get_state_vector(
                 dummy_rep, dummy_detections, dummy_detections
             )
         )
+        return base_dim  # for the pre-emptive features
 
     def calculate_coherence(self, rewards: np.ndarray, loop_integrity: float) -> float:
         """
@@ -410,6 +414,7 @@ class FLOWRRA_Orchestrator:
                 node_detections=node_detections,
                 obstacle_detections=obstacle_detections,
             )
+
             node_features.append(feats)
 
         node_features_array = np.array(node_features, dtype=np.float32)
@@ -636,6 +641,7 @@ class FLOWRRA_Orchestrator:
                     next_node_features=node_features_array,
                     next_adj_matrix=adj_mat,
                     done=False,
+                    integrity=float(loop_integrity),
                 )
 
                 if len(self.gnn.memory) >= self.gnn.batch_size:
@@ -776,6 +782,7 @@ class FLOWRRA_Orchestrator:
                         next_node_features=recovered_features,
                         next_adj_matrix=recovered_adj,
                         done=False,
+                        integrity=float(loop_integrity),
                     )
 
             # Update last_state to recovered state

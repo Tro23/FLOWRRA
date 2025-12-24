@@ -25,7 +25,7 @@ CONFIG = {
         "total_nodes": 32,
         "num_nodes_per_holon": None,  # Auto-calculated
         "move_speed": 0.010,
-        "sensor_range": 0.15,
+        "sensor_range": 0.35,
     },
     # ==================== SPATIAL CONFIG ====================
     "spatial": {
@@ -41,12 +41,20 @@ CONFIG = {
         "gamma": 0.98,
         "dropout": 0.1,
         "buffer_capacity": 15000,
+        "stability_coef": 0.55,  # NEW: Weight for stability loss
     },
     # ==================== LOOP STRUCTURE ====================
     "loop": {
-        "ideal_distance": 0.12,
+        "ideal_distance": 0.10,
         "stiffness": 0.45,
         "break_threshold": 0.30,
+    },
+    # ==================== PATROL LOGIC (NEW) ====================
+    "patrol": {
+        "enabled": True,
+        "waypoint_threshold": 0.15,  # Distance to consider waypoint reached
+        "stick_prob": 0.05,  # Probability to change waypoint randomly
+        "bias_force": 0.002,  # Strength of the patrol pull (weak enough to not break loop)
     },
     # ==================== REWARDS ====================
     "rewards": {
@@ -77,12 +85,12 @@ CONFIG = {
     # ==================== EXPLORATION ====================
     "exploration": {
         "map_resolution": 0.01,
-        "sensor_range": 0.15,
+        "sensor_range": 0.35,
     },
     # ==================== WFC RECOVERY ====================
     "wfc": {
         "history_length": 150,
-        "tail_length": 8,
+        "tail_length": 5,
         "collapse_threshold": 0.55,
         "tau": 2,
         # NEW: Spatial collapse tuning
@@ -117,7 +125,7 @@ CONFIG = {
     # ==================== TRAINING ====================
     "training": {
         "num_episodes": 100,
-        "steps_per_episode": 500,
+        "steps_per_episode": 800,
         "target_update_frequency": 100,
         "save_frequency": 100,
         "metrics_save_frequency": 20,

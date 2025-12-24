@@ -1,0 +1,742 @@
+{
+  "metadata": {
+    "episode": 15,
+    "timestamp": 1766591935.8697982,
+    "dimensions": 2,
+    "total_nodes": 32
+  },
+  "config": {
+    "federation": {
+      "num_holons": 4,
+      "world_bounds": [
+        1.0,
+        1.0
+      ],
+      "breach_threshold": 0.1,
+      "coordination_mode": "positional",
+      "enable_dynamic_splitting": false
+    },
+    "holon": {
+      "mode": "training",
+      "independent_training": true,
+      "share_experience": false,
+      "use_r_gnn": false
+    },
+    "node": {
+      "total_nodes": 32,
+      "num_nodes_per_holon": 8,
+      "move_speed": 0.01,
+      "sensor_range": 0.45
+    },
+    "spatial": {
+      "dimensions": 2,
+      "world_bounds": [
+        1.0,
+        1.0
+      ]
+    },
+    "gnn": {
+      "hidden_dim": 128,
+      "num_layers": 3,
+      "n_heads": 4,
+      "lr": 0.0001,
+      "gamma": 0.98,
+      "dropout": 0.1,
+      "buffer_capacity": 15000,
+      "stability_coef": 0.55
+    },
+    "loop": {
+      "ideal_distance": 0.12,
+      "stiffness": 0.45,
+      "break_threshold": 0.32
+    },
+    "patrol": {
+      "enabled": true,
+      "waypoint_threshold": 0.15,
+      "stick_prob": 0.05,
+      "bias_force": 0.002
+    },
+    "rewards": {
+      "r_flow": 5.0,
+      "r_collision": 35.0,
+      "r_idle": 1.0,
+      "r_loop_integrity": 10.0,
+      "r_collapse_penalty": 30.0,
+      "r_explore": 10.0,
+      "r_reconnection_spatial": 25.0,
+      "r_reconnection_temporal": 10.0,
+      "r_boundary_breach": 5.0
+    },
+    "repulsion": {
+      "local_grid_size": [
+        5,
+        5
+      ],
+      "global_grid_shape": [
+        60,
+        60
+      ],
+      "eta": 0.5,
+      "gamma_f": 0.9,
+      "k_f": 5,
+      "sigma_f": 0.05,
+      "decay_lambda": 0.9,
+      "blur_delta": 0.1,
+      "beta": 0.3
+    },
+    "exploration": {
+      "map_resolution": 0.01,
+      "sensor_range": 0.45
+    },
+    "wfc": {
+      "history_length": 150,
+      "tail_length": 5,
+      "collapse_threshold": 0.55,
+      "tau": 2,
+      "spatial_search_radius_mult": 1.2,
+      "spatial_samples": 32,
+      "spatial_accept_threshold": 0.6,
+      "spatial_improvement_min": 0.988
+    },
+    "obstacles": [
+      [
+        0.229,
+        0.257,
+        0.008
+      ],
+      [
+        0.329,
+        0.186,
+        0.008
+      ],
+      [
+        0.286,
+        0.143,
+        0.008
+      ],
+      [
+        0.071,
+        0.429,
+        0.008
+      ],
+      [
+        0.029,
+        0.208,
+        0.008
+      ],
+      [
+        0.029,
+        0.657,
+        0.008
+      ],
+      [
+        0.129,
+        0.786,
+        0.008
+      ],
+      [
+        0.486,
+        0.843,
+        0.008
+      ],
+      [
+        0.071,
+        0.882,
+        0.008
+      ],
+      [
+        0.629,
+        0.257,
+        0.008
+      ],
+      [
+        0.829,
+        0.486,
+        0.008
+      ],
+      [
+        0.986,
+        0.143,
+        0.008
+      ],
+      [
+        0.571,
+        0.429,
+        0.008
+      ],
+      [
+        0.729,
+        0.208,
+        0.008
+      ],
+      [
+        0.629,
+        0.557,
+        0.008
+      ],
+      [
+        0.749,
+        0.786,
+        0.008
+      ],
+      [
+        0.986,
+        0.643,
+        0.008
+      ],
+      [
+        0.571,
+        0.829,
+        0.008
+      ],
+      [
+        0.729,
+        0.908,
+        0.008
+      ]
+    ],
+    "moving_obstacles": [],
+    "training": {
+      "num_episodes": 15,
+      "steps_per_episode": 800,
+      "target_update_frequency": 100,
+      "save_frequency": 100,
+      "metrics_save_frequency": 20
+    },
+    "visualization": {
+      "show_partitions": true,
+      "show_breach_alerts": true,
+      "partition_color_scheme": "rainbow",
+      "render_frequency": 50,
+      "save_history": true
+    }
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "holon_id": 0,
+      "pos": [
+        0.2963601110901437,
+        0.3372155900168853
+      ],
+      "last_pos": [
+        0.5926779487996131,
+        0.6843875775330996
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 1,
+      "holon_id": 0,
+      "pos": [
+        0.3385653968681723,
+        0.3807392128094891
+      ],
+      "last_pos": [
+        0.6772019456896461,
+        0.7714501086342754
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 2,
+      "holon_id": 0,
+      "pos": [
+        0.315761290479972,
+        0.4370944846329579
+      ],
+      "last_pos": [
+        0.6314935347887134,
+        0.8842606566081025
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 3,
+      "holon_id": 0,
+      "pos": [
+        0.19408287982977263,
+        0.025010314027720797
+      ],
+      "last_pos": [
+        0.38816575965954525,
+        0.060020628055441595
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 4,
+      "holon_id": 0,
+      "pos": [
+        0.3255269570739531,
+        0.37301997367065054
+      ],
+      "last_pos": [
+        0.6510466755857944,
+        0.7560277397278627
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 5,
+      "holon_id": 0,
+      "pos": [
+        0.29501744045844347,
+        0.32153707770833834
+      ],
+      "last_pos": [
+        0.5900035835119141,
+        0.6530804333978336
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 6,
+      "holon_id": 0,
+      "pos": [
+        0.35471585845490955,
+        0.33072078156538764
+      ],
+      "last_pos": [
+        0.709464069304076,
+        0.6714621377248466
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 7,
+      "holon_id": 0,
+      "pos": [
+        0.3314587802842077,
+        0.385850331699469
+      ],
+      "last_pos": [
+        0.6629239117398467,
+        0.781686250580335
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 8,
+      "holon_id": 1,
+      "pos": [
+        0.9156628999200239,
+        0.41538187651385045
+      ],
+      "last_pos": [
+        0.8310151217555675,
+        0.8410293008245633
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 9,
+      "holon_id": 1,
+      "pos": [
+        0.8521715234669635,
+        0.3649882234424902
+      ],
+      "last_pos": [
+        0.7031644148791822,
+        0.7391206948307216
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 10,
+      "holon_id": 1,
+      "pos": [
+        0.806156081696332,
+        0.32754596925959156
+      ],
+      "last_pos": [
+        0.611960191311212,
+        0.6447276602923498
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 11,
+      "holon_id": 1,
+      "pos": [
+        0.5454029734307281,
+        0.2203669387019108
+      ],
+      "last_pos": [
+        0.08089712784159109,
+        0.44076177718313475
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 12,
+      "holon_id": 1,
+      "pos": [
+        0.9855286871718845,
+        0.2023723348351729
+      ],
+      "last_pos": [
+        0.9641223935882426,
+        0.40503075838724584
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 13,
+      "holon_id": 1,
+      "pos": [
+        0.8888651261580229,
+        0.19824394772870607
+      ],
+      "last_pos": [
+        0.7745740520914375,
+        0.38617390696119885
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 14,
+      "holon_id": 1,
+      "pos": [
+        0.5843056515981747,
+        0.01634243195046904
+      ],
+      "last_pos": [
+        0.16233622644755075,
+        0.0350673150854396
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 15,
+      "holon_id": 1,
+      "pos": [
+        0.9901763760460074,
+        0.4544471784603372
+      ],
+      "last_pos": [
+        0.9784691110614907,
+        0.9174663882204026
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 16,
+      "holon_id": 2,
+      "pos": [
+        0.0,
+        0.7432899126397884
+      ],
+      "last_pos": [
+        0.0,
+        0.49685458739149047
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 17,
+      "holon_id": 2,
+      "pos": [
+        0.04222099705105076,
+        0.7444939424780442
+      ],
+      "last_pos": [
+        0.08273178872703242,
+        0.4793828106368996
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 18,
+      "holon_id": 2,
+      "pos": [
+        0.48670334406957355,
+        0.7588951067691986
+      ],
+      "last_pos": [
+        0.9760871269168704,
+        0.5259558284502379
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 19,
+      "holon_id": 2,
+      "pos": [
+        0.01038674776857982,
+        0.7523568236418433
+      ],
+      "last_pos": [
+        0.018201569974697508,
+        0.49651758095738474
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 20,
+      "holon_id": 2,
+      "pos": [
+        0.05507859616286842,
+        0.7042293149646432
+      ],
+      "last_pos": [
+        0.1106280334130249,
+        0.41811716113002273
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 21,
+      "holon_id": 2,
+      "pos": [
+        0.0022232458114342414,
+        0.7519497271264022
+      ],
+      "last_pos": [
+        0.003392822279494284,
+        0.49462396613475224
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 22,
+      "holon_id": 2,
+      "pos": [
+        0.0582610728952065,
+        0.7043794700471915
+      ],
+      "last_pos": [
+        0.11696011315464412,
+        0.41855494155181927
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 23,
+      "holon_id": 2,
+      "pos": [
+        0.022792380362470242,
+        0.747588857556017
+      ],
+      "last_pos": [
+        0.04235977444287134,
+        0.5043594341936497
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 24,
+      "holon_id": 3,
+      "pos": [
+        0.8366282280982256,
+        0.6913865821862664
+      ],
+      "last_pos": [
+        0.6614002555181848,
+        0.3853323502571251
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 25,
+      "holon_id": 3,
+      "pos": [
+        0.8335100463940524,
+        0.6188520619044144
+      ],
+      "last_pos": [
+        0.6564176593897515,
+        0.2390520043919231
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 26,
+      "holon_id": 3,
+      "pos": [
+        0.8495057185252676,
+        0.5349832481374275
+      ],
+      "last_pos": [
+        0.6948958594918877,
+        0.0655971354781637
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 27,
+      "holon_id": 3,
+      "pos": [
+        0.9155061804596836,
+        0.9176893101798741
+      ],
+      "last_pos": [
+        0.8357608269357883,
+        0.8197331216741794
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 28,
+      "holon_id": 3,
+      "pos": [
+        0.9156469173508602,
+        0.826080192796259
+      ],
+      "last_pos": [
+        0.8308126826225286,
+        0.6438079697235288
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 29,
+      "holon_id": 3,
+      "pos": [
+        0.9256406062361109,
+        0.7229832334351496
+      ],
+      "last_pos": [
+        0.8516915206718558,
+        0.43180011621047276
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 30,
+      "holon_id": 3,
+      "pos": [
+        0.5207804470544668,
+        0.9696698321470301
+      ],
+      "last_pos": [
+        0.0415608941089336,
+        0.9493396642940601
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    },
+    {
+      "id": 31,
+      "holon_id": 3,
+      "pos": [
+        0.8072291073659745,
+        0.7132838424107203
+      ],
+      "last_pos": [
+        0.6063548042303524,
+        0.4251942443648291
+      ],
+      "dimensions": 2,
+      "sensor_range": 0.45,
+      "move_speed": 0.01
+    }
+  ],
+  "holons": [
+    {
+      "holon_id": 0,
+      "x_min": 0.0,
+      "x_max": 0.5,
+      "y_min": 0.0,
+      "y_max": 0.5,
+      "center": [
+        0.25,
+        0.25
+      ]
+    },
+    {
+      "holon_id": 1,
+      "x_min": 0.5,
+      "x_max": 1.0,
+      "y_min": 0.0,
+      "y_max": 0.5,
+      "center": [
+        0.75,
+        0.25
+      ]
+    },
+    {
+      "holon_id": 2,
+      "x_min": 0.0,
+      "x_max": 0.5,
+      "y_min": 0.5,
+      "y_max": 1.0,
+      "center": [
+        0.25,
+        0.75
+      ]
+    },
+    {
+      "holon_id": 3,
+      "x_min": 0.5,
+      "x_max": 1.0,
+      "y_min": 0.5,
+      "y_max": 1.0,
+      "center": [
+        0.75,
+        0.75
+      ]
+    }
+  ]
+}

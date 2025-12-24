@@ -25,7 +25,7 @@ CONFIG = {
         "total_nodes": 32,
         "num_nodes_per_holon": None,  # Auto-calculated
         "move_speed": 0.010,
-        "sensor_range": 0.35,
+        "sensor_range": 0.25,
     },
     # ==================== SPATIAL CONFIG ====================
     "spatial": {
@@ -45,9 +45,9 @@ CONFIG = {
     },
     # ==================== LOOP STRUCTURE ====================
     "loop": {
-        "ideal_distance": 0.10,
+        "ideal_distance": 0.12,
         "stiffness": 0.45,
-        "break_threshold": 0.30,
+        "break_threshold": 0.32,
     },
     # ==================== PATROL LOGIC (NEW) ====================
     "patrol": {
@@ -58,14 +58,14 @@ CONFIG = {
     },
     # ==================== REWARDS ====================
     "rewards": {
-        "r_flow": 2.0,
+        "r_flow": 5.0,
         "r_collision": 35.0,
         "r_idle": 1.0,
         "r_loop_integrity": 10.0,
         "r_collapse_penalty": 30.0,
         "r_explore": 10.0,
         # NEW: Differential WFC Recovery Rewards
-        "r_reconnection_spatial": 35.0,  # HIGH reward for spatial (forward) recovery
+        "r_reconnection_spatial": 40.0,  # HIGH reward for spatial (forward) recovery
         "r_reconnection_temporal": 10.0,  # LOW reward for temporal (backward) recovery
         "r_boundary_breach": 5.0,
     },
@@ -73,7 +73,7 @@ CONFIG = {
     "repulsion": {
         # CRITICAL FIX: These will be auto-adjusted based on dimensions
         "local_grid_size": (5, 5),  # Start as 2D, validated below
-        "global_grid_shape": (60, 60),  # Start as 2D, validated below
+        "global_grid_shape": (80, 80),  # Start as 2D, validated below
         "eta": 0.5,
         "gamma_f": 0.9,
         "k_f": 5,
@@ -85,7 +85,7 @@ CONFIG = {
     # ==================== EXPLORATION ====================
     "exploration": {
         "map_resolution": 0.01,
-        "sensor_range": 0.35,
+        "sensor_range": 0.20,
     },
     # ==================== WFC RECOVERY ====================
     "wfc": {
@@ -94,10 +94,10 @@ CONFIG = {
         "collapse_threshold": 0.55,
         "tau": 2,
         # NEW: Spatial collapse tuning
-        "spatial_search_radius_mult": 0.9,  # Multiplier for local_extent
+        "spatial_search_radius_mult": 1.2,  # Multiplier for local_extent
         "spatial_samples": 32,  # Number of candidate positions
-        "spatial_accept_threshold": 0.65,  # Lower = more lenient acceptance
-        "spatial_improvement_min": 0.999,  # Minimum improvement ratio (3%)
+        "spatial_accept_threshold": 0.60,  # Lower = more lenient acceptance
+        "spatial_improvement_min": 0.988,  # Minimum improvement ratio
     },
     # ==================== OBSTACLES ====================
     "obstacles": [
@@ -125,7 +125,7 @@ CONFIG = {
     # ==================== TRAINING ====================
     "training": {
         "num_episodes": 100,
-        "steps_per_episode": 800,
+        "steps_per_episode": 1000,
         "target_update_frequency": 100,
         "save_frequency": 100,
         "metrics_save_frequency": 20,

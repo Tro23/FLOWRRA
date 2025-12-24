@@ -598,11 +598,9 @@ class FLOWRRA_Orchestrator:
         step_rewards_array += r_explore
 
         # 3. THE "STRICT PATROL" PROTOCOL
-        # Calculate current global coverage percentage
-        current_total_coverage = self.map.get_coverage_percentage()
 
-        # Only activate if we are in "End Game" (> 90% explored)
-        if current_total_coverage > 25.00 and current_total_coverage <= 45:
+        # Only activate if we are in "End Game" (> 2/3 rd of total_episodes)
+        if episode_step > (total_episodes * 2 / 3):
             # We already calculated 'loop_integrity' a few lines above in the standard physics block
             # Logic: We need to replace the missing "Exploration Dopamine" (usually ~15.0)
             # to keep the agents interested.
@@ -610,16 +608,30 @@ class FLOWRRA_Orchestrator:
             if loop_integrity >= 0.80:
                 # VICTORY LAP: High reward for perfect formation
                 # This matches the intensity of finding new chunks
-                r_patrol = 15.0
+                # Only give the full 15.0 if they are actually MOVING while maintaining integrity
+                avg_speed = np.mean(
+                    [np.linalg.norm(node.velocity()) for node in self.nodes]
+                )
+
+                if avg_speed > 0.009:
+                    r_patrol = 15.0
+                else:
+                    r_patrol = 2.0  # Lower reward for static "parking lot" behavior
+
+                # Distribute the "Exploration Dopamine" replacement
+                step_rewards_array += r_patrol
+                step_rewards_array += r_explore * 1.5
+
             elif loop_integrity >= 0.60:
                 # MEDIOCRE: Small maintenance reward
                 r_patrol = 4.0
+                step_rewards_array += r_patrol
+                step_rewards_array += r_explore
             else:
                 # SLACKING: Penalty for losing focus during patrol
                 # This prevents the "boredom chaos"
                 r_patrol = -5.0
-
-            step_rewards_array += r_patrol
+                step_rewards_array += r_patrol
 
         # Add reconnection bonus - distributed across all nodes
         # Reconnecting the loop is a collective achievement!

@@ -605,7 +605,7 @@ class FLOWRRA_Orchestrator:
             # Logic: We need to replace the missing "Exploration Dopamine" (usually ~15.0)
             # to keep the agents interested.
 
-            if loop_integrity >= 0.80:
+            if loop_integrity >= 0.70:
                 # VICTORY LAP: High reward for perfect formation
                 # This matches the intensity of finding new chunks
                 # Only give the full 15.0 if they are actually MOVING while maintaining integrity
@@ -620,9 +620,9 @@ class FLOWRRA_Orchestrator:
 
                 # Distribute the "Exploration Dopamine" replacement
                 step_rewards_array += r_patrol
-                step_rewards_array += r_explore * 1.5
+                step_rewards_array += r_explore * 2.5
 
-            elif loop_integrity >= 0.60:
+            elif loop_integrity >= 0.50:
                 # MEDIOCRE: Small maintenance reward
                 r_patrol = 4.0
                 step_rewards_array += r_patrol

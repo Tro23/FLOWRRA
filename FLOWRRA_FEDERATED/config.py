@@ -59,15 +59,15 @@ CONFIG = {
     # ==================== REWARDS ====================
     "rewards": {
         "r_flow": 5.0,
-        "r_collision": 35.0,
-        "r_idle": 1.0,
+        "r_collision": 30.0,
+        "r_idle": 2.0,
         "r_loop_integrity": 10.0,
-        "r_collapse_penalty": 30.0,
-        "r_explore": 10.0,
+        "r_collapse_penalty": 25.0,
+        "r_explore": 12.0,
         # NEW: Differential WFC Recovery Rewards
         "r_reconnection_spatial": 40.0,  # HIGH reward for spatial (forward) recovery
         "r_reconnection_temporal": 10.0,  # LOW reward for temporal (backward) recovery
-        "r_boundary_breach": 5.0,
+        "r_boundary_breach": 10.0,
     },
     # ==================== REPULSION FIELD ====================
     "repulsion": {

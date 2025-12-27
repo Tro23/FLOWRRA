@@ -222,7 +222,7 @@ class DeploymentRunner:
             ],
         }
 
-    def run(self, num_steps: int, save_interval: int = 50):
+    def run(self, num_steps: int, save_interval: int = 25):
         """Run deployment for specified steps."""
         print(f"\n[Deploy] Starting deployment run for {num_steps} steps")
 
@@ -279,7 +279,7 @@ def main():
         "--steps", type=int, default=500, help="Number of deployment steps to run"
     )
     parser.add_argument(
-        "--save-interval", type=int, default=50, help="Progress update interval"
+        "--save-interval", type=int, default=25, help="Progress update interval"
     )
 
     args = parser.parse_args()

@@ -14,7 +14,7 @@ FIXES:
 import math
 import random
 from collections import deque
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import torch
@@ -264,7 +264,7 @@ class GraphReplayBuffer:
         self,
         node_features: np.ndarray,
         adj_matrix: np.ndarray,
-        actions: np.ndarray,
+        actions: Optional[np.ndarray],
         rewards: np.ndarray,
         next_node_features: np.ndarray,
         next_adj_matrix: np.ndarray,
@@ -285,9 +285,38 @@ class GraphReplayBuffer:
             )
         )
 
-    def sample(self, batch_size: int) -> Tuple[torch.Tensor, ...]:
-        """Sample a batch of transitions."""
-        batch = random.sample(self.buffer, batch_size)
+    def sample(self, batch_size: int) -> Optional[Tuple[torch.Tensor, ...]]:
+        """
+        Sample a batch of transitions with UNIFORM node counts.
+
+        FIX: Filters out experiences with mismatched node counts to avoid shape errors.
+        """
+        # Find the most common node count in recent experiences
+        recent_buffer = list(self.buffer)[-min(500, len(self.buffer)) :]
+        node_counts = [exp[0].shape[0] for exp in recent_buffer]
+
+        if not node_counts:
+            raise ValueError("Buffer is empty!")
+
+        # Use the most common node count (handles both 7 and 8 gracefully)
+        from collections import Counter
+
+        target_node_count = Counter(node_counts).most_common(1)[0][0]
+
+        # Filter buffer to only include experiences with matching node count
+        valid_experiences = [
+            exp for exp in self.buffer if exp[0].shape[0] == target_node_count
+        ]
+
+        if len(valid_experiences) < batch_size:
+            print(
+                f"[BUFFER WARNING] Only {len(valid_experiences)} valid experiences "
+                f"(need {batch_size}). Skipping training this step."
+            )
+            return None  # Signal to skip training
+
+        # Sample from valid experiences only
+        batch = random.sample(valid_experiences, batch_size)
 
         (
             node_feats,
@@ -300,7 +329,7 @@ class GraphReplayBuffer:
             integrity,
         ) = zip(*batch)
 
-        # Convert to tensors
+        # Convert to tensors (now all have same shape!)
         node_feats_t = torch.from_numpy(np.array(node_feats, dtype=np.float32)).to(
             DEVICE
         )
@@ -341,6 +370,9 @@ class GNNAgent:
     GNN-based RL agent for FLOWRRA swarm control.
 
     FIXED: Improved exploration schedule and input handling.
+
+    KEY FEATURE: Can freeze specific nodes, making them static landmarks
+    while keeping them in the computational graph.
     """
 
     def __init__(
@@ -355,7 +387,7 @@ class GNNAgent:
         gamma: float = 0.95,
         buffer_capacity: int = 15000,
         dropout: float = 0.1,
-        seed: int = None,
+        seed: Optional[int] = None,
         stability_coef: float = 0.5,  # Weight for auxilary loss
     ):
         if seed is not None:
@@ -369,6 +401,12 @@ class GNNAgent:
         self.gamma = gamma
         self.stability_coef = stability_coef
         self.steps_done = 0
+
+        # NEW: Track frozen nodes
+        self.frozen_nodes: Set[int] = set()
+        self.frozen_node_positions: Dict[
+            int, np.ndarray
+        ] = {}  # Storing Frozen Positions
 
         # Policy and target networks
         self.policy_net = GNNPolicy(
@@ -413,8 +451,8 @@ class GNNAgent:
         total_episodes: int,
         eps_min: float = 0.05,
         eps_peak: float = 0.9,
-        mu: float = None,
-        sigma: float = None,
+        mu: Optional[float] = None,
+        sigma: Optional[float] = None,
     ) -> float:
         """Gaussian-shaped exploration schedule."""
         if mu is None:
@@ -426,35 +464,104 @@ class GNNAgent:
             -((t - mu) ** 2) / (2 * sigma**2)
         )
 
+    ## NODE FREEZING - ADDED
+    def freeze_node(self, node_id: int, position: np.ndarray):
+        """
+        Freeze a node - it becomes a static landmark.
+
+        This node's:
+        - Position is stored and becomes constant
+        - Features still flow through the network (forward pass)
+        - But gradients for its outputs are zeroed (no learning)
+
+        Args:
+            node_id: ID of node to freeze
+            position: Final position to lock in
+        """
+        self.frozen_nodes.add(node_id)
+        self.frozen_node_positions[node_id] = position.copy()
+
+        print(f"[GNN] 🧊 Node {node_id} FROZEN at position {position}")
+        print(f"[GNN] Total frozen nodes: {len(self.frozen_nodes)}")
+
+    def unfreeze_node(self, node_id: int):
+        """Unfreeze a node - it becomes active again."""
+        if node_id in self.frozen_nodes:
+            self.frozen_nodes.remove(node_id)
+            del self.frozen_node_positions[node_id]
+            print(f"[GNN] 🔥 Node {node_id} UNFROZEN")
+
+    def is_frozen(self, node_id: int) -> bool:
+        """Check if a node is frozen."""
+        return node_id in self.frozen_nodes
+
+    def get_frozen_nodes(self) -> Set[int]:
+        """Get set of all frozen node IDs."""
+        return self.frozen_nodes.copy()
+
     def choose_actions(
         self,
         node_features: np.ndarray,
         adj_matrix: np.ndarray,
         episode_number: int,
         total_episodes: int,
+        node_ids: Optional[
+            List[int]
+        ] = None,  # NEW: Need to know which nodes are which.
         eps_min: float = 0.05,
         eps_peak: float = 0.9,
-    ) -> np.ndarray:
+    ) -> Optional[np.ndarray]:
         """
-        Choose actions for all nodes using epsilon-greedy.
+        Choose actions for all nodes.
 
-        FIXED: Removed debug print, improved tensor handling.
+        Frozen nodes always return action=4 (no-op/stay still).
+        Active nodes use epsilon-greedy.
+
+        Args:
+            node_features: [num_nodes, feature_dim]
+            adj_matrix: [num_nodes, num_nodes]
+            episode_number: Current episode
+            total_episodes: Total episodes
+            node_ids: List of node IDs (CRITICAL for knowing which are frozen)
+
+        Returns:
+            actions: [num_nodes] action indices
         """
         num_nodes = node_features.shape[0]
+
+        # If no node IDs provided, assume sequential IDs
+        if node_ids is None:
+            node_ids = list(range(num_nodes))
+
+        # Initialize with no-op action
+        # For 2D: actions are 0-3 (left, right, up, down), so use action 0 as default
+        # We'll override with actual actions for active nodes
+        actions = np.zeros(num_nodes, dtype=np.int64)  # Start with all zeros
+
+        # Get epsilon for this episode
         epsilon = self.epsilon_gaussian(
             episode_number, total_episodes, eps_min, eps_peak
         )
 
+        # Identify active nodes
+        active_mask = np.array(
+            [node_id not in self.frozen_nodes for node_id in node_ids]
+        )
+        active_indices = np.where(active_mask)[0]
+
+        if len(active_indices) == 0:
+            # All nodes frozen!
+            return actions
+
+        # For active nodes: epsilon-greedy
         if random.random() < epsilon:
-            # Random exploration
-            return np.array(
-                [random.randrange(self.action_size) for _ in range(num_nodes)]
-            )
+            # Random exploration for active nodes only
+            for idx in active_indices:
+                actions[idx] = random.randrange(self.action_size)
         else:
             # Greedy exploitation
             self.policy_net.eval()
             with torch.no_grad():
-                # Convert to tensors and add batch dimension
                 node_feat_t = (
                     torch.from_numpy(node_features.astype(np.float32))
                     .unsqueeze(0)
@@ -466,21 +573,35 @@ class GNNAgent:
                     .to(DEVICE)
                 )
 
-                q_values, _ = self.policy_net(
-                    node_feat_t, adj_t
-                )  # [num_nodes, action_size]
-                actions = q_values.argmax(dim=2).cpu().numpy().flatten()
+                q_values, _ = self.policy_net(node_feat_t, adj_t)
+                all_actions = q_values.argmax(dim=2).cpu().numpy().flatten()
+
+                # Only update actions for active nodes
+                actions[active_indices] = all_actions[active_indices]
 
             self.policy_net.train()
-            return actions
 
-    def learn(self) -> float:
+        return actions
+
+    def learn(self, node_ids: Optional[List[int]] = None) -> float:
         """
-        Perform one learning step using a batch from replay buffer.
+        Perform one learning step with gradient masking for frozen nodes.
 
-        FIXED: Corrected done mask broadcasting.
+        KEY CHANGE: After computing loss, we zero out gradients for frozen nodes
+        before calling optimizer.step().
+
+        Args:
+            node_ids: List of node IDs in the batch (needed for masking)
+
+        Returns:
+            loss value
         """
         if len(self.memory) < self.batch_size:
+            return 0.0
+
+        # Sample batch
+        batch = self.memory.sample(self.batch_size)
+        if batch is None:
             return 0.0
 
         # Sample batch
@@ -492,8 +613,8 @@ class GNNAgent:
             next_node_feats,
             next_adjs,
             dones,
-            integrity,
-        ) = self.memory.sample(self.batch_size)
+            integrity_target,
+        ) = batch
 
         B, N, _ = node_feats.shape
 
@@ -501,11 +622,6 @@ class GNNAgent:
         q_values, curr_stability = self.policy_net(node_feats, adjs)  # [B, N, A]
         actions_idx = actions.unsqueeze(-1)  # [B, N, 1]
         q_values_taken = q_values.gather(2, actions_idx).squeeze(-1)  # [B, N]
-
-        # Integrity target [B, 1]
-        integrity_target = (
-            torch.FloatTensor(np.array(integrity)).unsqueeze(-1).to(DEVICE)
-        )
 
         # Target Q-values
         with torch.no_grad():
@@ -529,10 +645,91 @@ class GNNAgent:
         # Optimize
         self.optimizer.zero_grad()
         loss.backward()
+
+        # CRITICAL: Mask gradients for frozen nodes
+        if node_ids is not None and len(self.frozen_nodes) > 0:
+            self._mask_frozen_gradients(node_ids)
+
+        # Gradient Clipping
         torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
+
+        # Update weights (frozen nodes' don't change)
         self.optimizer.step()
 
         return float(loss.item())
+
+    def _mask_frozen_gradients(self, node_ids: List[int]):
+        """
+        Zero out gradients for frozen nodes.
+
+        This is where the "crystallization" happens - frozen nodes
+        can't learn anymore, their weights are locked.
+
+        Strategy:
+        - The GNN processes all nodes in a batch dimension [B, N, features]
+        - During forward pass, frozen nodes participate normally
+        - During backward pass, we zero their gradients in the batch dimension
+
+        Args:
+            node_ids: List of node IDs in current batch
+        """
+        if not self.frozen_nodes:
+            return  # No frozen nodes, nothing to mask
+
+        # Create frozen mask: True for frozen nodes, False for active
+        # This maps batch positions to frozen status
+        frozen_mask = torch.tensor(
+            [node_id in self.frozen_nodes for node_id in node_ids],
+            dtype=torch.bool,
+            device=DEVICE,
+        )
+
+        if not frozen_mask.any():
+            return  # No frozen nodes in this batch
+
+        # ================================================================
+        # GRADIENT MASKING LOGIC
+        # ================================================================
+        # The key insight: GAT layers process node features in dimension 1
+        # Shape: [batch, num_nodes, features]
+        # We need to zero gradients for frozen nodes across ALL parameters
+
+        # Get all parameters that have gradients
+        for name, param in self.policy_net.named_parameters():
+            if param.grad is None:
+                continue
+
+            grad = param.grad
+            grad_shape = grad.shape
+
+            # ============================================================
+            # CASE 1: Node-specific decoder outputs
+            # These have shape [batch, num_nodes, action_size]
+            # ============================================================
+            if len(grad_shape) >= 2:
+                # Check if second dimension matches number of nodes
+                if grad_shape[1] == len(node_ids):
+                    # This gradient has per-node outputs
+                    # Zero out frozen node positions
+                    # Shape: [B, N, ...] → mask dimension 1
+
+                    # Create mask for broadcasting
+                    mask_shape = [1] * len(grad_shape)
+                    mask_shape[1] = len(node_ids)  # Match node dimension
+
+                    # Reshape frozen_mask to broadcast correctly
+                    broadcast_mask = frozen_mask.view(*mask_shape)
+
+                    # Zero out frozen node gradients
+                    # Active nodes keep their gradients, frozen nodes → 0
+                    grad.masked_fill_(broadcast_mask, 0.0)
+
+                    # Debug logging (can remove in production)
+                    if "action_decoder" in name:
+                        num_frozen_in_batch = frozen_mask.sum().item()
+                        print(
+                            f"[Gradient Mask] {name}: Zeroed {num_frozen_in_batch}/{len(node_ids)} node gradients"
+                        )
 
     def update_target_network(self):
         """Copy policy network weights to target network."""
@@ -545,6 +742,8 @@ class GNNAgent:
                 "policy_net": self.policy_net.state_dict(),
                 "target_net": self.target_net.state_dict(),
                 "optimizer": self.optimizer.state_dict(),
+                "frozen_nodes": self.frozen_nodes,
+                "frozen_node_positions": self.frozen_node_positions,
             },
             path,
         )
@@ -555,6 +754,8 @@ class GNNAgent:
         self.policy_net.load_state_dict(checkpoint["policy_net"])
         self.target_net.load_state_dict(checkpoint["target_net"])
         self.optimizer.load_state_dict(checkpoint["optimizer"])
+        self.frozen_nodes = checkpoint.get("frozen_nodes", set())
+        self.frozen_node_positions = checkpoint.get("frozen_node_positions", {})
 
 
 # =============================================================================
@@ -566,6 +767,9 @@ def build_adjacency_matrix(nodes: List[Any], sensor_range: float) -> np.ndarray:
     """
     Builds adjacency matrix from node sensor detections.
 
+    Frozen nodes can still be detected by active nodes!
+    They act as landmarks in the graph.
+
     Args:
         nodes: List of NodePositionND objects
         sensor_range: Detection range
@@ -574,16 +778,19 @@ def build_adjacency_matrix(nodes: List[Any], sensor_range: float) -> np.ndarray:
         adj_matrix: [num_nodes, num_nodes] binary adjacency
     """
     N = len(nodes)
+    id_to_index = {node.id: i for i, node in enumerate(nodes)}
+
     adj = np.zeros((N, N), dtype=np.float32)
 
     for i, node_i in enumerate(nodes):
         detections = node_i.sense_nodes(nodes)
         for det in detections:
-            j = det["id"]
-            if 0 <= j < N:  # Bounds check
+            node_id = det["id"]
+            if node_id in id_to_index:
+                j = id_to_index[node_id]
                 adj[i, j] = 1.0
 
-    # Add self-loops for message passing
+    # Add self-loops
     adj += np.eye(N, dtype=np.float32)
 
     return adj

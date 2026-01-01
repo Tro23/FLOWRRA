@@ -30,6 +30,7 @@ class DeploymentRunner:
     """
 
     def __init__(self, deployment_file: str):
+        """Initialize deployment runner with removal event tracking."""
         # Load deployment data
         print(f"\n[Deploy] Loading deployment data from {deployment_file}")
         with open(deployment_file, "r") as f:
@@ -40,8 +41,27 @@ class DeploymentRunner:
         # Override mode to deployment
         self.cfg["holon"]["mode"] = "deployment"
 
+        # NEW: Load removal events if present in deployment file
+        self.removal_events = self.deployment_data.get("removal_events", [])
+        self.removal_metrics = self.deployment_data.get("removal_metrics", {})
+
         print(f"[Deploy] Loaded {len(self.deployment_data['nodes'])} nodes")
         print(f"[Deploy] Dimensions: {self.deployment_data['metadata']['dimensions']}D")
+
+        # NEW: Print removal event summary
+        if self.removal_events:
+            print(f"[Deploy] 🔄 Found {len(self.removal_events)} removal events:")
+            for event in self.removal_events:
+                event_emoji = "❌" if event["event_type"] == "node_removed" else "✅"
+                print(
+                    f"  {event_emoji} {event['event_type']} at step {event['timestep']} "
+                    f"(Node {event['node_id']}, Holon {event['holon_id']})"
+                )
+
+        if self.removal_metrics:
+            print(
+                f"[Deploy] 📊 Removal metrics available for {len(self.removal_metrics)} holon(s)"
+            )
 
         # Initialize Federation
         self.federation = FederationManager(
@@ -202,7 +222,7 @@ class DeploymentRunner:
                         }
                     )
 
-        return {
+        snapshot = {
             "time": step,
             "nodes": all_nodes,
             "connections": all_connections,
@@ -221,6 +241,22 @@ class DeploymentRunner:
                 for h_id, h in self.holons.items()
             ],
         }
+
+        # NEW: Check if this timestep has removal/reintegration events
+        # This allows the web visualizer to show annotations at specific frames
+        matching_events = [e for e in self.removal_events if e["timestep"] == step]
+        if matching_events:
+            snapshot["events"] = matching_events
+
+            # Print to console for debugging
+            for event in matching_events:
+                event_symbol = "🔴" if event["event_type"] == "node_removed" else "🟢"
+                print(
+                    f"[Deploy] {event_symbol} Step {step}: {event['event_type']} "
+                    f"(Node {event['node_id']})"
+                )
+
+        return snapshot
 
     def run(self, num_steps: int, save_interval: int = 25):
         """Run deployment for specified steps."""
@@ -253,6 +289,9 @@ class DeploymentRunner:
             "config": self.cfg,
             "trajectory": self.trajectory_history,
             "holons": self.deployment_data["holons"],
+            # NEW: Include removal events and metrics for web visualization
+            "removal_events": self.removal_events,
+            "removal_metrics": self.removal_metrics,
         }
 
         filepath = output_dir / f"trajectory_{self.step_count}_steps.json"
@@ -264,6 +303,28 @@ class DeploymentRunner:
         print(
             f"[Deploy] 📊 Trajectory contains {len(self.trajectory_history)} snapshots"
         )
+
+        # NEW: Print removal event statistics
+        if self.removal_events:
+            removal_count = sum(
+                1 for e in self.removal_events if e["event_type"] == "node_removed"
+            )
+            reintegration_count = sum(
+                1 for e in self.removal_events if e["event_type"] == "node_reintegrated"
+            )
+            print(
+                f"[Deploy] 🔄 Events: {removal_count} removals, {reintegration_count} reintegrations"
+            )
+
+        if self.removal_metrics:
+            print(f"[Deploy] Removal metrics included for analysis")
+            # Print summary of reintegration times
+            for holon_id, metrics in self.removal_metrics.items():
+                if metrics.get("reintegration_time_steps"):
+                    print(
+                        f"  Holon {holon_id}: Reintegrated in {metrics['reintegration_time_steps']} steps"
+                    )
+
         print(f"[Deploy] Ready for web visualization!")
 
 

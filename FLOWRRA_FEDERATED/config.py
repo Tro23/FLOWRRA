@@ -19,6 +19,12 @@ CONFIG = {
         "independent_training": True,
         "share_experience": False,
         "use_r_gnn": False,
+        # NEW: Strategic Freezing Parameters
+        "enable_strategic_freezing": True,  # Enable frozen node feature
+        "freeze_at_coverage": 0.55,  # Freeze when coverage hits 85%
+        "freeze_edge_nodes": True,  # Prioritize freezing edge nodes
+        "min_active_nodes": 4,  # Never freeze below this many active nodes
+        "freeze_stability_steps": 50,  # Node must be stable for N steps to freeze
     },
     # ==================== NODE CONFIG ====================
     "node": {
@@ -64,10 +70,12 @@ CONFIG = {
         "r_loop_integrity": 10.0,
         "r_collapse_penalty": 25.0,
         "r_explore": 12.0,
-        # NEW: Differential WFC Recovery Rewards
         "r_reconnection_spatial": 40.0,  # HIGH reward for spatial (forward) recovery
         "r_reconnection_temporal": 10.0,  # LOW reward for temporal (backward) recovery
         "r_boundary_breach": 10.0,
+        "r_frozen_node_bonus": 50.0,  # Big bonus when node successfully freezes
+        "r_frozen_utility": 1.0,  # Small reward when active nodes use frozen nodes as landmarks
+        "r_reconnection": 5.0,
     },
     # ==================== REPULSION FIELD ====================
     "repulsion": {
@@ -90,7 +98,7 @@ CONFIG = {
     # ==================== WFC RECOVERY ====================
     "wfc": {
         "history_length": 150,
-        "tail_length": 5,
+        "tail_length": 8,
         "collapse_threshold": 0.55,
         "tau": 2,
         # NEW: Spatial collapse tuning
@@ -125,7 +133,7 @@ CONFIG = {
     # ==================== TRAINING ====================
     "training": {
         "num_episodes": 100,
-        "steps_per_episode": 1000,
+        "steps_per_episode": 500,
         "target_update_frequency": 100,
         "save_frequency": 100,
         "metrics_save_frequency": 20,
@@ -134,6 +142,8 @@ CONFIG = {
     "visualization": {
         "show_partitions": True,
         "show_breach_alerts": True,
+        "show_frozen_nodes": True,  # NEW: Highlight frozen nodes
+        "frozen_node_color": "gold",  # NEW: Color for frozen nodes
         "partition_color_scheme": "rainbow",
         "render_frequency": 50,
         "save_history": True,  # NEW: Save for deployment visualization
@@ -205,6 +215,12 @@ def validate_config(cfg: dict) -> dict:
     print(f"  Total nodes: {cfg['node']['total_nodes']}")
     print(f"  Nodes per holon: {cfg['node']['num_nodes_per_holon']}")
     print(f"  Holons: {num_holons} ({sqrt_holons}x{sqrt_holons} grid)")
+    if cfg["holon"]["enable_strategic_freezing"]:
+        print(f"  Strategic Freezing: ENABLED")
+        print(
+            f"    Freeze at coverage: {cfg['holon']['freeze_at_coverage'] * 100:.0f}%"
+        )
+        print(f"    Min active nodes: {cfg['holon']['min_active_nodes']}")
     print()
 
     return cfg

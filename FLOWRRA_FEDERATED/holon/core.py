@@ -9,7 +9,7 @@ Enhanced FLOWRRA Orchestrator with:
 - Proper collision response with WFC micro-collapse
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
 import numpy as np
 
@@ -28,6 +28,8 @@ class FLOWRRA_Orchestrator:
     """
     Enhanced FLOWRRA orchestrator with loop structure, obstacles,
     and Gaussian exploration schedule for organic swarm expansion.
+
+    Frozen nodes are "completed" nodes that act as static landmarks.
     """
 
     def __init__(self, mode="training"):
@@ -36,6 +38,7 @@ class FLOWRRA_Orchestrator:
         self.mode = mode  # 'training' or 'deployment'
 
         # Components
+        self.total_steps = self.cfg["training"]["steps_per_episode"]
         self.map = ExplorationMap(
             self.cfg["spatial"]["world_bounds"],
             self.cfg["exploration"]["map_resolution"],
@@ -76,7 +79,7 @@ class FLOWRRA_Orchestrator:
         self.loop.initialize_ring_topology(len(self.nodes))
 
         # FIX 2: Run Physics Warmup to stabilize energy before AI starts
-        self._physics_warmup(steps=100)
+        self._physics_warmup(steps=25)
 
         # Calculate GNN input dimension
         input_dim = self._calculate_input_dim()
@@ -93,6 +96,11 @@ class FLOWRRA_Orchestrator:
             gamma=self.cfg["gnn"].get("gamma", 0.95),
             stability_coef=self.cfg["gnn"].get("stability_coef", 0.5),
         )
+
+        # NEW: Frozen Node Management
+        self.frozen_nodes: Set[int] = set()  # Set of frozen node IDs
+        self.frozen_events: List[Dict] = []  # Track when nodes freeze
+        self.unfreeze_events = []
 
         # State tracking
         self.history = []
@@ -111,6 +119,269 @@ class FLOWRRA_Orchestrator:
         self.wfc_trigger_events = []
         self.collision_events = []  # Track collision-recovery events
         self.total_reconnections = 0  # Track healing behavior
+
+    def freeze_node(self, node_id: int, reason: str = "mission_complete"):
+        """
+        Freeze a node - it becomes a static landmark.
+
+        Steps:
+        1. Mark node as frozen in orchestrator
+        2. Tell GNN to freeze this node's weights
+        3. Remove node from active loop (but keep in nodes list!)
+        4. Re-patch loop connections around frozen node
+
+        Args:
+            node_id: ID of node to freeze
+            reason: Why this node is being frozen (for logging)
+        """
+        # Find the node
+        node = next((n for n in self.nodes if n.id == node_id), None)
+        if node is None:
+            print(f"[Orchestrator] ⚠️ Cannot freeze node {node_id}: not found")
+            return
+
+        if node_id in self.frozen_nodes:
+            print(f"[Orchestrator] ⚠️ Node {node_id} already frozen")
+            return
+
+        # Mark as frozen
+        self.frozen_nodes.add(node_id)
+
+        # Tell GNN to freeze weights for this node
+        self.gnn.freeze_node(node_id, node.pos)
+
+        # Re-patch loop (skip frozen node)
+        self._repatch_loop_around_frozen_nodes()
+
+        # Log event
+        freeze_event = {
+            "timestep": self.step_count,
+            "episode": self.current_episode,
+            "node_id": node_id,
+            "position": node.pos.copy(),
+            "reason": reason,
+        }
+
+        self.frozen_events.append(freeze_event)
+
+        print(f"\n{'=' * 60}")
+        print(f"[Orchestrator] 🧊 NODE {node_id} FROZEN")
+        print(f"  Reason: {reason}")
+        print(f"  Position: {node.pos}")
+        print(f"  Total frozen: {len(self.frozen_nodes)}/{len(self.nodes)}")
+        print(f"  Active nodes: {len(self.nodes) - len(self.frozen_nodes)}")
+        print(f"{'=' * 60}\n")
+
+    def check_and_unfreeze_nodes(self):
+        """
+        Simple step-based unfreezing.
+        After 150 steps frozen, automatically unfreeze.
+        """
+        MIN_ACTIVE_NODES = 4  # Safety minimum
+        FREEZE_DURATION = 150  # Fixed duration
+
+        current_step = self.step_count
+        num_active = len(self.get_active_nodes())
+
+        # Emergency: Never drop below minimum active nodes
+        if num_active < MIN_ACTIVE_NODES:
+            frozen_list = sorted(
+                self.frozen_events,
+                key=lambda x: x["timestep"],  # Oldest first
+            )
+
+            for i in range(min(MIN_ACTIVE_NODES - num_active, len(frozen_list))):
+                node_id = frozen_list[i]["node_id"]
+                if node_id in self.frozen_nodes:
+                    self.unfreeze_node(node_id)
+                    print(
+                        f"[Unfreeze] Emergency: Restored node {node_id} (safety minimum)"
+                    )
+            return
+
+        # Main Logic: Auto-unfreeze after FREEZE_DURATION steps
+        nodes_to_unfreeze = []
+
+        for freeze_event in self.frozen_events:
+            node_id = freeze_event["node_id"]
+            freeze_timestep = freeze_event["timestep"]
+            time_frozen = current_step - freeze_timestep
+
+            # Check if node is still frozen AND has been frozen long enough
+            if node_id in self.frozen_nodes and time_frozen >= FREEZE_DURATION:
+                nodes_to_unfreeze.append(node_id)
+
+        # Unfreeze all eligible nodes
+        for node_id in nodes_to_unfreeze:
+            self.unfreeze_node(node_id)
+            print(f"[Unfreeze] Node {node_id} thawed after {FREEZE_DURATION} steps")
+
+            # Log the unfreeze event
+            unfreeze_event = {
+                "timestep": current_step,
+                "node_id": node_id,
+                "time_frozen": FREEZE_DURATION,
+                "reason": "step_timer_expired",
+            }
+            self.unfreeze_events.append(unfreeze_event)
+
+    def should_freeze_node_simple(self, node_id: int) -> bool:
+        """
+        Simple step-based freezing criteria.
+
+        Returns True if:
+        1. Node has been stable for STABILITY_DURATION steps
+        2. Less than MAX_FROZEN nodes currently frozen
+        3. Coverage > 60% (basic progress check)
+        """
+        STABILITY_DURATION = 150  # Must be stable this many steps
+        MAX_FROZEN_AT_ONCE = 3  # Never freeze more than this
+        MIN_COVERAGE_FOR_FREEZE = 0.75
+
+        # Check coverage
+        coverage = self.map.get_coverage_percentage() / 100.0
+        if coverage < MIN_COVERAGE_FOR_FREEZE:
+            return False
+
+        # Check if already too many frozen
+        if len(self.frozen_nodes) >= MAX_FROZEN_AT_ONCE:
+            return False
+
+        # Check if node has been stable (not moving much)
+        if hasattr(self, "node_position_history"):
+            if node_id in self.node_position_history:
+                history = self.node_position_history[node_id]
+
+                if len(history) >= STABILITY_DURATION:
+                    # Calculate movement in last STABILITY_DURATION steps
+                    recent_history = history[-STABILITY_DURATION:]
+                    total_movement = sum(
+                        np.linalg.norm(recent_history[i] - recent_history[i - 1])
+                        for i in range(1, len(recent_history))
+                    )
+
+                    # If barely moved, candidate for freezing
+                    if total_movement < 0.09:
+                        return True
+
+        return False
+
+    def auto_freeze_candidates_simple(self):
+        """
+        Freeze 1-3 nodes from loop edges if they've been stable.
+
+        Strategy:
+        - Only freeze nodes at the "edges" of the active loop (first/last positions)
+        - Freeze 1-3 nodes at random (more variety)
+        - Only trigger every 50 steps (don't spam)
+        """
+        # Only check every 50 steps
+        if self.step_count % 50 != 0:
+            return
+
+        coverage = self.map.get_coverage_percentage() / 100.0
+
+        # Only freeze in mid-to-late game
+        if coverage < 0.70:
+            return
+
+        # Get active nodes
+        active_nodes = self.get_active_nodes()
+
+        if len(active_nodes) <= 4:
+            return  # Too few active nodes
+
+        # Find edge nodes (first and last in loop sequence)
+        # These are less disruptive to freeze
+        edge_candidates = []
+
+        # Strategy: Freeze nodes at positions 0, 1, -2, -1 in the active loop
+        # (edges of the ring)
+        if len(active_nodes) > 6:
+            edge_positions = [0, 1, -2, -1]
+            for pos in edge_positions:
+                node = active_nodes[pos]
+                if self.should_freeze_node_simple(node.id):
+                    edge_candidates.append(node.id)
+
+        if not edge_candidates:
+            return
+
+        # Randomly freeze 1-3 nodes from edge candidates
+        num_to_freeze = np.random.randint(1, min(4, len(edge_candidates) + 1))
+
+        # Shuffle and take first N
+        np.random.shuffle(edge_candidates)
+        nodes_to_freeze = edge_candidates[:num_to_freeze]
+
+        for node_id in nodes_to_freeze:
+            self.freeze_node(node_id, reason="step_based_crystallization")
+            print(
+                f"[Auto-Freeze] Node {node_id} crystallized (edge position, stable for 100+ steps)"
+            )
+
+    def unfreeze_node(self, node_id: int):
+        """Unfreeze a node - it becomes active again."""
+        if node_id not in self.frozen_nodes:
+            return
+
+        self.frozen_nodes.remove(node_id)
+        self.gnn.unfreeze_node(node_id)
+        self._repatch_loop_around_frozen_nodes()
+
+        print(f"[Orchestrator] 🔥 Node {node_id} UNFROZEN")
+
+    def is_frozen(self, node_id: int) -> bool:
+        """Check if a node is frozen."""
+        return node_id in self.frozen_nodes
+
+    def get_active_nodes(self) -> List[NodePositionND]:
+        """Get list of active (non-frozen) nodes."""
+        return [n for n in self.nodes if n.id not in self.frozen_nodes]
+
+    def get_frozen_nodes(self) -> List[NodePositionND]:
+        """Get list of frozen nodes."""
+        return [n for n in self.nodes if n.id in self.frozen_nodes]
+
+    # ========================================================================
+    # LOOP MANAGEMENT WITH FROZEN NODES
+    # ========================================================================
+
+    def _repatch_loop_around_frozen_nodes(self):
+        """
+        Rebuild loop connections, skipping frozen nodes.
+
+        If nodes are: [0, 1, 2, 3, 4, 5, 6, 7]
+        And frozen: [2, 5]
+        Then loop becomes: 0-1-3-4-6-7-0
+
+        Frozen nodes stay on the map but aren't in the spring loop.
+        """
+        active_nodes = self.get_active_nodes()
+
+        if len(active_nodes) < 3:
+            print("[Orchestrator] ⚠️ Too few active nodes for loop")
+            return
+
+        # Clear existing connections
+        self.loop.connections.clear()
+
+        # Build ring topology for active nodes only
+        from .loop import Connection
+
+        for i in range(len(active_nodes)):
+            node_a = active_nodes[i]
+            node_b = active_nodes[(i + 1) % len(active_nodes)]
+
+            conn = Connection(
+                node_a_id=node_a.id,
+                node_b_id=node_b.id,
+                ideal_distance=self.loop.ideal_distance,
+            )
+            self.loop.connections.append(conn)
+
+        print(f"[Loop] Re-patched around {len(self.frozen_nodes)} frozen nodes")
+        print(f"[Loop] Active loop: {len(self.loop.connections)} connections")
 
     def _initialize_obstacles(self):
         """Initialize static and moving obstacles from config."""
@@ -196,7 +467,7 @@ class FLOWRRA_Orchestrator:
         )
         return nodes
 
-    def _physics_warmup(self, steps=80):
+    def _physics_warmup(self, steps=25):
         """
         Runs the physics engine without the GNN to let springs settle.
         Drains kinetic energy (damping) to reach a stable state.
@@ -219,7 +490,7 @@ class FLOWRRA_Orchestrator:
 
             # FIX: Record these stable states to WFC!
             # We simulate a "perfect" state: Coherence=1.0, Integrity=1.0
-            if _ > steps - 50:  # Only record the last 50 stable steps
+            if _ > steps - 25:  # Only record the last 50 stable steps
                 # We create a dummy "high coherence" entry so WFC has a safe place to return to
                 self.wfc.assess_loop_coherence(
                     coherence=1.0, nodes=self.nodes, loop_integrity=1.0
@@ -259,6 +530,9 @@ class FLOWRRA_Orchestrator:
             self.node_stuck_counters = {n.id: 0 for n in self.nodes}
 
         for node in self.nodes:
+            # Skip frozen nodes
+            if node.id in self.frozen_nodes:
+                continue
             # Track last 10 positions
             history = self.node_position_history[node.id]
             history.append(node.pos.copy())
@@ -328,19 +602,32 @@ class FLOWRRA_Orchestrator:
         # Smooth clamping
         return np.clip(coherence, 0.0, 1.0)
 
-    def step(self, episode_step: int, total_episodes: int = 8000) -> float:
+    def step(self, episode_step: int, total_episodes: int = 1000) -> float:
         """
         Execute one simulation step with loop dynamics and Gaussian exploration.
+
+        New: [December 30, 2025: 10:50 PM]
+        Key changes:
+            - Frozen nodes don't move (position locked)
+            - Frozen nodes still provide sensor/density info
+            - Loop only applies forces to active nodes
+            - GNN sees all nodes but only learns from active ones
         """
-        # --- 1. Update Obstacles ---
+
+        total_episodes = self.total_steps
+
+        # -- 1. Update Obstacles --
         self.obstacle_manager.update_all()
+
+        # NEW: Crystallization cycle check (unfreezing)
+        self.check_and_unfreeze_nodes()
 
         # After obstacle updates, before loop breaks check stuck nodes
         self.detect_and_unstick_nodes()
 
-        # --- 2. Check Loop Breaks ---
+        # -- 2. Check Loop Breaks (Active Nodes Only) --
         broken = self.loop.check_breaks(
-            self.nodes, self.obstacle_manager, self.step_count
+            self.get_active_nodes(), self.obstacle_manager, self.step_count
         )
         if broken:
             self.loop_break_events.append(
@@ -350,9 +637,9 @@ class FLOWRRA_Orchestrator:
                 }
             )
 
-        # --- 3. Attempt Reconnections ---
+        # -- 3. Attempt Reconnections (Active nodes only--
         reconnected = self.loop.attempt_reconnection(
-            self.nodes, self.obstacle_manager, self.step_count
+            self.get_active_nodes(), self.obstacle_manager, self.step_count
         )
 
         # Log successful reconnections
@@ -373,27 +660,33 @@ class FLOWRRA_Orchestrator:
 
         # Calculate reconnection bonus for reward later
         reconnection_bonus = len(reconnected) * self.cfg["rewards"].get(
-            "r_reconnection", 0.5
+            "r_reconnection", 5.0
         )
 
-        # --- 4. Calculate Spring Forces ---
-        spring_forces = self.loop.calculate_spring_forces(self.nodes)
+        # -- 4. Calculate Spring Forces (Active Nodes Only)--
+        spring_forces = self.loop.calculate_spring_forces(self.get_active_nodes())
 
-        # --- 5. Density Update ---
+        # -- 5. Density Update (ALL nodes, frozen included) --
+        # Frozen nodes still contribute to density field!
         self.density.update_from_sensor_data(
             all_nodes=self.nodes,
             all_obstacle_states=self.obstacle_manager.get_all_states(),
         )
 
-        # --- 6. Build State Representations & Store Local Grids ---
+        # -- 6. Build State Representations & Store Local Grids (ALL nodes) --
+        # GNN needs to see frozen nodes for context
         node_features = []
-        local_grids = []  # NEW: Store grids for WFC spatial collapse
+        local_grids = []
+        node_ids = [n.id for n in self.nodes]  # Track IDs for GNN
+
         adj_mat = build_adjacency_matrix(
             self.nodes, self.cfg["exploration"]["sensor_range"]
         )
 
         for node in self.nodes:
             # Sense environment
+            # All nodes sense environment (frozen included)
+            #
             node_detections = node.sense_nodes(self.nodes)
             obstacle_detections = node.sense_obstacles(
                 self.obstacle_manager.get_all_states()
@@ -419,13 +712,14 @@ class FLOWRRA_Orchestrator:
 
         node_features_array = np.array(node_features, dtype=np.float32)
 
-        # --- 7. GNN Action Selection ---
+        # -- 7. GNN Action Selection --
         # GNN handles its own epsilon schedule internally
         actions = self.gnn.choose_actions(
             node_features=node_features_array,
             adj_matrix=adj_mat,
             episode_number=self.current_episode,
             total_episodes=total_episodes,
+            node_ids=node_ids,  # CRITICAL: So GNN knows which are frozen
         )
 
         # Get current epsilon for tracking
@@ -433,104 +727,91 @@ class FLOWRRA_Orchestrator:
             self.current_episode, total_episodes
         )
 
-        # --- 8. Physics & Reward Calculation with Collision Response ---
+        # -- 8. Physics & Reward Calculation with Collision Response (Active Nodes Only Move) --
         step_rewards = []
 
         for i, node in enumerate(self.nodes):
-            action_id = actions[i]
+            # FROZEN NODES DON'T MOVE
+            if node.id in self.frozen_nodes:
+                # No reward/penalty for frozen nodes
+                step_rewards.append(0.0)
+                continue
+
+            # Active nodes: normal physics
+            action_id = actions[i] if actions is not None else 0
+
             old_pos = node.pos.copy()
 
-            # Apply action + spring force
+            # Apply action
             node.apply_directional_action(action_id, dt=1.0)
 
-            # Add spring force influence
-            # Update: WITH obstacle-aware damping
+            # Apply spring force (if this node has forces)
             if node.id in spring_forces:
                 force = spring_forces[node.id]
 
-                # Check if node is near obstacles
+                # Check obstacle proximity
                 near_obstacle = False
                 for obs in self.obstacle_manager.obstacles:
                     dist = np.linalg.norm(node.pos - obs.pos) - obs.radius
-                    if dist < 0.08:  # Within danger zone
+                    if dist < 0.08:
                         near_obstacle = True
                         break
 
-                # Reduce spring force near obstacles to allow escape
                 force_scale = 0.05 if near_obstacle else 0.1
-                node.pos = node.pos + force * force_scale  # Scale Force Influence
+                node.pos = node.pos + force * force_scale
 
-            # NEW: Collision Response with Wave Function Collapse
+            # Collision Response
             collides, obs_ids = self.obstacle_manager.check_collision(
                 node.pos, safety_margin=0.05
             )
 
             if collides:
-                # FLOWRRA Point 8: Micro-level WFC - collapse to nearby valid state
-                # Instead of hard snapback, intelligently search for valid positions
-                # IMPROVED: Momentum-based escape with larger search radius
+                # Micro-WFC escape
                 best_candidate = old_pos.copy()
-                best_distance_from_obstacle = 0.0  # Track how far we get from obstacles
+                best_distance = 0.0
 
-                # Calculate attempted movement direction (momentum)
                 attempted_dir = node.pos - old_pos
                 attempted_mag = np.linalg.norm(attempted_dir)
 
                 if attempted_mag > 0.0001:
                     attempted_dir = attempted_dir / attempted_mag
                 else:
-                    # If no movement, use a random direction
                     angle = np.random.uniform(0, 2 * np.pi)
                     attempted_dir = np.array([np.cos(angle), np.sin(angle)])
 
-                max_attempts = 16  # Increased from 8
-                search_radius = 0.04  # DOUBLED from 0.02
+                search_radius = 0.04
 
-                for attempt in range(max_attempts):
-                    angle = (attempt / max_attempts) * 2 * np.pi
-
-                    # Mix radial search with momentum direction
+                for attempt in range(16):
+                    angle = (attempt / 16) * 2 * np.pi
                     radial_offset = (
                         np.array([np.cos(angle), np.sin(angle)]) * search_radius
                     )
                     momentum_offset = attempted_dir * search_radius * 0.5
-
-                    # Combine: 70% radial exploration, 30% momentum direction
                     offset = radial_offset * 0.7 + momentum_offset * 0.3
 
                     candidate = old_pos + offset
 
-                    # Test candidate
-                    coll_check, coll_obs_ids = self.obstacle_manager.check_collision(
-                        candidate,
-                        safety_margin=0.03,  # Reduced safety margin slightly
+                    coll_check, _ = self.obstacle_manager.check_collision(
+                        candidate, safety_margin=0.03
                     )
 
                     if not coll_check:
-                        # Calculate distance to nearest obstacle to pick BEST candidate
-                        min_dist = float("inf")
-                        for obs in self.obstacle_manager.obstacles:
-                            dist = np.linalg.norm(candidate - obs.pos) - obs.radius
-                            min_dist = min(min_dist, dist)
-
-                        if min_dist > best_distance_from_obstacle:
+                        min_dist = min(
+                            np.linalg.norm(candidate - obs.pos) - obs.radius
+                            for obs in self.obstacle_manager.obstacles
+                        )
+                        if min_dist > best_distance:
                             best_candidate = candidate
-                            best_distance_from_obstacle = min_dist
+                            best_distance = min_dist
 
-                # Collapse to best candidate found
                 node.pos = best_candidate
 
-                # If we're STILL stuck (best_distance is very small), add extra random kick
-                if best_distance_from_obstacle < 0.09:
-                    # Emergency escape: large random displacement
+                if best_distance < 0.08:
                     random_kick = np.random.uniform(-0.09, 0.09, self.dims)
                     node.pos = node.pos + random_kick
-                    print(f"[Emergency] Node {node.id} received random escape kick")
 
-                # Heavy collision penalty - this teaches avoidance
                 r_coll = -self.cfg["rewards"]["r_collision"]
 
-                # Log collision event for WFC awareness
                 self.collision_events.append(
                     {
                         "timestep": self.step_count,
@@ -541,52 +822,37 @@ class FLOWRRA_Orchestrator:
                     }
                 )
 
-                # CRITICAL: Add repulsion scar at collision site
-                # Estimate velocity from movement attempt
-                attempted_velocity = node.pos - old_pos  # The failed move direction
+                # Splat collision repulsion
+                attempted_velocity = node.pos - old_pos
                 impact_speed = np.linalg.norm(attempted_velocity)
 
-                # This teaches "don't go here" via density field learning
                 if impact_speed > 0.002:
-                    collision_severity = 0.5  # Full severity for direct collision
-
-                    # Splat repulsion at collision point with forward projection
                     self.density.splat_collision_event(
                         position=node.pos.copy(),
                         velocity=attempted_velocity,
-                        severity=collision_severity,
+                        severity=0.5,
                         node_id=node.id,
                     )
             else:
                 r_coll = 0.0
 
-            # Calculate movement (from old_pos to final pos after collision handling)
+            # Calculate rewards
             move_mag = np.linalg.norm(node.pos - old_pos)
-
-            # Movement reward - reward for valid movement
             r_flow = self.cfg["rewards"]["r_flow"] * move_mag if not collides else 0.0
-
-            # Idle penalty
             r_idle = -self.cfg["rewards"]["r_idle"] if move_mag < 0.001 else 0.0
 
-            # Loop integrity reward/penalty
             loop_integrity = self.loop.calculate_integrity()
             r_loop = self.cfg["rewards"]["r_loop_integrity"] * loop_integrity
 
-            # Penalty for being in broken loop
             if not self.loop.is_loop_coherent(min_integrity=0.7):
                 r_loop -= self.cfg["rewards"]["r_collapse_penalty"]
 
-            # Total reward
             reward = r_flow + r_coll + r_idle + r_loop
             step_rewards.append(reward)
 
         step_rewards_array = np.array(step_rewards, dtype=np.float32)
 
         # Update map and calculate exploration reward
-        """new_coverage = self.map.update(self.nodes)
-        r_explore = new_coverage * self.cfg["rewards"]["r_explore"]
-        step_rewards_array += r_explore"""
         # Updating Patrol mode: Once coverage > 85% maintain loop and move around.
         # 1. Update Map & Calculate Standard Exploration
         new_coverage_diff = self.map.update(self.nodes)
@@ -638,7 +904,7 @@ class FLOWRRA_Orchestrator:
         if reconnection_bonus > 0:
             step_rewards_array += reconnection_bonus
 
-        # --- 9. Store Experience (Training Mode Only) ---
+        # -- 9. Store Experience (Training Mode Only) --
         training_loss = None  # Initialize loss tracking
 
         if self.mode == "training":
@@ -657,7 +923,7 @@ class FLOWRRA_Orchestrator:
                 )
 
                 if len(self.gnn.memory) >= self.gnn.batch_size:
-                    training_loss = self.gnn.learn()
+                    training_loss = self.gnn.learn(node_ids=node_ids)
                     self.training_losses.append(
                         {
                             "timestep": self.step_count,
@@ -672,7 +938,7 @@ class FLOWRRA_Orchestrator:
             if self.step_count % 100 == 0:
                 self.gnn.update_target_network()
 
-        # --- 10. Enhanced WFC with Loop Awareness & Spatial Collapse ---
+        # -- 10. Enhanced WFC with Loop Awareness & Spatial Collapse --
         loop_integrity = self.loop.calculate_integrity()
         current_coherence = self.calculate_coherence(step_rewards_array, loop_integrity)
 
@@ -812,7 +1078,7 @@ class FLOWRRA_Orchestrator:
                 f"[Reward] All nodes receive +{wfc_recovery_bonus:.1f} for {recovery_mode} recovery"
             )
 
-        # --- 11. Record State & Metrics ---
+        # -- 11. Record State & Metrics --
         self.record_state(episode_step, current_coherence, loop_integrity)
 
         # Track metrics
@@ -827,21 +1093,24 @@ class FLOWRRA_Orchestrator:
             "coherence": current_coherence,
             "loop_integrity": loop_integrity,
             "coverage": self.map.get_coverage_percentage(),
-            "broken_connections": len(self.loop.get_broken_connections()),
-            "total_breaks": self.loop.total_breaks,
-            "reconnections_this_step": len(reconnected) if reconnected else 0,
+            "num_active_nodes": len(self.get_active_nodes()),
+            "num_frozen_nodes": len(self.frozen_nodes),
             "collision_recoveries": len(
                 [e for e in self.collision_events if e["timestep"] == self.step_count]
             ),
         }
+
         self.metrics_history.append(metrics)
+
+        # SIMPLE STEP-BASED AUTO-FREEZE (every 50 step check)
+        self.auto_freeze_candidates_simple()
 
         # Update tracking
         self.step_count += 1
         avg_reward = float(np.mean(step_rewards_array))
         self.total_reward += avg_reward
 
-        return avg_reward
+        return avg_reward if len(step_rewards_array) > 0 else 0.0
 
     def record_state(self, t: int, coherence: float, loop_integrity: float):
         """Record current state for visualization."""
@@ -866,18 +1135,63 @@ class FLOWRRA_Orchestrator:
         }
         self.history.append(snap)
 
+    def get_freeze_statistics(self) -> dict:
+        """Get statistics about freezing behavior."""
+        if not self.frozen_events and not self.unfreeze_events:
+            return {
+                "total_freeze_events": 0,
+                "total_unfreeze_events": 0,
+                "avg_freeze_duration": 0,
+                "currently_frozen": 0,
+            }
+
+        # Calculate average freeze duration
+        freeze_durations = []
+        for unfreeze_event in self.unfreeze_events:
+            node_id = unfreeze_event["node_id"]
+            unfreeze_time = unfreeze_event["timestep"]
+
+            # Find corresponding freeze event
+            freeze_time = None
+            for freeze_event in self.frozen_events:
+                if freeze_event["node_id"] == node_id:
+                    if freeze_event["timestep"] < unfreeze_time:
+                        freeze_time = freeze_event["timestep"]
+                        break
+
+            if freeze_time is not None:
+                duration = unfreeze_time - freeze_time
+                freeze_durations.append(duration)
+
+        return {
+            "total_freeze_events": len(self.frozen_events),
+            "total_unfreeze_events": len(self.unfreeze_events),
+            "avg_freeze_duration": np.mean(freeze_durations) if freeze_durations else 0,
+            "currently_frozen": len(self.frozen_nodes),
+            "max_frozen_at_once": max(
+                [len(self.frozen_nodes)]
+                + [e.get("num_frozen", 0) for e in self.frozen_events]
+            )
+            if self.frozen_events
+            else 0,
+        }
+
     def get_statistics(self) -> dict:
         """Get comprehensive simulation statistics."""
         coverage = self.map.get_coverage_percentage()
         loop_stats = self.loop.get_statistics()
         density_stats = self.density.get_statistics()
+        freeze_stats = self.get_freeze_statistics()
 
         return {
             "step": self.step_count,
             "mode": self.mode,
             "coverage": coverage,
             "avg_reward": self.total_reward / max(1, self.step_count),
-            "num_nodes": len(self.nodes),
+            "num_total_nodes": len(self.nodes),
+            "num_active_nodes": len(self.get_active_nodes()),
+            "num_frozen_nodes": len(self.frozen_nodes),
+            "frozen_node_ids": list(self.frozen_nodes),
             "buffer_size": len(self.gnn.memory) if self.mode == "training" else 0,
             "loop_integrity": loop_stats["current_integrity"],
             "total_loop_breaks": loop_stats["total_breaks_occurred"],
@@ -890,6 +1204,7 @@ class FLOWRRA_Orchestrator:
             "repulsion_field_coverage": density_stats[
                 "repulsion_field_nonzero_fraction"
             ],
+            "freeze_stats": freeze_stats,
         }
 
     def save_metrics(self, filepath: str):
@@ -920,6 +1235,7 @@ class FLOWRRA_Orchestrator:
             "final_statistics": convert_to_serializable(self.get_statistics()),
             "loop_statistics": convert_to_serializable(self.loop.get_statistics()),
             "metrics_timeseries": convert_to_serializable(self.metrics_history),
+            "frozen_events": convert_to_serializable(self.frozen_events),
             "training_losses": convert_to_serializable(self.training_losses),
             "loop_break_events": convert_to_serializable(self.loop_break_events),
             "wfc_trigger_events": convert_to_serializable(self.wfc_trigger_events),

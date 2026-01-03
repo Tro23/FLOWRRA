@@ -172,153 +172,166 @@ class FLOWRRA_Orchestrator:
         print(f"  Active nodes: {len(self.nodes) - len(self.frozen_nodes)}")
         print(f"{'=' * 60}\n")
 
-    def check_and_unfreeze_nodes(self):
+    def check_and_manage_freeze_cycles(self):
         """
-        Simple step-based unfreezing.
-        After 150 steps frozen, automatically unfreeze.
+        Complete freeze/unfreeze cycle manager.
+        Handles both freezing and unfreezing in one place.
+
+        Cycle Timeline:
+        - Step 0-200: Warmup (no freezing)
+        - Step 200: Check if loop stable → Freeze 1-4 random nodes
+        - Step 200-350: Nodes frozen (150 steps)
+        - Step 350-500: Gradual unfreeze (1 node every ~30 steps)
+        - Step 500: Cycle 1 complete
+        - Step 500-700: Check again → Cycle 2 (if loop still stable)
+        - Step 700+: Done, no more cycles
         """
-        MIN_ACTIVE_NODES = 4  # Safety minimum
-        FREEZE_DURATION = 150  # Fixed duration
 
-        current_step = self.step_count
-        num_active = len(self.get_active_nodes())
+        # ==================== CONFIG ====================
+        WARMUP_STEPS = 80  # Wait this long before first freeze
+        CYCLE_DURATION = 180  # Total cycle: 100 frozen + 50 unfreezing
+        FREEZE_DURATION = 100  # How long nodes stay frozen
+        MIN_INTEGRITY_TO_START = 0.7  # Loop must be this stable
+        INTEGRITY_WINDOW = 20  # Average over last N steps
+        MAX_CYCLES = 2  # Total number of cycles
+        MIN_FREEZE = 1  # Minimum nodes to freeze
+        MAX_FREEZE = 3  # Maximum nodes to freeze
+        MIN_ACTIVE_NODES = 4  # Never go below this
 
-        # Emergency: Never drop below minimum active nodes
-        if num_active < MIN_ACTIVE_NODES:
-            frozen_list = sorted(
-                self.frozen_events,
-                key=lambda x: x["timestep"],  # Oldest first
-            )
-
-            for i in range(min(MIN_ACTIVE_NODES - num_active, len(frozen_list))):
-                node_id = frozen_list[i]["node_id"]
-                if node_id in self.frozen_nodes:
-                    self.unfreeze_node(node_id)
-                    print(
-                        f"[Unfreeze] Emergency: Restored node {node_id} (safety minimum)"
-                    )
-            return
-
-        # Main Logic: Auto-unfreeze after FREEZE_DURATION steps
-        nodes_to_unfreeze = []
-
-        for freeze_event in self.frozen_events:
-            node_id = freeze_event["node_id"]
-            freeze_timestep = freeze_event["timestep"]
-            time_frozen = current_step - freeze_timestep
-
-            # Check if node is still frozen AND has been frozen long enough
-            if node_id in self.frozen_nodes and time_frozen >= FREEZE_DURATION:
-                nodes_to_unfreeze.append(node_id)
-
-        # Unfreeze all eligible nodes
-        for node_id in nodes_to_unfreeze:
-            self.unfreeze_node(node_id)
-            print(f"[Unfreeze] Node {node_id} thawed after {FREEZE_DURATION} steps")
-
-            # Log the unfreeze event
-            unfreeze_event = {
-                "timestep": current_step,
-                "node_id": node_id,
-                "time_frozen": FREEZE_DURATION,
-                "reason": "step_timer_expired",
+        # ==================== INITIALIZE STATE ====================
+        if not hasattr(self, "freeze_state"):
+            self.freeze_state = {
+                "cycle_count": 0,  # How many cycles completed
+                "cycle_start_step": None,  # When current cycle started
+                "frozen_node_list": [],  # Nodes frozen in current cycle
+                "unfreeze_schedule": [],  # [(step, node_id), ...] for gradual unfreeze
             }
-            self.unfreeze_events.append(unfreeze_event)
 
-    def should_freeze_node_simple(self, node_id: int) -> bool:
-        """
-        Simple step-based freezing criteria.
+        state = self.freeze_state
+        if self.step_count % self.total_steps == 0:
+            current_step = 0
+            state["cycle_count"] = 0
+            state["cycle_start_step"] = None
+            state["frozen_node_list"] = []
+            state["unfreeze_schedule"] = []
 
-        Returns True if:
-        1. Node has been stable for STABILITY_DURATION steps
-        2. Less than MAX_FROZEN nodes currently frozen
-        3. Coverage > 60% (basic progress check)
-        """
-        STABILITY_DURATION = 150  # Must be stable this many steps
-        MAX_FROZEN_AT_ONCE = 3  # Never freeze more than this
-        MIN_COVERAGE_FOR_FREEZE = 0.75
+        if self.step_count > self.total_steps:
+            i = self.step_count // self.total_steps
+            current_step = self.step_count - (self.total_steps * i)
+        else:
+            current_step = self.step_count
 
-        # Check coverage
-        coverage = self.map.get_coverage_percentage() / 100.0
-        if coverage < MIN_COVERAGE_FOR_FREEZE:
-            return False
+        # ==================== CHECK IF CYCLES COMPLETE ====================
+        if state["cycle_count"] >= MAX_CYCLES:
+            return  # Done! No more cycles
 
-        # Check if already too many frozen
-        if len(self.frozen_nodes) >= MAX_FROZEN_AT_ONCE:
-            return False
+        # ==================== WARMUP PERIOD ====================
+        if current_step < WARMUP_STEPS:
+            return  # Too early
 
-        # Check if node has been stable (not moving much)
-        if hasattr(self, "node_position_history"):
-            if node_id in self.node_position_history:
-                history = self.node_position_history[node_id]
+        # ==================== CYCLE IN PROGRESS ====================
+        if state["cycle_start_step"] is not None:
+            cycle_elapsed = current_step - state["cycle_start_step"]
 
-                if len(history) >= STABILITY_DURATION:
-                    # Calculate movement in last STABILITY_DURATION steps
-                    recent_history = history[-STABILITY_DURATION:]
-                    total_movement = sum(
-                        np.linalg.norm(recent_history[i] - recent_history[i - 1])
-                        for i in range(1, len(recent_history))
+            # Check unfreeze schedule
+            if state["unfreeze_schedule"]:
+                # Unfreeze nodes that have reached their scheduled time
+                for scheduled_step, node_id in list(state["unfreeze_schedule"]):
+                    if current_step >= scheduled_step:
+                        if node_id in self.frozen_nodes:
+                            self.unfreeze_node(node_id)
+                            print(
+                                f"[Cycle {state['cycle_count'] + 1}] 🔥 Unfroze node {node_id} "
+                                f"(step {cycle_elapsed}/{CYCLE_DURATION})"
+                            )
+
+                        # Remove from schedule
+                        state["unfreeze_schedule"].remove((scheduled_step, node_id))
+
+            # Check if cycle complete
+            if cycle_elapsed >= CYCLE_DURATION:
+                # Cycle done!
+                state["cycle_count"] += 1
+                state["cycle_start_step"] = None
+                state["frozen_node_list"] = []
+                state["unfreeze_schedule"] = []
+
+                print(f"\n{'=' * 60}")
+                print(f"[Cycle] ✅ Cycle {state['cycle_count']}/{MAX_CYCLES} COMPLETE!")
+                print(f"{'=' * 60}\n")
+
+                # Check if we should stop
+                if state["cycle_count"] >= MAX_CYCLES:
+                    print(
+                        f"[Cycle] 🎉 All {MAX_CYCLES} cycles complete - no more freezing!\n"
                     )
 
-                    # If barely moved, candidate for freezing
-                    if total_movement < 0.09:
-                        return True
+            return  # Cycle in progress, nothing more to do
 
-        return False
+        # ==================== START NEW CYCLE ====================
+        # Only start if enough time has passed since last cycle
+        last_cycle_end = state["cycle_count"] * (WARMUP_STEPS + CYCLE_DURATION)
+        if current_step < last_cycle_end + WARMUP_STEPS:
+            return  # Not enough time since last cycle
 
-    def auto_freeze_candidates_simple(self):
-        """
-        Freeze 1-3 nodes from loop edges if they've been stable.
+        # Check loop integrity (average over last INTEGRITY_WINDOW steps)
+        if (
+            not hasattr(self, "metrics_history")
+            or len(self.metrics_history) < INTEGRITY_WINDOW
+        ):
+            return  # Not enough history
 
-        Strategy:
-        - Only freeze nodes at the "edges" of the active loop (first/last positions)
-        - Freeze 1-3 nodes at random (more variety)
-        - Only trigger every 50 steps (don't spam)
-        """
-        # Only check every 50 steps
-        if self.step_count % 50 != 0:
-            return
+        recent_metrics = self.metrics_history[-INTEGRITY_WINDOW:]
+        avg_integrity = np.mean([m["loop_integrity"] for m in recent_metrics])
 
-        coverage = self.map.get_coverage_percentage() / 100.0
-
-        # Only freeze in mid-to-late game
-        if coverage < 0.70:
-            return
+        if avg_integrity < MIN_INTEGRITY_TO_START:
+            return  # Loop not stable enough
 
         # Get active nodes
         active_nodes = self.get_active_nodes()
 
-        if len(active_nodes) <= 4:
+        if len(active_nodes) <= MIN_ACTIVE_NODES:
             return  # Too few active nodes
 
-        # Find edge nodes (first and last in loop sequence)
-        # These are less disruptive to freeze
-        edge_candidates = []
+        # ==================== FREEZE RANDOM NODES ====================
+        # Pick 1-4 random nodes to freeze
+        num_to_freeze = np.random.randint(
+            MIN_FREEZE, min(MAX_FREEZE + 1, len(active_nodes) - MIN_ACTIVE_NODES + 1)
+        )
 
-        # Strategy: Freeze nodes at positions 0, 1, -2, -1 in the active loop
-        # (edges of the ring)
-        if len(active_nodes) > 6:
-            edge_positions = [0, 1, -2, -1]
-            for pos in edge_positions:
-                node = active_nodes[pos]
-                if self.should_freeze_node_simple(node.id):
-                    edge_candidates.append(node.id)
+        # Randomly select nodes
+        nodes_to_freeze = np.random.choice(
+            [n.id for n in active_nodes], size=num_to_freeze, replace=False
+        ).tolist()
 
-        if not edge_candidates:
-            return
-
-        # Randomly freeze 1-3 nodes from edge candidates
-        num_to_freeze = np.random.randint(1, min(4, len(edge_candidates) + 1))
-
-        # Shuffle and take first N
-        np.random.shuffle(edge_candidates)
-        nodes_to_freeze = edge_candidates[:num_to_freeze]
-
+        # Freeze them
         for node_id in nodes_to_freeze:
-            self.freeze_node(node_id, reason="step_based_crystallization")
-            print(
-                f"[Auto-Freeze] Node {node_id} crystallized (edge position, stable for 100+ steps)"
-            )
+            self.freeze_node(node_id, reason=f"cycle_{state['cycle_count'] + 1}")
+
+        # Record cycle start
+        state["cycle_start_step"] = current_step
+        state["frozen_node_list"] = nodes_to_freeze
+
+        # ==================== SCHEDULE GRADUAL UNFREEZING ====================
+        # Unfreeze nodes gradually over steps [FREEZE_DURATION, CYCLE_DURATION]
+        # Example: If 4 nodes frozen, unfreeze at steps 150, 180, 210, 240
+        unfreeze_period = CYCLE_DURATION - FREEZE_DURATION  # 150 steps
+        unfreeze_interval = unfreeze_period // len(
+            nodes_to_freeze
+        )  # ~30-50 steps per node
+
+        for i, node_id in enumerate(nodes_to_freeze):
+            unfreeze_step = current_step + FREEZE_DURATION + (i * unfreeze_interval)
+            state["unfreeze_schedule"].append((unfreeze_step, node_id))
+        print(f"\n{'=' * 60}")
+        print(f"[Cycle] 🧊 CYCLE {state['cycle_count'] + 1}/{MAX_CYCLES} STARTED!")
+        print(f"  Frozen nodes: {nodes_to_freeze}")
+        print(f"  Loop integrity (avg): {avg_integrity:.2f}")
+        print(f"  Freeze duration: {FREEZE_DURATION} steps")
+        print(
+            f"  Unfreeze schedule: {len(state['unfreeze_schedule'])} nodes over {unfreeze_period} steps"
+        )
+        print(f"{'=' * 60}\n")
 
     def unfreeze_node(self, node_id: int):
         """Unfreeze a node - it becomes active again."""
@@ -618,9 +631,6 @@ class FLOWRRA_Orchestrator:
 
         # -- 1. Update Obstacles --
         self.obstacle_manager.update_all()
-
-        # NEW: Crystallization cycle check (unfreezing)
-        self.check_and_unfreeze_nodes()
 
         # After obstacle updates, before loop breaks check stuck nodes
         self.detect_and_unstick_nodes()
@@ -1103,7 +1113,7 @@ class FLOWRRA_Orchestrator:
         self.metrics_history.append(metrics)
 
         # SIMPLE STEP-BASED AUTO-FREEZE (every 50 step check)
-        self.auto_freeze_candidates_simple()
+        self.check_and_manage_freeze_cycles()
 
         # Update tracking
         self.step_count += 1
@@ -1137,43 +1147,26 @@ class FLOWRRA_Orchestrator:
 
     def get_freeze_statistics(self) -> dict:
         """Get statistics about freezing behavior."""
-        if not self.frozen_events and not self.unfreeze_events:
+        if not hasattr(self, "freeze_state"):
             return {
-                "total_freeze_events": 0,
-                "total_unfreeze_events": 0,
-                "avg_freeze_duration": 0,
+                "cycles_completed": 0,
+                "cycle_in_progress": False,
                 "currently_frozen": 0,
             }
 
-        # Calculate average freeze duration
-        freeze_durations = []
-        for unfreeze_event in self.unfreeze_events:
-            node_id = unfreeze_event["node_id"]
-            unfreeze_time = unfreeze_event["timestep"]
-
-            # Find corresponding freeze event
-            freeze_time = None
-            for freeze_event in self.frozen_events:
-                if freeze_event["node_id"] == node_id:
-                    if freeze_event["timestep"] < unfreeze_time:
-                        freeze_time = freeze_event["timestep"]
-                        break
-
-            if freeze_time is not None:
-                duration = unfreeze_time - freeze_time
-                freeze_durations.append(duration)
+        state = self.freeze_state
 
         return {
+            "cycles_completed": state["cycle_count"],
+            "cycle_in_progress": state["cycle_start_step"] is not None,
+            "current_cycle_step": (self.step_count - state["cycle_start_step"])
+            if state["cycle_start_step"]
+            else 0,
+            "currently_frozen": len(self.frozen_nodes),
+            "frozen_node_ids": list(self.frozen_nodes),
+            "pending_unfreezes": len(state.get("unfreeze_schedule", [])),
             "total_freeze_events": len(self.frozen_events),
             "total_unfreeze_events": len(self.unfreeze_events),
-            "avg_freeze_duration": np.mean(freeze_durations) if freeze_durations else 0,
-            "currently_frozen": len(self.frozen_nodes),
-            "max_frozen_at_once": max(
-                [len(self.frozen_nodes)]
-                + [e.get("num_frozen", 0) for e in self.frozen_events]
-            )
-            if self.frozen_events
-            else 0,
         }
 
     def get_statistics(self) -> dict:

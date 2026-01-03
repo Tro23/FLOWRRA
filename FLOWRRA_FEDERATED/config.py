@@ -132,8 +132,8 @@ CONFIG = {
     "moving_obstacles": [],
     # ==================== TRAINING ====================
     "training": {
-        "num_episodes": 100,
-        "steps_per_episode": 500,
+        "num_episodes": 50,
+        "steps_per_episode": 650,
         "target_update_frequency": 100,
         "save_frequency": 100,
         "metrics_save_frequency": 20,

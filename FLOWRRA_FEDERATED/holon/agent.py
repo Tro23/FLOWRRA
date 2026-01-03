@@ -407,6 +407,7 @@ class GNNAgent:
         self.frozen_node_positions: Dict[
             int, np.ndarray
         ] = {}  # Storing Frozen Positions
+        self.node_lifetime_freeze_counts = {}
 
         # Policy and target networks
         self.policy_net = GNNPolicy(
@@ -481,6 +482,11 @@ class GNNAgent:
         self.frozen_nodes.add(node_id)
         self.frozen_node_positions[node_id] = position.copy()
 
+        # Increment lifetime count
+        self.node_lifetime_freeze_counts[node_id] = (
+            self.node_lifetime_freeze_counts.get(node_id, 0) + 1
+        )
+
         print(f"[GNN] 🧊 Node {node_id} FROZEN at position {position}")
         print(f"[GNN] Total frozen nodes: {len(self.frozen_nodes)}")
 
@@ -488,7 +494,8 @@ class GNNAgent:
         """Unfreeze a node - it becomes active again."""
         if node_id in self.frozen_nodes:
             self.frozen_nodes.remove(node_id)
-            del self.frozen_node_positions[node_id]
+            if node_id in self.frozen_node_positions:
+                del self.frozen_node_positions[node_id]
             print(f"[GNN] 🔥 Node {node_id} UNFROZEN")
 
     def is_frozen(self, node_id: int) -> bool:

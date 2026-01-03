@@ -269,100 +269,6 @@ class Holon:
                         node_id=node.id,
                     )
 
-    # ========================================================================
-    # STRATEGIC FREEZING LOGIC
-    # ========================================================================
-
-    def _check_strategic_freezing(self):
-        """
-        Decide if we should freeze any nodes based on strategic criteria.
-
-        Triggers:
-        1. High coverage reached (>85%)
-        2. Node is at edge of explored region
-        3. Node has been stable for N steps
-        4. System integrity is good (>0.7)
-        """
-        if not self.enable_strategic_freezing:
-            return
-
-        if self.orchestrator is None:
-            return
-
-        # Check if we've reached freeze threshold
-        coverage = self.orchestrator.map.get_coverage_percentage()
-        if coverage < self.freeze_at_coverage:
-            return
-
-        # Check system health
-        loop_integrity = self.orchestrator.loop.calculate_integrity()
-        if loop_integrity < 0.7:
-            return  # Don't freeze during instability
-
-        active_nodes = self.orchestrator.get_active_nodes()
-
-        # Don't freeze if we're down to minimum active nodes
-        min_active_nodes = 4
-        if len(active_nodes) <= min_active_nodes:
-            return
-
-        # Strategy 1: Freeze edge nodes (perimeter guards)
-        if self.freeze_edge_nodes:
-            edge_candidates = self._find_edge_nodes(active_nodes)
-
-            for node_id in edge_candidates:
-                # Check if this node has been stable
-                if self._is_node_stable(node_id, stability_steps=5):
-                    print(f"\n[Holon {self.holon_id}] 🎯 Strategic Freeze Decision:")
-                    print(f"  Coverage: {coverage:.1f}%")
-                    print(f"  Loop Integrity: {loop_integrity:.2f}")
-                    print(f"  Active Nodes: {len(active_nodes)}")
-
-                    self.orchestrator.freeze_node(
-                        node_id, reason=f"edge_guard_coverage_{coverage:.0f}%"
-                    )
-                    return  # Only freeze one per check
-
-    def _find_edge_nodes(self, nodes: List[NodePositionND]) -> List[int]:
-        """
-        Find nodes that are at the edge of explored territory.
-        These make good candidates for static guards.
-        """
-        edge_candidates = []
-
-        for node in nodes:
-            # Check if node is near boundary
-            near_x_edge = (node.pos[0] < 0.3) or (node.pos[0] > 0.7)
-            near_y_edge = (node.pos[1] < 0.3) or (node.pos[1] > 0.7)
-
-            if near_x_edge or near_y_edge:
-                edge_candidates.append(node.id)
-
-        return edge_candidates
-
-    def _is_node_stable(self, node_id: int, stability_steps: int = 5) -> bool:
-        """
-        Check if a node has been relatively stationary for N steps.
-        Stable nodes are good candidates for freezing.
-        """
-        if not hasattr(self.orchestrator, "node_position_history"):
-            return False
-
-        history = self.orchestrator.node_position_history.get(node_id, [])
-
-        if len(history) < stability_steps:
-            return False
-
-        # Check recent movement
-        recent_history = history[-stability_steps:]
-        total_movement = sum(
-            np.linalg.norm(recent_history[i] - recent_history[i - 1])
-            for i in range(1, len(recent_history))
-        )
-
-        # Stable if moved less than 0.1 units in last N steps
-        return True if total_movement < 0.4 else False
-
     def step(self, episode_step: int, total_episodes: int = 1000) -> float:
         """
         Execute one simulation step with Coordinate Normalization.
@@ -411,10 +317,6 @@ class Holon:
         # Now that we are in global space, apply the 'Hard Wall' constraints
         # we wrote earlier to prevent leaking into other holons.
         self._apply_boundary_constraints()
-
-        # --- PHASE 5: STRATEGIC FREEZING ---
-        # Check if conditions are right to freeze a node
-        self._check_strategic_freezing()
 
         # WFC Reporting Logic (Kept from your current code)
         if len(self.orchestrator.wfc_trigger_events) > pre_step_wfc_count:

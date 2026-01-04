@@ -188,11 +188,11 @@ class FLOWRRA_Orchestrator:
         """
 
         # ==================== CONFIG ====================
-        WARMUP_STEPS = 80  # Wait this long before first freeze
-        CYCLE_DURATION = 180  # Total cycle: 100 frozen + 50 unfreezing
-        FREEZE_DURATION = 100  # How long nodes stay frozen
+        WARMUP_STEPS = 200  # Wait this long before first freeze
+        CYCLE_DURATION = 350  # Total cycle: 100 frozen + 50 unfreezing
+        FREEZE_DURATION = 200  # How long nodes stay frozen
         MIN_INTEGRITY_TO_START = 0.7  # Loop must be this stable
-        INTEGRITY_WINDOW = 20  # Average over last N steps
+        INTEGRITY_WINDOW = 50  # Average over last N steps
         MAX_CYCLES = 2  # Total number of cycles
         MIN_FREEZE = 1  # Minimum nodes to freeze
         MAX_FREEZE = 3  # Maximum nodes to freeze
@@ -208,18 +208,17 @@ class FLOWRRA_Orchestrator:
             }
 
         state = self.freeze_state
-        if self.step_count % self.total_steps == 0:
-            current_step = 0
+        if self.step_count >= self.total_steps:
+            i = self.step_count % self.total_steps
+            current_step = i
+        else:
+            current_step = self.step_count
+
+        if current_step == 0:
             state["cycle_count"] = 0
             state["cycle_start_step"] = None
             state["frozen_node_list"] = []
             state["unfreeze_schedule"] = []
-
-        if self.step_count > self.total_steps:
-            i = self.step_count // self.total_steps
-            current_step = self.step_count - (self.total_steps * i)
-        else:
-            current_step = self.step_count
 
         # ==================== CHECK IF CYCLES COMPLETE ====================
         if state["cycle_count"] >= MAX_CYCLES:

@@ -1,32 +1,32 @@
 {
   "episode_rewards": [
-    144.0942549650073,
-    20.76940070310235,
-    20.474834878653287,
-    19.84151891160011,
-    19.15843965676427,
-    19.313122604638338,
-    20.184611386716366,
-    19.77410737863183,
-    19.966244554042817,
-    20.094405408918856,
-    18.25000598064065,
-    19.55715141940117,
-    21.14950363224745,
-    20.601562834620477,
-    20.877422761678694,
-    21.15702127844095,
-    21.50548910498619,
-    20.81628338587284,
-    20.70230897963047,
-    20.76264023000002
+    112.28232604215542,
+    11.680402675519387,
+    11.432863365486265,
+    9.38466982225577,
+    8.983343458945553,
+    8.611033918435375,
+    11.30239694374303,
+    9.618314050883054,
+    11.142201585744818,
+    10.028319434473913,
+    9.744057536522547,
+    11.343147771755854,
+    11.42693039521575,
+    11.070894323910276,
+    9.89018910082678,
+    3.743732383896907,
+    7.5834594271828735,
+    8.669243802676599,
+    8.926520755824944,
+    7.937816716109713
   ],
   "federation_metrics": [
     {
-      "step": 20000,
+      "step": 24000,
       "num_holons": 4,
-      "total_breaches": 832,
-      "breaches_per_step": 0.0416,
+      "total_breaches": 1124,
+      "breaches_per_step": 0.04683333333333333,
       "grid_size": 2
     }
   ],
@@ -35,112 +35,184 @@
       {
         "holon_id": 0,
         "partition_id": 0,
-        "steps": 20000,
-        "num_nodes": 8,
-        "avg_reward": 27.95100557795175,
-        "total_breaches": 251,
+        "steps": 24000,
+        "num_total_nodes": 8,
+        "num_active_nodes": 8,
+        "num_frozen_nodes": 0,
+        "avg_reward": 15.163986433580522,
+        "total_breaches": 288,
         "boundary_repulsion_active": true,
         "orchestrator_stats": {
-          "step": 20000,
+          "step": 24000,
           "mode": "training",
           "coverage": 100.0,
-          "avg_reward": 28.01375557795167,
-          "num_nodes": 8,
+          "avg_reward": 15.283986433580518,
+          "num_total_nodes": 8,
+          "num_active_nodes": 8,
+          "num_frozen_nodes": 0,
+          "frozen_node_ids": [],
           "buffer_size": 15000,
-          "loop_integrity": 1.0,
-          "total_loop_breaks": 845,
-          "total_reconnections": 102,
-          "wfc_triggers": 253,
-          "collision_events": 2638,
+          "loop_integrity": 0.75,
+          "total_loop_breaks": 2992,
+          "total_reconnections": 142,
+          "wfc_triggers": 876,
+          "collision_events": 3181,
           "num_obstacles": 5,
-          "density_collision_splats": 2637,
-          "density_wfc_splats": 1752,
-          "repulsion_field_coverage": 1.0
-        }
+          "density_collision_splats": 3181,
+          "density_wfc_splats": 4480,
+          "repulsion_field_coverage": 1.0,
+          "freeze_stats": {
+            "cycles_completed": 2,
+            "cycle_in_progress": false,
+            "current_cycle_step": 0,
+            "currently_frozen": 0,
+            "frozen_node_ids": [],
+            "pending_unfreezes": 0,
+            "total_freeze_events": 81,
+            "total_unfreeze_events": 0
+          }
+        },
+        "strategic_freezing_enabled": false
       }
     ],
     "1": [
       {
         "holon_id": 1,
         "partition_id": 1,
-        "steps": 20000,
-        "num_nodes": 8,
-        "avg_reward": 27.151672742325104,
-        "total_breaches": 135,
+        "steps": 24000,
+        "num_total_nodes": 8,
+        "num_active_nodes": 5,
+        "num_frozen_nodes": 3,
+        "avg_reward": 12.327674867165529,
+        "total_breaches": 197,
         "boundary_repulsion_active": true,
         "orchestrator_stats": {
-          "step": 20000,
+          "step": 24000,
           "mode": "training",
           "coverage": 100.0,
-          "avg_reward": 27.185422742325066,
-          "num_nodes": 8,
+          "avg_reward": 12.409758200498919,
+          "num_total_nodes": 8,
+          "num_active_nodes": 5,
+          "num_frozen_nodes": 3,
+          "frozen_node_ids": [
+            10,
+            13,
+            15
+          ],
           "buffer_size": 15000,
-          "loop_integrity": 0.75,
-          "total_loop_breaks": 930,
-          "total_reconnections": 59,
-          "wfc_triggers": 277,
-          "collision_events": 2648,
+          "loop_integrity": 1.0,
+          "total_loop_breaks": 6254,
+          "total_reconnections": 97,
+          "wfc_triggers": 1985,
+          "collision_events": 6085,
           "num_obstacles": 5,
-          "density_collision_splats": 2647,
-          "density_wfc_splats": 2088,
-          "repulsion_field_coverage": 1.0
-        }
+          "density_collision_splats": 6085,
+          "density_wfc_splats": 13792,
+          "repulsion_field_coverage": 1.0,
+          "freeze_stats": {
+            "cycles_completed": 2,
+            "cycle_in_progress": false,
+            "current_cycle_step": 0,
+            "currently_frozen": 3,
+            "frozen_node_ids": [
+              10,
+              13,
+              15
+            ],
+            "pending_unfreezes": 0,
+            "total_freeze_events": 66,
+            "total_unfreeze_events": 0
+          }
+        },
+        "strategic_freezing_enabled": false
       }
     ],
     "2": [
       {
         "holon_id": 2,
         "partition_id": 2,
-        "steps": 20000,
-        "num_nodes": 8,
-        "avg_reward": 24.411159576886792,
-        "total_breaches": 297,
+        "steps": 24000,
+        "num_total_nodes": 8,
+        "num_active_nodes": 8,
+        "num_frozen_nodes": 0,
+        "avg_reward": 15.042792784243824,
+        "total_breaches": 176,
         "boundary_repulsion_active": true,
         "orchestrator_stats": {
-          "step": 20000,
+          "step": 24000,
           "mode": "training",
           "coverage": 100.0,
-          "avg_reward": 24.48540957688689,
-          "num_nodes": 8,
+          "avg_reward": 15.116126117577155,
+          "num_total_nodes": 8,
+          "num_active_nodes": 8,
+          "num_frozen_nodes": 0,
+          "frozen_node_ids": [],
           "buffer_size": 15000,
-          "loop_integrity": 0.75,
-          "total_loop_breaks": 2597,
-          "total_reconnections": 99,
-          "wfc_triggers": 833,
-          "collision_events": 4009,
+          "loop_integrity": 0.875,
+          "total_loop_breaks": 1899,
+          "total_reconnections": 120,
+          "wfc_triggers": 643,
+          "collision_events": 3851,
           "num_obstacles": 4,
-          "density_collision_splats": 4009,
-          "density_wfc_splats": 6552,
-          "repulsion_field_coverage": 1.0
-        }
+          "density_collision_splats": 3851,
+          "density_wfc_splats": 2320,
+          "repulsion_field_coverage": 1.0,
+          "freeze_stats": {
+            "cycles_completed": 2,
+            "cycle_in_progress": false,
+            "current_cycle_step": 0,
+            "currently_frozen": 0,
+            "frozen_node_ids": [],
+            "pending_unfreezes": 0,
+            "total_freeze_events": 85,
+            "total_unfreeze_events": 0
+          }
+        },
+        "strategic_freezing_enabled": false
       }
     ],
     "3": [
       {
         "holon_id": 3,
         "partition_id": 3,
-        "steps": 20000,
-        "num_nodes": 8,
-        "avg_reward": 26.296228113955284,
-        "total_breaches": 149,
+        "steps": 24000,
+        "num_total_nodes": 8,
+        "num_active_nodes": 8,
+        "num_frozen_nodes": 0,
+        "avg_reward": 16.425918617323212,
+        "total_breaches": 202,
         "boundary_repulsion_active": true,
         "orchestrator_stats": {
-          "step": 20000,
+          "step": 24000,
           "mode": "training",
           "coverage": 100.0,
-          "avg_reward": 26.33347811395526,
-          "num_nodes": 8,
+          "avg_reward": 16.510085283989707,
+          "num_total_nodes": 8,
+          "num_active_nodes": 8,
+          "num_frozen_nodes": 0,
+          "frozen_node_ids": [],
           "buffer_size": 15000,
           "loop_integrity": 1.0,
-          "total_loop_breaks": 1617,
-          "total_reconnections": 72,
-          "wfc_triggers": 470,
-          "collision_events": 3312,
+          "total_loop_breaks": 1164,
+          "total_reconnections": 85,
+          "wfc_triggers": 420,
+          "collision_events": 5695,
           "num_obstacles": 5,
-          "density_collision_splats": 3312,
-          "density_wfc_splats": 3672,
-          "repulsion_field_coverage": 1.0
-        }
+          "density_collision_splats": 5693,
+          "density_wfc_splats": 848,
+          "repulsion_field_coverage": 1.0,
+          "freeze_stats": {
+            "cycles_completed": 2,
+            "cycle_in_progress": false,
+            "current_cycle_step": 0,
+            "currently_frozen": 0,
+            "frozen_node_ids": [],
+            "pending_unfreezes": 0,
+            "total_freeze_events": 72,
+            "total_unfreeze_events": 0
+          }
+        },
+        "strategic_freezing_enabled": false
       }
     ]
   },
@@ -197,14 +269,17 @@
     },
     "rewards": {
       "r_flow": 5.0,
-      "r_collision": 35.0,
-      "r_idle": 1.0,
+      "r_collision": 30.0,
+      "r_idle": 2.0,
       "r_loop_integrity": 10.0,
-      "r_collapse_penalty": 30.0,
-      "r_explore": 10.0,
+      "r_collapse_penalty": 25.0,
+      "r_explore": 12.0,
       "r_reconnection_spatial": 40.0,
       "r_reconnection_temporal": 10.0,
-      "r_boundary_breach": 5.0
+      "r_boundary_breach": 10.0,
+      "r_frozen_node_bonus": 50.0,
+      "r_frozen_utility": 1.0,
+      "r_reconnection": 5.0
     },
     "repulsion": {
       "local_grid_size": [
@@ -229,13 +304,13 @@
     },
     "wfc": {
       "history_length": 150,
-      "tail_length": 5,
+      "tail_length": 8,
       "collapse_threshold": 0.55,
       "tau": 2,
       "spatial_search_radius_mult": 1.2,
       "spatial_samples": 32,
       "spatial_accept_threshold": 0.6,
-      "spatial_improvement_min": 0.988
+      "spatial_improvement_min": 0.5
     },
     "obstacles": [
       [
@@ -337,7 +412,7 @@
     "moving_obstacles": [],
     "training": {
       "num_episodes": 30,
-      "steps_per_episode": 1000,
+      "steps_per_episode": 1200,
       "target_update_frequency": 100,
       "save_frequency": 100,
       "metrics_save_frequency": 20
@@ -345,6 +420,8 @@
     "visualization": {
       "show_partitions": true,
       "show_breach_alerts": true,
+      "show_frozen_nodes": true,
+      "frozen_node_color": "gold",
       "partition_color_scheme": "rainbow",
       "render_frequency": 50,
       "save_history": true

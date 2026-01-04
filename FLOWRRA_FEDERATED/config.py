@@ -19,12 +19,6 @@ CONFIG = {
         "independent_training": True,
         "share_experience": False,
         "use_r_gnn": False,
-        # NEW: Strategic Freezing Parameters
-        "enable_strategic_freezing": True,  # Enable frozen node feature
-        "freeze_at_coverage": 0.55,  # Freeze when coverage hits 85%
-        "freeze_edge_nodes": True,  # Prioritize freezing edge nodes
-        "min_active_nodes": 4,  # Never freeze below this many active nodes
-        "freeze_stability_steps": 50,  # Node must be stable for N steps to freeze
     },
     # ==================== NODE CONFIG ====================
     "node": {
@@ -105,7 +99,7 @@ CONFIG = {
         "spatial_search_radius_mult": 1.2,  # Multiplier for local_extent
         "spatial_samples": 32,  # Number of candidate positions
         "spatial_accept_threshold": 0.60,  # Lower = more lenient acceptance
-        "spatial_improvement_min": 0.988,  # Minimum improvement ratio
+        "spatial_improvement_min": 0.50,  # Minimum improvement ratio
     },
     # ==================== OBSTACLES ====================
     "obstacles": [
@@ -133,7 +127,7 @@ CONFIG = {
     # ==================== TRAINING ====================
     "training": {
         "num_episodes": 50,
-        "steps_per_episode": 650,
+        "steps_per_episode": 1200,
         "target_update_frequency": 100,
         "save_frequency": 100,
         "metrics_save_frequency": 20,
@@ -215,12 +209,6 @@ def validate_config(cfg: dict) -> dict:
     print(f"  Total nodes: {cfg['node']['total_nodes']}")
     print(f"  Nodes per holon: {cfg['node']['num_nodes_per_holon']}")
     print(f"  Holons: {num_holons} ({sqrt_holons}x{sqrt_holons} grid)")
-    if cfg["holon"]["enable_strategic_freezing"]:
-        print(f"  Strategic Freezing: ENABLED")
-        print(
-            f"    Freeze at coverage: {cfg['holon']['freeze_at_coverage'] * 100:.0f}%"
-        )
-        print(f"    Min active nodes: {cfg['holon']['min_active_nodes']}")
     print()
 
     return cfg

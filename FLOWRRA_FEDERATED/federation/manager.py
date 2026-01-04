@@ -16,7 +16,7 @@ Does NOT:
 - Make decisions for holons
 """
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -170,7 +170,7 @@ class FederationManager:
                             "y": assigned_partition.bounds_y,
                         },
                         violation_vector=violation_vector,
-                        severity=severity,
+                        severity=float(severity),
                         boundary_edge=edge,
                     )
 

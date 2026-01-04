@@ -1,9 +1,10 @@
 """
-deploy.py
+deploy.py - ENHANCED VERSION
 
-Deployment script for trained federated FLOWRRA system.
+Deployment script with frozen node removal event tracking.
 
-Loads trained models and runs in deployment mode with visualization support.
+Loads trained models and runs in deployment mode with visualization support,
+including tracking of node freeze/unfreeze events.
 
 Usage:
     python deploy.py --deployment-file deployment/deployment_ep1000.json
@@ -26,11 +27,11 @@ from holon.node import NodePositionND
 
 class DeploymentRunner:
     """
-    Runs trained federated FLOWRRA system in deployment mode.
+    Runs trained federated FLOWRRA system in deployment mode with frozen node tracking.
     """
 
     def __init__(self, deployment_file: str):
-        """Initialize deployment runner with removal event tracking."""
+        """Initialize deployment runner with frozen node event tracking."""
         # Load deployment data
         print(f"\n[Deploy] Loading deployment data from {deployment_file}")
         with open(deployment_file, "r") as f:
@@ -41,27 +42,12 @@ class DeploymentRunner:
         # Override mode to deployment
         self.cfg["holon"]["mode"] = "deployment"
 
-        # NEW: Load removal events if present in deployment file
-        self.removal_events = self.deployment_data.get("removal_events", [])
-        self.removal_metrics = self.deployment_data.get("removal_metrics", {})
+        # NEW: Initialize frozen node event tracking
+        self.frozen_events = []  # Track freeze/unfreeze events
+        self.frozen_metrics = {}  # Per-holon frozen node statistics
 
         print(f"[Deploy] Loaded {len(self.deployment_data['nodes'])} nodes")
         print(f"[Deploy] Dimensions: {self.deployment_data['metadata']['dimensions']}D")
-
-        # NEW: Print removal event summary
-        if self.removal_events:
-            print(f"[Deploy] 🔄 Found {len(self.removal_events)} removal events:")
-            for event in self.removal_events:
-                event_emoji = "❌" if event["event_type"] == "node_removed" else "✅"
-                print(
-                    f"  {event_emoji} {event['event_type']} at step {event['timestep']} "
-                    f"(Node {event['node_id']}, Holon {event['holon_id']})"
-                )
-
-        if self.removal_metrics:
-            print(
-                f"[Deploy] 📊 Removal metrics available for {len(self.removal_metrics)} holon(s)"
-            )
 
         # Initialize Federation
         self.federation = FederationManager(
@@ -79,7 +65,27 @@ class DeploymentRunner:
         self.trajectory_history = []
         self.step_count = 0
 
-        print("[Deploy] System ready for deployment\n")
+        # NEW: Track initial frozen node states
+        self._initialize_frozen_tracking()
+
+        print("[Deploy] System ready for deployment with frozen node tracking\n")
+
+    def _initialize_frozen_tracking(self):
+        """Initialize tracking of frozen nodes from deployment state."""
+        for holon_id, holon in self.holons.items():
+            if holon.orchestrator:
+                frozen_nodes = holon.orchestrator.get_frozen_nodes()
+
+                self.frozen_metrics[holon_id] = {
+                    "total_frozen": len(frozen_nodes),
+                    "freeze_events": 0,
+                    "unfreeze_events": 0,
+                    "frozen_node_ids": [n.id for n in frozen_nodes],
+                }
+
+                print(
+                    f"[Deploy] Holon {holon_id}: {len(frozen_nodes)} nodes initially frozen"
+                )
 
     def _initialize_holons_from_deployment(self):
         """Recreate holons from deployment data."""
@@ -133,7 +139,7 @@ class DeploymentRunner:
                 holon.load(str(checkpoint_path))
                 print(
                     f"[Deploy] Loaded trained model for Holon {partition_id} from {checkpoint_path}"
-                )  # Added citation of path
+                )
             else:
                 print(
                     f"[Deploy] ⚠️ Warning: No trained model found for Holon {partition_id} at {checkpoint_path}. Running with initial model."
@@ -143,22 +149,80 @@ class DeploymentRunner:
 
         print(f"[Deploy] Initialized {len(self.holons)} holons from deployment data")
 
+    def _track_frozen_events(self, step: int):
+        """
+        Track changes in frozen node status between steps.
+
+        This captures:
+        - New nodes being frozen
+        - Frozen nodes being unfrozen (reintegrated)
+        """
+        for holon_id, holon in self.holons.items():
+            if not holon.orchestrator:
+                continue
+
+            # Get current frozen nodes
+            current_frozen_nodes = holon.orchestrator.get_frozen_nodes()
+            current_frozen_ids = set(n.id for n in current_frozen_nodes)
+
+            # Get previously tracked frozen nodes
+            previous_frozen_ids = set(self.frozen_metrics[holon_id]["frozen_node_ids"])
+
+            # Detect NEW freezes
+            newly_frozen = current_frozen_ids - previous_frozen_ids
+            for node_id in newly_frozen:
+                event = {
+                    "timestep": step,
+                    "event_type": "node_frozen",
+                    "node_id": node_id,
+                    "holon_id": holon_id,
+                    "reason": "deployment_step",
+                }
+                self.frozen_events.append(event)
+                self.frozen_metrics[holon_id]["freeze_events"] += 1
+
+                print(
+                    f"[Deploy] 🔴 Step {step}: Node {node_id} frozen in Holon {holon_id}"
+                )
+
+            # Detect UNFREEZES (reintegrations)
+            newly_unfrozen = previous_frozen_ids - current_frozen_ids
+            for node_id in newly_unfrozen:
+                event = {
+                    "timestep": step,
+                    "event_type": "node_unfrozen",
+                    "node_id": node_id,
+                    "holon_id": holon_id,
+                    "reason": "reintegrated",
+                }
+                self.frozen_events.append(event)
+                self.frozen_metrics[holon_id]["unfreeze_events"] += 1
+
+                print(
+                    f"[Deploy] 🟢 Step {step}: Node {node_id} unfrozen in Holon {holon_id}"
+                )
+
+            # Update tracked frozen nodes
+            self.frozen_metrics[holon_id]["frozen_node_ids"] = list(current_frozen_ids)
+            self.frozen_metrics[holon_id]["total_frozen"] = len(current_frozen_ids)
+
     def run_step(self, step: int) -> Dict:
         """Execute one deployment step and collect data."""
+        # Track frozen node changes BEFORE step
+        self._track_frozen_events(step)
+
         # Holons execute
         holon_metrics = []
         for holon in self.holons.values():
-            reward = holon.step(step, total_episodes=1)  # Single episode in deployment
+            reward = holon.step(step, total_episodes=1)
 
             # Accessing the orchestrator's current metrics
-            # We use .get() or default to 0.0 to prevent crashes
-            # This prevents the "unbounded" growth issue
             current_coherence = 0.0
             current_integrity = 0.0
 
             if holon.orchestrator and hasattr(holon.orchestrator, "metrics_history"):
                 history = holon.orchestrator.metrics_history
-                if history:  # Ensure the list isn't empty
+                if history:
                     latest = history[-1]
                     current_coherence = latest.get("coherence", 0.0)
                     current_integrity = latest.get("loop_integrity", 0.0)
@@ -180,7 +244,7 @@ class DeploymentRunner:
             if alerts:
                 self.holons[holon_id].receive_breach_alerts(alerts)
 
-        # Calculate global averages for this specific frame
+        # Calculate global averages
         avg_coherence = (
             float(sum(m["coherence"] for m in holon_metrics) / len(holon_metrics))
             if holon_metrics
@@ -203,13 +267,27 @@ class DeploymentRunner:
         """Collect current state snapshot for visualization."""
         all_nodes = []
         all_connections = []
+        all_frozen_nodes = []
 
         for holon_id, holon in self.holons.items():
-            # Collect node positions
+            # Get frozen nodes for this holon
+            frozen_nodes = (
+                holon.orchestrator.get_frozen_nodes() if holon.orchestrator else []
+            )
+            frozen_ids = set(n.id for n in frozen_nodes)
+
+            # Collect node positions with frozen status
             for node in holon.nodes:
-                all_nodes.append(
-                    {"id": node.id, "pos": node.pos.tolist(), "holon_id": holon_id}
-                )
+                node_data = {
+                    "id": node.id,
+                    "pos": node.pos.tolist(),
+                    "holon_id": holon_id,
+                    "is_frozen": node.id in frozen_ids,
+                }
+                all_nodes.append(node_data)
+
+                if node.id in frozen_ids:
+                    all_frozen_nodes.append(node.id)
 
             # Collect loop connections
             if holon.orchestrator:
@@ -226,6 +304,7 @@ class DeploymentRunner:
             "time": step,
             "nodes": all_nodes,
             "connections": all_connections,
+            "frozen_nodes": all_frozen_nodes,  # NEW: List of frozen node IDs
             "coherence": float(coherence),
             "loop_integrity": float(integrity),
             "holons": [
@@ -237,24 +316,16 @@ class DeploymentRunner:
                         "y_min": h.y_min,
                         "y_max": h.y_max,
                     },
+                    "num_frozen": self.frozen_metrics[h_id]["total_frozen"],
                 }
                 for h_id, h in self.holons.items()
             ],
         }
 
-        # NEW: Check if this timestep has removal/reintegration events
-        # This allows the web visualizer to show annotations at specific frames
-        matching_events = [e for e in self.removal_events if e["timestep"] == step]
+        # Check if this timestep has freeze/unfreeze events
+        matching_events = [e for e in self.frozen_events if e["timestep"] == step]
         if matching_events:
             snapshot["events"] = matching_events
-
-            # Print to console for debugging
-            for event in matching_events:
-                event_symbol = "🔴" if event["event_type"] == "node_removed" else "🟢"
-                print(
-                    f"[Deploy] {event_symbol} Step {step}: {event['event_type']} "
-                    f"(Node {event['node_id']})"
-                )
 
         return snapshot
 
@@ -271,7 +342,12 @@ class DeploymentRunner:
             # Progress update
             if (step + 1) % save_interval == 0:
                 elapsed = time.time() - start_time
-                print(f"[Deploy] Step {step + 1}/{num_steps} ({elapsed:.1f}s)")
+                total_frozen = sum(
+                    m["total_frozen"] for m in self.frozen_metrics.values()
+                )
+                print(
+                    f"[Deploy] Step {step + 1}/{num_steps} ({elapsed:.1f}s) | Frozen: {total_frozen}"
+                )
 
         elapsed_total = time.time() - start_time
         print(f"\n[Deploy] Completed {num_steps} steps in {elapsed_total:.1f}s")
@@ -280,7 +356,7 @@ class DeploymentRunner:
         self.save_trajectory()
 
     def save_trajectory(self):
-        """Save full trajectory for visualization."""
+        """Save full trajectory for visualization with frozen node data."""
         output_dir = Path("deployment")
         output_dir.mkdir(exist_ok=True)
 
@@ -289,9 +365,9 @@ class DeploymentRunner:
             "config": self.cfg,
             "trajectory": self.trajectory_history,
             "holons": self.deployment_data["holons"],
-            # NEW: Include removal events and metrics for web visualization
-            "removal_events": self.removal_events,
-            "removal_metrics": self.removal_metrics,
+            # NEW: Include frozen node events and metrics
+            "frozen_events": self.frozen_events,
+            "frozen_metrics": self.frozen_metrics,
         }
 
         filepath = output_dir / f"trajectory_{self.step_count}_steps.json"
@@ -304,26 +380,26 @@ class DeploymentRunner:
             f"[Deploy] 📊 Trajectory contains {len(self.trajectory_history)} snapshots"
         )
 
-        # NEW: Print removal event statistics
-        if self.removal_events:
-            removal_count = sum(
-                1 for e in self.removal_events if e["event_type"] == "node_removed"
+        # Print frozen node event statistics
+        if self.frozen_events:
+            freeze_count = sum(
+                1 for e in self.frozen_events if e["event_type"] == "node_frozen"
             )
-            reintegration_count = sum(
-                1 for e in self.removal_events if e["event_type"] == "node_reintegrated"
+            unfreeze_count = sum(
+                1 for e in self.frozen_events if e["event_type"] == "node_unfrozen"
             )
             print(
-                f"[Deploy] 🔄 Events: {removal_count} removals, {reintegration_count} reintegrations"
+                f"[Deploy] 🔄 Events: {freeze_count} freezes, {unfreeze_count} unfreezes"
             )
 
-        if self.removal_metrics:
-            print(f"[Deploy] Removal metrics included for analysis")
-            # Print summary of reintegration times
-            for holon_id, metrics in self.removal_metrics.items():
-                if metrics.get("reintegration_time_steps"):
-                    print(
-                        f"  Holon {holon_id}: Reintegrated in {metrics['reintegration_time_steps']} steps"
-                    )
+        if self.frozen_metrics:
+            print(f"[Deploy] Frozen node metrics by holon:")
+            for holon_id, metrics in self.frozen_metrics.items():
+                print(
+                    f"  Holon {holon_id}: {metrics['total_frozen']} frozen | "
+                    f"{metrics['freeze_events']} freeze events | "
+                    f"{metrics['unfreeze_events']} unfreeze events"
+                )
 
         print(f"[Deploy] Ready for web visualization!")
 

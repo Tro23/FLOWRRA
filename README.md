@@ -606,7 +606,7 @@ If you want to use FLOWRRA in your research, reach out to the author:
 - [rohit.tamidapati@dhaarn.com]
 - [rohittamidapati11@gmail.com]
 
-```
+
 
 ## Acknowledgments
 
@@ -622,8 +622,6 @@ Special thanks to the broader AI/ML and multi-agent systems research communities
 Immense gratitude to the LLMs to have enhanced the speed of FLOWRRA's realization.
 
 ---
-
-**DhaaRn** | Call from the unknown, answered.
 
 *"Intelligence- A vibrant harmonious dance of the darkness and light."*
 

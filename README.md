@@ -573,9 +573,9 @@ Contributions and Collaborations are welcome: Reach out to the Author.
 
 For questions, collaboration, or discussions:
 - **Author**: Rohit Tamidapati ft. Claude, Gemini, Grok & ChatGPT (Free Versions)
-- **DhaaRn**: [https://dhaarn.com]
-- **LinkedIn**: [https://www.linkedin.com/in/rohit-tamidapati/]
-- **Email**: rohit.tamidapati@dhaarn.com
+- **DhaaRn**: [ https://dhaarn.com ]
+- **LinkedIn**: [ https://www.linkedin.com/in/rohit-tamidapati/ ]
+- **Email**: [ rohit.tamidapati@dhaarn.com ]
 
 ## Roadmap & Future Work
 
@@ -603,8 +603,8 @@ For questions, collaboration, or discussions:
 ## Citation
 
 If you want to use FLOWRRA in your research, reach out to the author:
-- [rohit.tamidapati@dhaarn.com]
-- [rohittamidapati11@gmail.com]
+- [ rohit.tamidapati@dhaarn.com ]
+- [ rohittamidapati11@gmail.com ]
 
 
 

@@ -16,7 +16,9 @@ Usage:
 
 import argparse
 import json
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List
 
@@ -35,11 +37,19 @@ class FederatedFLOWRRA:
     Main orchestrator for federated multi-holon system.
     """
 
-    def __init__(self, config: Dict):
+    def __init__(self, config: Dict, use_parallel: bool = True):
         self.cfg = config
+        self.use_parallel = use_parallel
+
+        # Thread lock for metrics collection
+        self.metrics_lock = threading.Lock()
 
         print("\n" + "=" * 70)
         print("FEDERATED FLOWRRA INITIALIZATION")
+        if use_parallel:
+            print("MODE: PARALLEL EXECUTION (Single GPU)")
+        else:
+            print("MODE: SEQUENTIAL EXECUTION")
         print("=" * 70)
 
         # Initialize Federation Manager
@@ -86,11 +96,7 @@ class FederatedFLOWRRA:
         print(f"[Main] Created {len(self.holons)} holons")
 
     def _initialize_and_distribute_nodes(self):
-        """
-        Create REAL NodePositionND nodes and distribute them across holons.
-
-        FIX: Uses actual NodePositionND class, not dummy objects.
-        """
+        """Create REAL NodePositionND nodes and distribute them across holons."""
         total_nodes = self.cfg["node"]["total_nodes"]
         nodes_per_holon = self.cfg["node"]["num_nodes_per_holon"]
         dimensions = self.cfg["spatial"]["dimensions"]
@@ -108,14 +114,11 @@ class FederatedFLOWRRA:
             y_min, y_max = holon.spatial_bounds["y"]
 
             # Calculate equilibrium radius for this holon's loop
-            # Using the same logic as core.py but scaled to holon bounds
             ideal_dist = self.cfg["loop"]["ideal_distance"]
             equilibrium_radius = (nodes_per_holon * ideal_dist) / (2 * np.pi)
 
             # Clamp to holon bounds
-            max_radius = (
-                min((x_max - x_min) / 2, (y_max - y_min) / 2) * 0.8
-            )  # Leave 20% margin from boundaries
+            max_radius = min((x_max - x_min) / 2, (y_max - y_min) / 2) * 0.8
 
             equilibrium_radius = min(equilibrium_radius, max_radius)
 
@@ -149,7 +152,7 @@ class FederatedFLOWRRA:
                 pos[0] = np.clip(pos[0], x_min + 0.02, x_max - 0.02)
                 pos[1] = np.clip(pos[1], y_min + 0.02, y_max - 0.02)
 
-                # FIX: Create REAL NodePositionND object
+                # Create REAL NodePositionND object
                 node = NodePositionND(id=node_id, pos=pos, dimensions=dimensions)
 
                 # Set node parameters
@@ -159,7 +162,7 @@ class FederatedFLOWRRA:
                 holon_nodes.append(node)
                 node_id += 1
 
-            # FIX: Initialize orchestrator WITH the nodes
+            # Initialize orchestrator WITH the nodes
             holon.initialize_orchestrator_with_nodes(holon_nodes)
 
             print(
@@ -167,6 +170,16 @@ class FederatedFLOWRRA:
             )
 
         print(f"[Main] Node distribution complete\n")
+
+    def _execute_holon_step(
+        self, holon: Holon, step: int, total_episodes: int
+    ) -> tuple:
+        """Execute a single holon step (for parallel execution)."""
+        try:
+            reward = holon.step(step, total_episodes)
+            return (holon.holon_id, reward, None)
+        except Exception as e:
+            return (holon.holon_id, 0.0, e)
 
     def plot_federation_training_results(self):
         """Generate federation-wide training visualization."""
@@ -358,7 +371,7 @@ class FederatedFLOWRRA:
 
     def train_episode(self, episode_num: int, total_episodes: int) -> float:
         """
-        Execute one training episode.
+        Execute one training episode with optional parallel execution.
 
         Returns:
             Average reward across all holons
@@ -372,14 +385,37 @@ class FederatedFLOWRRA:
             # === PHASE A: HOLONS EXECUTE STEP ===
             holon_rewards = []
 
-            for holon in self.holons.values():
-                try:
-                    reward = holon.step(step, total_episodes)
-                    holon_rewards.append(reward)
-                    total_reward += reward
-                except Exception as e:
-                    print(f"[Main] ERROR in Holon {holon.holon_id} step: {e}")
-                    holon_rewards.append(0.0)
+            if self.use_parallel:
+                # PARALLEL EXECUTION (Single GPU with threading)
+                with ThreadPoolExecutor(max_workers=len(self.holons)) as executor:
+                    # Submit all holon steps concurrently
+                    futures = {
+                        executor.submit(
+                            self._execute_holon_step, holon, step, total_episodes
+                        ): holon.holon_id
+                        for holon in self.holons.values()
+                    }
+
+                    # Collect results as they complete
+                    for future in as_completed(futures):
+                        holon_id, reward, error = future.result()
+
+                        if error:
+                            print(f"[Main] ERROR in Holon {holon_id} step: {error}")
+                            holon_rewards.append(0.0)
+                        else:
+                            holon_rewards.append(reward)
+                            total_reward += reward
+            else:
+                # SEQUENTIAL EXECUTION (Original behavior)
+                for holon in self.holons.values():
+                    try:
+                        reward = holon.step(step, total_episodes)
+                        holon_rewards.append(reward)
+                        total_reward += reward
+                    except Exception as e:
+                        print(f"[Main] ERROR in Holon {holon.holon_id} step: {e}")
+                        holon_rewards.append(0.0)
 
             # === PHASE B: FEDERATION CYCLE ===
             # Collect state summaries from holons
@@ -388,7 +424,7 @@ class FederatedFLOWRRA:
                 for holon_id, holon in self.holons.items()
             }
 
-            # Federation detects breaches
+            # Federation detects breaches (thread-safe)
             breach_alerts = self.federation.step(holon_states)
 
             # === PHASE C: SEND BREACH ALERTS TO HOLONS ===
@@ -409,6 +445,8 @@ class FederatedFLOWRRA:
             print(
                 f"Episode {episode_num}/{total_episodes} | Time: {episode_duration:.1f}s"
             )
+            if self.use_parallel:
+                print(f"Speedup: ~{1000.0 / episode_duration:.1f} steps/sec")
             print(
                 f"Avg Reward: {avg_episode_reward:.3f} | Total Breaches: {fed_stats['total_breaches']}"
             )
@@ -478,18 +516,26 @@ class FederatedFLOWRRA:
         print(f"\n[Main] ✅ Deployment file created at {filepath}")
         return filepath
 
-    def visualize_federated_map(self, episode: int):
+    def visualize_federated_map_with_frozen(self, episode: int):
         """
-        Stitches all holons together into a single global view.
-        FIX: Re-projects localized obstacles back to global space for the render.
+        Enhanced federated map visualization showing frozen nodes distinctly.
         """
-        fig, ax = plt.subplots(figsize=(12, 12))
+        fig, ax = plt.subplots(figsize=(14, 14))
         bounds = self.cfg["federation"]["world_bounds"]
         ax.set_xlim(0, bounds[0])
         ax.set_ylim(0, bounds[1])
-        ax.set_title(f"FLOWRRA Federated Global Map - Episode {episode}", fontsize=15)
+        ax.set_title(
+            f"FLOWRRA Federated Global Map - Episode {episode}\n"
+            f"Active Nodes: 🔵 | Frozen Nodes: 🟡",
+            fontsize=16,
+        )
+
         save_path = Path("federated_maps")
         save_path.mkdir(exist_ok=True)
+
+        # Track statistics
+        total_active = 0
+        total_frozen = 0
 
         for h_id, holon in self.holons.items():
             # 1. Draw Holon Partition Boundary
@@ -505,11 +551,9 @@ class FederatedFLOWRRA:
             )
             ax.add_patch(rect)
 
-            # 2. Draw Obstacles (Translated back to Global Space)
+            # 2. Draw Obstacles (translated back to global space)
             for obs in holon.orchestrator.obstacle_manager.obstacles:
-                # Re-denormalize the local position back to the global quadrant
                 global_obs_pos = holon._to_global(obs.pos).tolist()
-                # Re-scale radius: local_r * holon_width = global_r
                 global_radius = obs.radius * (holon.x_max - holon.x_min)
 
                 circle = patches.Circle(
@@ -517,13 +561,33 @@ class FederatedFLOWRRA:
                 )
                 ax.add_patch(circle)
 
-            # 3. Draw Nodes and Connections
+            # 3. Get frozen/active node lists
+            frozen_nodes = (
+                holon.orchestrator.get_frozen_nodes() if holon.orchestrator else []
+            )
+            active_nodes = (
+                holon.orchestrator.get_active_nodes()
+                if holon.orchestrator
+                else holon.nodes
+            )
+
+            frozen_ids = {n.id for n in frozen_nodes}
+
+            total_active += len(active_nodes)
+            total_frozen += len(frozen_nodes)
+
+            # 4. Draw Connections (only between active nodes)
             node_positions = {node.id: node.pos for node in holon.nodes}
+
             for conn in holon.orchestrator.loop.connections:
                 if (
                     conn.node_a_id in node_positions
                     and conn.node_b_id in node_positions
                 ):
+                    # Skip connections involving frozen nodes
+                    if conn.node_a_id in frozen_ids or conn.node_b_id in frozen_ids:
+                        continue
+
                     p1, p2 = (
                         node_positions[conn.node_a_id],
                         node_positions[conn.node_b_id],
@@ -533,67 +597,262 @@ class FederatedFLOWRRA:
                         [p1[1], p2[1]],
                         color="red" if conn.is_broken else "cyan",
                         alpha=0.8,
-                        linewidth=1.5,
+                        linewidth=2,
                         zorder=3,
                     )
 
-            all_pos = np.array([n.pos for n in holon.nodes])
-            ax.scatter(
-                all_pos[:, 0],
-                all_pos[:, 1],
-                s=40,
-                c="blue",
-                edgecolors="white",
-                zorder=4,
-            )
+            # 5. Draw ACTIVE nodes (blue)
+            if active_nodes:
+                active_pos = np.array([n.pos for n in active_nodes])
+                ax.scatter(
+                    active_pos[:, 0],
+                    active_pos[:, 1],
+                    s=80,
+                    c="blue",
+                    edgecolors="white",
+                    linewidths=2,
+                    zorder=5,
+                    label=f"Holon {h_id} Active" if h_id == 0 else "",
+                )
+
+            # 6. Draw FROZEN nodes (gold with special marker)
+            if frozen_nodes:
+                frozen_pos = np.array([n.pos for n in frozen_nodes])
+                ax.scatter(
+                    frozen_pos[:, 0],
+                    frozen_pos[:, 1],
+                    s=120,
+                    c="gold",
+                    edgecolors="black",
+                    linewidths=3,
+                    marker="*",  # Star marker for frozen nodes
+                    zorder=6,
+                    label=f"Holon {h_id} Frozen" if h_id == 0 else "",
+                )
+
+                # Add labels to frozen nodes
+                for node in frozen_nodes:
+                    ax.annotate(
+                        f"F{node.id}",
+                        xy=(node.pos[0], node.pos[1]),
+                        xytext=(5, 5),
+                        textcoords="offset points",
+                        fontsize=8,
+                        color="darkgoldenrod",
+                        fontweight="bold",
+                        zorder=7,
+                    )
+
+        # Add statistics text
+        stats_text = (
+            f"Total Nodes: {total_active + total_frozen}\n"
+            f"Active: {total_active} | Frozen: {total_frozen}\n"
+            f"Freeze Ratio: {total_frozen / (total_active + total_frozen) * 100:.1f}%"
+        )
+        ax.text(
+            0.02,
+            0.98,
+            stats_text,
+            transform=ax.transAxes,
+            fontsize=12,
+            verticalalignment="top",
+            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.8),
+        )
 
         plt.grid(True, linestyle=":", alpha=0.5)
+        plt.legend(loc="upper right")
+
         save_path = save_path / f"Visualization_episode_{episode}.png"
-        if save_path:
-            plt.savefig(save_path)
-            plt.close()
-        else:
-            plt.show()
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close()
+
+        print(f"[Viz] Saved to {save_path}")
+        print(
+            f"[Viz] Episode {episode}: {total_active} active, {total_frozen} frozen nodes"
+        )
+
+    def plot_frozen_node_timeline(self):
+        """
+        Create a timeline visualization showing when nodes froze.
+        Add this as a new method in FederatedFLOWRRA class.
+        """
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
+
+        # Collect freeze events from all holons
+        all_freeze_events = []
+        for holon in self.holons.values():
+            if holon.orchestrator and hasattr(holon.orchestrator, "frozen_events"):
+                for event in holon.orchestrator.frozen_events:
+                    all_freeze_events.append(
+                        {
+                            "timestep": event["timestep"],
+                            "episode": event.get("episode", 0),
+                            "node_id": event["node_id"],
+                            "holon_id": holon.holon_id,
+                            "reason": event["reason"],
+                        }
+                    )
+
+        if not all_freeze_events:
+            print("[Viz] No frozen nodes to visualize")
+            return
+
+        # Sort by timestep
+        all_freeze_events.sort(key=lambda x: x["timestep"])
+
+        # Plot 1: Cumulative frozen nodes over time
+        timesteps = [e["timestep"] for e in all_freeze_events]
+        cumulative_frozen = list(range(1, len(all_freeze_events) + 1))
+
+        ax1.plot(timesteps, cumulative_frozen, marker="o", linewidth=2, markersize=8)
+        ax1.set_xlabel("Timestep", fontsize=12)
+        ax1.set_ylabel("Cumulative Frozen Nodes", fontsize=12)
+        ax1.set_title("Node Freezing Timeline", fontsize=14, fontweight="bold")
+        ax1.grid(True, alpha=0.3)
+
+        # Add annotations for each freeze
+        for i, event in enumerate(all_freeze_events[:10]):  # Limit to first 10
+            ax1.annotate(
+                f"N{event['node_id']}",
+                xy=(event["timestep"], i + 1),
+                xytext=(10, 10),
+                textcoords="offset points",
+                fontsize=8,
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="yellow", alpha=0.7),
+                arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=0"),
+            )
+
+        # Plot 2: Frozen nodes per holon
+        holon_freeze_counts = {}
+        for event in all_freeze_events:
+            h_id = event["holon_id"]
+            holon_freeze_counts[h_id] = holon_freeze_counts.get(h_id, 0) + 1
+
+        holon_ids = sorted(holon_freeze_counts.keys())
+        freeze_counts = [holon_freeze_counts[h_id] for h_id in holon_ids]
+
+        ax2.bar(holon_ids, freeze_counts, color="gold", edgecolor="black", linewidth=2)
+        ax2.set_xlabel("Holon ID", fontsize=12)
+        ax2.set_ylabel("Number of Frozen Nodes", fontsize=12)
+        ax2.set_title(
+            "Frozen Nodes Distribution Across Holons", fontsize=14, fontweight="bold"
+        )
+        ax2.set_xticks(holon_ids)
+        ax2.grid(True, alpha=0.3, axis="y")
+
+        plt.tight_layout()
+        plt.savefig("results/frozen_node_timeline.png", dpi=150, bbox_inches="tight")
+        plt.close()
+
+        print("[Viz] ✅ Saved frozen node timeline to results/frozen_node_timeline.png")
+
+    def plot_active_vs_frozen_metrics(self):
+        """
+        Compare performance metrics between active and frozen phases.
+        """
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+        for holon_id, holon in self.holons.items():
+            if not holon.orchestrator or not hasattr(
+                holon.orchestrator, "metrics_history"
+            ):
+                continue
+
+            metrics = holon.orchestrator.metrics_history
+
+            if not metrics:
+                continue
+
+            # Extract data
+            timesteps = [m["timestep"] for m in metrics]
+            rewards = [m.get("avg_reward", 0) for m in metrics]
+            integrity = [m.get("loop_integrity", 0) for m in metrics]
+            coverage = [m.get("coverage", 0) for m in metrics]
+            num_active = [m.get("num_active_nodes", len(holon.nodes)) for m in metrics]
+
+            # Plot rewards
+            axes[0, 0].plot(timesteps, rewards, label=f"Holon {holon_id}", alpha=0.7)
+            axes[0, 0].set_title("Average Reward Over Time")
+            axes[0, 0].set_xlabel("Timestep")
+            axes[0, 0].set_ylabel("Reward")
+            axes[0, 0].legend()
+            axes[0, 0].grid(alpha=0.3)
+
+            # Plot loop integrity
+            axes[0, 1].plot(timesteps, integrity, label=f"Holon {holon_id}", alpha=0.7)
+            axes[0, 1].set_title("Loop Integrity Over Time")
+            axes[0, 1].set_xlabel("Timestep")
+            axes[0, 1].set_ylabel("Integrity")
+            axes[0, 1].legend()
+            axes[0, 1].grid(alpha=0.3)
+
+            # Plot coverage
+            axes[1, 0].plot(timesteps, coverage, label=f"Holon {holon_id}", alpha=0.7)
+            axes[1, 0].set_title("Coverage Over Time")
+            axes[1, 0].set_xlabel("Timestep")
+            axes[1, 0].set_ylabel("Coverage %")
+            axes[1, 0].legend()
+            axes[1, 0].grid(alpha=0.3)
+
+            # Plot active node count
+            axes[1, 1].plot(timesteps, num_active, label=f"Holon {holon_id}", alpha=0.7)
+            axes[1, 1].set_title("Active Nodes Over Time")
+            axes[1, 1].set_xlabel("Timestep")
+            axes[1, 1].set_ylabel("Number of Active Nodes")
+            axes[1, 1].legend()
+            axes[1, 1].grid(alpha=0.3)
+
+        plt.suptitle(
+            "Performance: Active vs Frozen Phases", fontsize=16, fontweight="bold"
+        )
+        plt.tight_layout()
+        plt.savefig(
+            "results/active_vs_frozen_metrics.png", dpi=150, bbox_inches="tight"
+        )
+        plt.close()
+
+        print(
+            "[Viz] ✅ Saved active vs frozen metrics to results/active_vs_frozen_metrics.png"
+        )
 
     def train(self, num_episodes: int):
-        """Run full training loop."""
+        """Run full training loop with frozen node visualization."""
         print(f"\n[Main] Starting training for {num_episodes} episodes")
         print(f"[Main] Steps per episode: {self.cfg['training']['steps_per_episode']}")
 
         for episode in range(1, num_episodes + 1):
             self.train_episode(episode, num_episodes)
 
-            # Save checkpoints
             if episode % self.cfg["training"]["save_frequency"] == 0:
                 self.save_checkpoint(episode)
 
-            # Save metrics
             if episode % self.cfg["training"]["metrics_save_frequency"] == 0:
                 self.save_metrics()
 
-            # Save Visualization of Federated Map
+            # UPDATED: Use enhanced visualization
             if episode % 10 == 0:
-                self.visualize_federated_map(episode=episode)
+                self.visualize_federated_map_with_frozen(episode=episode)
 
         print(f"\n[Main] Training complete!")
 
         self.save_checkpoint(num_episodes)
         self.save_final_results()
 
-        # NEW: Generate visualizations
+        # Generate visualizations
         print("\n[Main] Generating training visualizations...")
 
-        # Per-holon detailed metrics
         for holon_id, holon in self.holons.items():
             if holon.orchestrator:
                 holon.orchestrator.save_metrics(
                     f"metrics/holon_{holon_id}_detailed.json"
                 )
 
-        # Federation overview
         self.plot_federation_training_results()
 
-        # Create Deployment File
+        # NEW: Frozen node specific visualizations
+        self.plot_frozen_node_timeline()
+        self.plot_active_vs_frozen_metrics()
+
         self.create_deployment_file(num_episodes)
 
     def save_checkpoint(self, episode: int):
@@ -699,6 +958,11 @@ def main():
         default="training",
         choices=["training", "deployment"],
         help="Operation mode",
+    )
+    parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Enable parallel holon execution (single GPU)",
     )
 
     args = parser.parse_args()

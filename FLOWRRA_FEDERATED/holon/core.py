@@ -102,6 +102,10 @@ class FLOWRRA_Orchestrator:
         self.frozen_events: List[Dict] = []  # Track when nodes freeze
         self.unfreeze_events = []
 
+        # NEW: Store last actions for BenchMARL adapter
+        self._last_actions = None  # Will store np.ndarray of action indices
+        self._action_history = []  # Track action sequences
+
         # State tracking
         self.history = []
         self.current_episode = 0
@@ -577,6 +581,34 @@ class FLOWRRA_Orchestrator:
                 else:
                     self.node_stuck_counters[node.id] = 0
 
+    def get_last_actions(self) -> np.ndarray:
+        """
+        Get the last actions taken by the GNN.
+
+        Used by BenchMARL adapter to extract actions.
+
+        Returns:
+            np.ndarray: [num_nodes] action indices
+        """
+        if self._last_actions is None:
+            # No actions yet, return zeros
+            return np.zeros(len(self.nodes), dtype=np.int64)
+
+        return self._last_actions.copy()
+
+
+    def get_action_history(self, last_n: int = 10) -> List[Dict]:
+        """
+        Get recent action history.
+
+        Args:
+            last_n: Number of recent timesteps to return
+
+        Returns:
+            List of dicts with 'timestep' and 'actions'
+        """
+        return self._action_history[-last_n:]
+
     def _calculate_input_dim(self) -> int:
         """Calculate the dimension of the GNN input vector."""
         dummy_rep = np.zeros(np.prod(self.cfg["repulsion"]["local_grid_size"]))
@@ -731,6 +763,17 @@ class FLOWRRA_Orchestrator:
             node_ids=node_ids,  # CRITICAL: So GNN knows which are frozen
         )
 
+        # Update actions for flowrra_benchmarl_adapter.py
+        self._last_actions = actions.copy() if actions is not None else np.zeros(len(self.nodes))
+        self._action_history.append({
+            'timestep': self.step_count,
+            'actions': self._last_actions.copy()
+        })
+
+        # Keep only recent history
+        if len(self._action_history) > 100:
+            self._action_history.pop(0)
+
         # Get current epsilon for tracking
         current_epsilon = self.gnn.epsilon_gaussian(
             self.current_episode, total_episodes
@@ -748,6 +791,9 @@ class FLOWRRA_Orchestrator:
 
             # Active nodes: normal physics
             action_id = actions[i] if actions is not None else 0
+
+            # Store for BenchMARL adapter
+            node.last_action = int(action_id)
 
             old_pos = node.pos.copy()
 

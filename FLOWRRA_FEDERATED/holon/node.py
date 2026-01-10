@@ -73,6 +73,9 @@ class NodePositionND:
             self.elevation_steps = 1
             self.world_bounds = self.world_bounds[:2]
 
+        # NEW: Add for BenchMARL integration
+        self.last_action = 0  # Stores most recent action index
+
     def velocity(self) -> np.ndarray:
         """Calculates velocity with toroidal wrapping."""
         delta = self.pos - self.last_pos

@@ -1,5 +1,5 @@
 """
-noise_cleanup.py
+sensor_fusion.py
 
 State-of-the-art sensor fusion and noise filtering for FLOWRRA.
 

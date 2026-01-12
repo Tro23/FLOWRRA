@@ -18,19 +18,21 @@ Usage:
 """
 
 from typing import Dict, List, Optional, Tuple
-import numpy as np
-from sensor_fusion import SensorProcessor, ConsensusKalmanFilter
 
+import numpy as np
+
+from Noise_Cleanup import ConsensusKalmanFilter, SensorProcessor
 
 # =============================================================================
 # ORCHESTRATOR INTEGRATION
 # =============================================================================
 
+
 def attach_sensor_processors(
     nodes: List,
     dimensions: int,
     use_consensus: bool = True,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
 ) -> Dict[int, SensorProcessor]:
     """
     Attach sensor processors to all nodes in orchestrator.
@@ -53,7 +55,7 @@ def attach_sensor_processors(
             node_id=node.id,
             dimensions=dimensions,
             use_consensus=use_consensus,
-            filter_mode="auto"  # Auto-select based on noise level
+            filter_mode="auto",  # Auto-select based on noise level
         )
 
         # Initialize with current node position
@@ -73,7 +75,7 @@ def process_sensor_readings(
     nodes: List,
     raw_measurements: Optional[Dict[int, np.ndarray]] = None,
     enable_consensus: bool = True,
-    frozen_node_ids: Optional[set] = None
+    frozen_node_ids: Optional[set] = None,
 ) -> Dict[int, np.ndarray]:
     """
     Process sensor readings for all active nodes.
@@ -102,7 +104,7 @@ def process_sensor_readings(
             filtered_positions[node.id] = node.pos.copy()
             continue
 
-        if not hasattr(node, 'sensor_processor'):
+        if not hasattr(node, "sensor_processor"):
             # No processor attached, use raw position
             filtered_positions[node.id] = node.pos.copy()
             continue
@@ -123,9 +125,7 @@ def process_sensor_readings(
     # PHASE 2: Consensus fusion (if enabled)
     if enable_consensus:
         consensus_positions = consensus_fusion_step(
-            nodes,
-            filtered_positions,
-            frozen_node_ids=frozen_node_ids
+            nodes, filtered_positions, frozen_node_ids=frozen_node_ids
         )
 
         # Update with consensus values
@@ -144,7 +144,7 @@ def consensus_fusion_step(
     nodes: List,
     current_estimates: Dict[int, np.ndarray],
     sensor_range: float = 0.25,
-    frozen_node_ids: Optional[set] = None
+    frozen_node_ids: Optional[set] = None,
 ) -> Dict[int, np.ndarray]:
     """
     Perform one round of consensus fusion among neighbors.
@@ -169,7 +169,10 @@ def consensus_fusion_step(
             consensus_positions[node.id] = node.pos.copy()
             continue
 
-        if not hasattr(node, 'sensor_processor') or node.sensor_processor.consensus is None:
+        if (
+            not hasattr(node, "sensor_processor")
+            or node.sensor_processor.consensus is None
+        ):
             consensus_positions[node.id] = current_estimates[node.id]
             continue
 
@@ -189,7 +192,9 @@ def consensus_fusion_step(
                 neighbor_estimates[other.id] = current_estimates[other.id]
 
         # Perform consensus fusion
-        consensus_pos = node.sensor_processor.exchange_with_neighbors(neighbor_estimates)
+        consensus_pos = node.sensor_processor.exchange_with_neighbors(
+            neighbor_estimates
+        )
         consensus_positions[node.id] = consensus_pos
 
     return consensus_positions
@@ -198,6 +203,7 @@ def consensus_fusion_step(
 # =============================================================================
 # HOLON INTEGRATION (Coordinate Transform-Aware)
 # =============================================================================
+
 
 class HolonSensorManager:
     """
@@ -208,10 +214,7 @@ class HolonSensorManager:
     """
 
     def __init__(
-        self,
-        holon_id: int,
-        spatial_bounds: Dict[str, Tuple],
-        dimensions: int
+        self, holon_id: int, spatial_bounds: Dict[str, Tuple], dimensions: int
     ):
         """
         Args:
@@ -231,11 +234,7 @@ class HolonSensorManager:
 
     def initialize_processors(self, nodes: List):
         """Initialize sensor processors for nodes."""
-        self.processors = attach_sensor_processors(
-            nodes,
-            self.dims,
-            use_consensus=True
-        )
+        self.processors = attach_sensor_processors(nodes, self.dims, use_consensus=True)
 
     def _to_local(self, global_pos: np.ndarray) -> np.ndarray:
         """Transform global [0,1] to local [0,1]."""
@@ -253,7 +252,7 @@ class HolonSensorManager:
         self,
         nodes: List,
         raw_measurements: Optional[Dict[int, np.ndarray]] = None,
-        frozen_node_ids: Optional[set] = None
+        frozen_node_ids: Optional[set] = None,
     ) -> Dict[int, np.ndarray]:
         """
         Process sensor readings with coordinate transform awareness.
@@ -308,6 +307,7 @@ class HolonSensorManager:
 # FEDERATION INTEGRATION (Cross-Holon Consensus)
 # =============================================================================
 
+
 class FederationSensorCoordinator:
     """
     Coordinates sensor fusion across holons.
@@ -330,9 +330,7 @@ class FederationSensorCoordinator:
         self.bandwidth_limit = 100  # Max messages per step per holon
 
     def cross_holon_consensus(
-        self,
-        holon_states: Dict[int, Dict],
-        breach_threshold: float = 0.1
+        self, holon_states: Dict[int, Dict], breach_threshold: float = 0.1
     ) -> Dict[int, List[Dict]]:
         """
         Perform consensus for nodes near holon boundaries.
@@ -347,10 +345,7 @@ class FederationSensorCoordinator:
         consensus_updates = {i: [] for i in range(self.num_holons)}
 
         # Find nodes near boundaries
-        boundary_nodes = self._identify_boundary_nodes(
-            holon_states,
-            breach_threshold
-        )
+        boundary_nodes = self._identify_boundary_nodes(holon_states, breach_threshold)
 
         # For each boundary node, fuse estimates from adjacent holons
         for node_info in boundary_nodes:
@@ -370,20 +365,20 @@ class FederationSensorCoordinator:
                 # Average estimates (simple consensus)
                 consensus_pos = np.mean(estimates, axis=0)
 
-                consensus_updates[holon_id].append({
-                    "node_id": node_id,
-                    "consensus_position": consensus_pos,
-                    "contributing_holons": len(estimates)
-                })
+                consensus_updates[holon_id].append(
+                    {
+                        "node_id": node_id,
+                        "consensus_position": consensus_pos,
+                        "contributing_holons": len(estimates),
+                    }
+                )
 
                 self.messages_per_holon[holon_id] += len(adjacent_holons)
 
         return consensus_updates
 
     def _identify_boundary_nodes(
-        self,
-        holon_states: Dict[int, Dict],
-        threshold: float
+        self, holon_states: Dict[int, Dict], threshold: float
     ) -> List[Dict]:
         """
         Identify nodes near holon boundaries.
@@ -418,15 +413,17 @@ class FederationSensorCoordinator:
                         dist_to_left < threshold,
                         dist_to_right < threshold,
                         dist_to_bottom < threshold,
-                        dist_to_top < threshold
+                        dist_to_top < threshold,
                     )
 
-                    boundary_nodes.append({
-                        "node_id": node.id,
-                        "holon_id": holon_id,
-                        "position": node.pos,
-                        "adjacent_holons": adjacent
-                    })
+                    boundary_nodes.append(
+                        {
+                            "node_id": node.id,
+                            "holon_id": holon_id,
+                            "position": node.pos,
+                            "adjacent_holons": adjacent,
+                        }
+                    )
 
         return boundary_nodes
 
@@ -436,7 +433,7 @@ class FederationSensorCoordinator:
         near_left: bool,
         near_right: bool,
         near_bottom: bool,
-        near_top: bool
+        near_top: bool,
     ) -> List[int]:
         """
         Get IDs of holons adjacent to boundaries.

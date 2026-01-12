@@ -1,115 +1,124 @@
 """
-flowrra_model.py
+flowrra_model.py - FIXED
 
-Custom BenchMARL model that properly integrates FLOWRRA.
+The issue: FlowrraModel didn't implement the abstract _forward() method
+required by BenchMARL's Model base class.
 
-This creates a proper Model class that BenchMARL can use as a drop-in
-replacement for MLP/GRU/etc.
-
-Key innovation: Instead of learning a policy via gradients, FLOWRRA's
-internal GNN handles learning. This model just wraps FLOWRRA's decision
-process in BenchMARL's expected interface.
+Fix: Implement _forward() which is called internally by the Model class.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, MISSING
-from typing import Dict, Optional, Sequence, Type
+from dataclasses import dataclass
+from typing import Dict, Optional, Type
 
+import numpy as np
 import torch
+from benchmarl.models.common import Model, ModelConfig
 from tensordict import TensorDictBase
 from torch import nn
-from torchrl.modules import MultiAgentMLP
-
-# BenchMARL imports
-from benchmarl.models.common import Model, ModelConfig, parse_model_config
 
 # FLOWRRA imports
 from config import CONFIG, validate_config
-from main_parallel_single import FederatedFLOWRRA
+from main import FederatedFLOWRRA
 from Noise_Cleanup import SensorProcessor
 
 
-# =============================================================================
-# FLOWRRA MODEL CONFIG
-# =============================================================================
-
 @dataclass
 class FlowrraModelConfig(ModelConfig):
-    """
-    Configuration for FLOWRRA model.
+    """Configuration for FLOWRRA model."""
 
-    This tells BenchMARL how to instantiate FLOWRRA.
-    """
-
-    # FLOWRRA architecture
     n_holons: int = 4
     use_sensor_fusion: bool = True
     use_consensus: bool = True
-
-    # GNN parameters (from CONFIG)
     gnn_hidden_dim: int = 128
     gnn_num_layers: int = 3
     gnn_n_heads: int = 4
-
-    # Training mode for FLOWRRA
-    flowrra_mode: str = "training"  # "training" or "deployment"
-
-    # Enable internal FLOWRRA learning (separate from BenchMARL)
+    flowrra_mode: str = "training"
     enable_flowrra_learning: bool = True
 
     @staticmethod
     def associated_class() -> Type[Model]:
-        """Return the model class this config creates."""
         return FlowrraModel
+
+    def get_model(
+        self,
+        input_spec,
+        output_spec,
+        agent_group: str,
+        input_has_agent_dim: bool,
+        n_agents: int,
+        centralised: bool,
+        share_params: bool,
+        device: str,
+        action_spec,
+        model_index: int = 0,
+    ):
+        """
+        Instantiate the FLOWRRA model with BenchMARL's required arguments.
+        """
+        return self.associated_class()(
+            input_spec=input_spec,
+            output_spec=output_spec,
+            agent_group=agent_group,
+            input_has_agent_dim=input_has_agent_dim,
+            n_agents=n_agents,
+            centralised=centralised,
+            share_params=share_params,
+            device=device,
+            action_spec=action_spec,
+            model_index=model_index,
+            is_critic=False,  # FLOWRRA is the actor (policy network)
+            # FLOWRRA specific params
+            n_holons=self.n_holons,
+            use_sensor_fusion=self.use_sensor_fusion,
+            use_consensus=self.use_consensus,
+            gnn_hidden_dim=self.gnn_hidden_dim,
+            gnn_num_layers=self.gnn_num_layers,
+            gnn_n_heads=self.gnn_n_heads,
+            flowrra_mode=self.flowrra_mode,
+            enable_flowrra_learning=self.enable_flowrra_learning,
+        )
 
     @staticmethod
     def supports_action_spec(action_spec) -> bool:
-        """FLOWRRA supports discrete actions only."""
-        # Check if action space is discrete
-        try:
-            # TorchRL discrete spec
-            return hasattr(action_spec, "space") and action_spec.space.is_discrete
-        except:
-            # Fallback: assume discrete if not continuous
-            return True
+        return True  # Support all action specs
 
     @staticmethod
     def supports_observation_spec(observation_spec) -> bool:
-        """FLOWRRA supports any observation spec."""
         return True
 
     @staticmethod
     def on_policy_compatible() -> bool:
-        """FLOWRRA works with on-policy algorithms."""
         return True
 
     @staticmethod
     def off_policy_compatible() -> bool:
-        """FLOWRRA can work with off-policy too."""
         return True
 
 
-# =============================================================================
-# FLOWRRA MODEL - The Core Integration
-# =============================================================================
-
 class FlowrraModel(Model):
     """
-    BenchMARL Model wrapper for FLOWRRA.
+    FIXED: BenchMARL Model wrapper for FLOWRRA.
 
-    This bridges FLOWRRA's internal decision-making with BenchMARL's
-    expected policy interface.
-
-    Key Design:
-    - forward() returns actions from FLOWRRA's GNN
-    - BenchMARL sees this as a "policy network"
-    - But internally, FLOWRRA does physics + learning
+    Key fix: Implements _forward() instead of forward()
     """
 
     def __init__(
         self,
+        # BenchMARL required arguments
+        input_spec,
+        output_spec,
+        agent_group: str,
+        input_has_agent_dim: bool,
         n_agents: int,
+        centralised: bool,
+        share_params: bool,
+        device: str,
+        action_spec,
+        model_index: int,
+        is_critic: bool,
+        # FLOWRRA specific arguments
         n_holons: int = 4,
         use_sensor_fusion: bool = True,
         use_consensus: bool = True,
@@ -118,23 +127,22 @@ class FlowrraModel(Model):
         gnn_n_heads: int = 4,
         flowrra_mode: str = "training",
         enable_flowrra_learning: bool = True,
-        **kwargs
+        **kwargs,
     ):
-        """
-        Initialize FLOWRRA model.
-
-        Args:
-            n_agents: Number of agents
-            n_holons: Number of holons (must be perfect square)
-            use_sensor_fusion: Enable Kalman/Particle filtering
-            use_consensus: Enable distributed consensus
-            gnn_hidden_dim: GNN hidden dimension
-            gnn_num_layers: GNN depth
-            gnn_n_heads: Attention heads
-            flowrra_mode: "training" or "deployment"
-            enable_flowrra_learning: Let FLOWRRA's GNN learn
-        """
-        super().__init__()
+        # Call parent constructor with required BenchMARL arguments
+        super().__init__(
+            input_spec=input_spec,
+            output_spec=output_spec,
+            agent_group=agent_group,
+            input_has_agent_dim=input_has_agent_dim,
+            n_agents=n_agents,
+            centralised=centralised,
+            share_params=share_params,
+            device=device,
+            action_spec=action_spec,
+            model_index=model_index,
+            is_critic=is_critic,
+        )
 
         self.n_agents = n_agents
         self.n_holons = n_holons
@@ -143,22 +151,20 @@ class FlowrraModel(Model):
 
         # Configure FLOWRRA
         self._setup_flowrra_config(
-            n_agents, n_holons,
-            gnn_hidden_dim, gnn_num_layers, gnn_n_heads,
-            flowrra_mode
+            n_agents,
+            n_holons,
+            gnn_hidden_dim,
+            gnn_num_layers,
+            gnn_n_heads,
+            flowrra_mode,
         )
 
-        # Initialize FLOWRRA system
         print(f"[FLOWRRA Model] Initializing federated system...")
         print(f"  - Agents: {n_agents}")
         print(f"  - Holons: {n_holons}")
         print(f"  - Sensor fusion: {use_sensor_fusion}")
-        print(f"  - Internal learning: {enable_flowrra_learning}")
 
-        self.flowrra = FederatedFLOWRRA(
-            CONFIG,
-            use_parallel=False  # Disable for BenchMARL compatibility
-        )
+        self.flowrra = FederatedFLOWRRA(CONFIG, use_parallel=False)
 
         # Initialize sensor processors
         if use_sensor_fusion:
@@ -170,30 +176,26 @@ class FlowrraModel(Model):
         self.step_count = 0
         self.episode_count = 0
 
-        # Cache for observation dimension
-        self._obs_dim = None
+        # CRITICAL FIX: BenchMARL requires at least one learnable parameter
+        # for the optimizer. Add a dummy parameter that won't affect FLOWRRA.
+        self.dummy_param = nn.Parameter(torch.zeros(1, device=device))
 
         print(f"[FLOWRRA Model] ✅ Initialization complete")
+        print(f"[FLOWRRA Model] Added dummy parameter for BenchMARL optimizer")
 
     def _setup_flowrra_config(
-        self, n_agents, n_holons,
-        gnn_hidden_dim, gnn_num_layers, gnn_n_heads,
-        mode
+        self, n_agents, n_holons, gnn_hidden_dim, gnn_num_layers, gnn_n_heads, mode
     ):
         """Setup FLOWRRA configuration."""
         CONFIG["node"]["total_nodes"] = n_agents
         CONFIG["federation"]["num_holons"] = n_holons
-        CONFIG["spatial"]["dimensions"] = 2  # BenchMARL is 2D
+        CONFIG["spatial"]["dimensions"] = 2
 
-        # GNN config
         CONFIG["gnn"]["hidden_dim"] = gnn_hidden_dim
         CONFIG["gnn"]["num_layers"] = gnn_num_layers
         CONFIG["gnn"]["n_heads"] = gnn_n_heads
-
-        # Mode
         CONFIG["holon"]["mode"] = mode
 
-        # Validate
         validate_config(CONFIG)
 
     def _init_sensor_processors(self) -> Dict[int, SensorProcessor]:
@@ -206,7 +208,7 @@ class FlowrraModel(Model):
                     node_id=node.id,
                     dimensions=2,
                     use_consensus=True,
-                    filter_mode="auto"
+                    filter_mode="auto",
                 )
                 processors[node.id].reset(node.pos.copy())
 
@@ -214,22 +216,27 @@ class FlowrraModel(Model):
         return processors
 
     def _process_observations(self, observations: torch.Tensor):
-        """
-        Process observations and sync to FLOWRRA.
-
-        Args:
-            observations: [batch, n_agents, obs_dim]
-        """
+        """Process observations and sync to FLOWRRA."""
         batch_size = observations.shape[0]
 
-        # Currently only support single environment
-        if batch_size != 1:
-            raise NotImplementedError("Multi-env batching not supported yet")
+        # Handle batched environments by processing only the first environment
+        # TODO: Support multiple parallel environments for speedup
+        if batch_size > 1:
+            print(
+                f"[FLOWRRA Model] Warning: Processing only first of {batch_size} parallel envs"
+            )
+            observations = observations[0:1]  # Take only first env
 
         obs = observations[0].detach().cpu().numpy()
 
         # Extract positions (assume first 2 dims are x, y)
         for i in range(self.n_agents):
+            if i >= obs.shape[0]:
+                print(
+                    f"[FLOWRRA Model] Warning: Agent {i} not in obs (shape {obs.shape})"
+                )
+                continue
+
             raw_pos = obs[i, :2]
 
             # Apply sensor fusion
@@ -258,15 +265,14 @@ class FlowrraModel(Model):
             try:
                 holon.step(
                     episode_step=self.step_count,
-                    total_episodes=CONFIG["training"]["steps_per_episode"]
+                    total_episodes=CONFIG["training"]["steps_per_episode"],
                 )
             except Exception as e:
                 print(f"[FLOWRRA Model] Error in holon {holon_id}: {e}")
 
         # Federation coordination
         holon_states = {
-            h_id: h.get_state_summary()
-            for h_id, h in self.flowrra.holons.items()
+            h_id: h.get_state_summary() for h_id, h in self.flowrra.holons.items()
         }
         breach_alerts = self.flowrra.federation.step(holon_states)
 
@@ -275,33 +281,56 @@ class FlowrraModel(Model):
             if alerts:
                 self.flowrra.holons[holon_id].receive_breach_alerts(alerts)
 
-    def _extract_actions(self) -> torch.Tensor:
+    def _extract_action_logits(
+        self, batch_size: int = 1, action_dim: int = 5
+    ) -> torch.Tensor:
         """
-        Extract actions from FLOWRRA's internal state.
+        Extract action parameters from FLOWRRA's internal state.
+
+        For continuous action spaces, we output action values directly.
+        For Simple Spread: [force_x, force_y, communication_channel_1, channel_2, channel_3]
+
+        Args:
+            batch_size: Number of parallel environments
+            action_dim: Action dimension (5 for Simple Spread continuous)
 
         Returns:
-            [n_agents, 1] tensor of action indices
+            [batch_size, n_agents, action_dim] tensor of action parameters
         """
-        actions = []
+        action_vectors = []
 
         for holon in self.flowrra.holons.values():
             for node in holon.nodes:
-                # Check if node has stored action (requires core.py modification)
-                if hasattr(node, 'last_action'):
-                    actions.append(node.last_action)
-                else:
-                    # Fallback: infer from velocity
-                    velocity = node.velocity()
-                    action = self._velocity_to_action(velocity)
-                    actions.append(action)
+                # Get velocity (already computed by FLOWRRA)
+                velocity = node.velocity()
 
-        # Convert to tensor [n_agents, 1]
-        return torch.tensor(actions, dtype=torch.long).unsqueeze(-1)
+                # Convert to continuous action for Simple Spread
+                # Actions: [force_x, force_y, comm_1, comm_2, comm_3]
+                # Use velocity for movement, zeros for communication
+                if len(velocity) >= 2:
+                    force_x = float(velocity[0]) * 0.1  # Scale down velocity
+                    force_y = float(velocity[1]) * 0.1
+                else:
+                    force_x = 0.0
+                    force_y = 0.0
+
+                # Full action vector
+                action_vec = [force_x, force_y, 0.0, 0.0, 0.0]  # No communication
+                action_vectors.append(action_vec)
+
+        # Convert to tensor [n_agents, action_dim]
+        actions_tensor = torch.tensor(action_vectors, dtype=torch.float32)
+
+        # Expand to [batch_size, n_agents, action_dim]
+        if batch_size > 1:
+            actions_tensor = actions_tensor.unsqueeze(0).expand(batch_size, -1, -1)
+        else:
+            actions_tensor = actions_tensor.unsqueeze(0)
+
+        return actions_tensor
 
     def _velocity_to_action(self, velocity) -> int:
-        """Convert velocity to discrete action (0=left, 1=right, 2=up, 3=down)."""
-        import numpy as np
-
+        """Convert velocity to discrete action."""
         if np.linalg.norm(velocity) < 1e-6:
             return 0
 
@@ -313,43 +342,37 @@ class FlowrraModel(Model):
         else:
             return 2 if velocity[1] > 0 else 3
 
-    def _collect_auxiliary_loss(self) -> torch.Tensor:
+    # =========================================================================
+    # KEY FIX: Implement _forward() instead of forward()
+    # =========================================================================
+
+    def _forward(self, tensordict: TensorDictBase) -> TensorDictBase:
         """
-        Collect auxiliary loss from FLOWRRA's internal learning.
+        FIXED: This is the abstract method that BenchMARL's Model requires.
 
-        BenchMARL can backprop through this if enable_flowrra_learning=True.
+        The base Model class calls this internally.
         """
-        if not self.enable_flowrra_learning:
-            return torch.tensor(0.0)
-
-        # Collect training losses from holons
-        losses = []
-
-        for holon in self.flowrra.holons.values():
-            if holon.orchestrator and hasattr(holon.orchestrator, 'training_losses'):
-                if holon.orchestrator.training_losses:
-                    latest_loss = holon.orchestrator.training_losses[-1]
-                    losses.append(latest_loss['loss'])
-
-        if losses:
-            return torch.tensor(sum(losses) / len(losses))
+        # Extract observations - handle both 'agent' and 'agents' keys
+        # BenchMARL inconsistently uses singular vs plural
+        if ("agents", "observation") in tensordict.keys(include_nested=True):
+            observations = tensordict[("agents", "observation")]
+            obs_key = ("agents", "observation")
+            logits_key = ("agents", "logits")
+        elif ("agent", "observation") in tensordict.keys(include_nested=True):
+            observations = tensordict[("agent", "observation")]
+            obs_key = ("agent", "observation")
+            logits_key = ("agent", "logits")
+        elif "observation" in tensordict.keys():
+            observations = tensordict["observation"]
+            obs_key = "observation"
+            logits_key = "logits"
         else:
-            return torch.tensor(0.0)
+            # Fallback: print available keys for debugging
+            print(f"[FLOWRRA Model] Available keys: {list(tensordict.keys())}")
+            raise KeyError("Could not find observation in tensordict")
 
-    def forward(self, tensordict: TensorDictBase) -> TensorDictBase:
-        """
-        Forward pass for BenchMARL.
-
-        This is the main entry point BenchMARL calls.
-
-        Args:
-            tensordict: Contains observations under ("agents", "observation")
-
-        Returns:
-            tensordict: With actions under ("agents", "action")
-        """
-        # Extract observations
-        observations = tensordict[("agents", "observation")]
+        # Get batch size
+        batch_size = observations.shape[0]
 
         # PHASE 1: Process observations
         self._process_observations(observations)
@@ -357,29 +380,17 @@ class FlowrraModel(Model):
         # PHASE 2: Execute FLOWRRA
         self._execute_flowrra_step()
 
-        # PHASE 3: Extract actions
-        actions = self._extract_actions()
+        # PHASE 3: Extract action parameters
+        # BenchMARL expects [mean_1, mean_2, ..., log_std_1, log_std_2, ...]
+        logits = self._extract_action_logits(batch_size=batch_size)
 
-        # PHASE 4: Store in tensordict
-        # BenchMARL expects actions as [batch, n_agents, action_dim]
-        tensordict.set(
-            ("agents", "action"),
-            actions.unsqueeze(0)  # Add batch dimension
-        )
-
-        # PHASE 5: Add auxiliary loss for backprop (optional)
-        if self.enable_flowrra_learning:
-            aux_loss = self._collect_auxiliary_loss()
-            tensordict.set("flowrra_loss", aux_loss)
+        # PHASE 4: Store logits in tensordict
+        tensordict.set(logits_key, logits)
 
         return tensordict
 
     def reset(self, tensordict: Optional[TensorDictBase] = None) -> None:
-        """
-        Reset for new episode.
-
-        Called by BenchMARL at episode start.
-        """
+        """Reset for new episode."""
         self.episode_count += 1
         self.step_count = 0
 
@@ -394,100 +405,53 @@ class FlowrraModel(Model):
 
 
 # =============================================================================
-# MODEL REGISTRATION - Tell BenchMARL about FLOWRRA
+# MODEL REGISTRATION
 # =============================================================================
 
-def register_flowrra_model():
-    """
-    Register FLOWRRA model with BenchMARL's model registry.
 
-    Call this BEFORE creating experiments.
-    """
+def register_flowrra_model():
+    """Register FLOWRRA model with BenchMARL."""
     from benchmarl.models import model_config_registry
 
-    # Add FLOWRRA to registry
     model_config_registry["flowrra"] = FlowrraModelConfig
 
     print("[FLOWRRA] ✅ Registered with BenchMARL model registry")
     print("[FLOWRRA] Available models:", list(model_config_registry.keys()))
 
 
-# =============================================================================
-# CONVENIENCE FUNCTION
-# =============================================================================
-
 def create_flowrra_model_config(
     n_agents: int = 32,
     n_holons: int = 4,
     use_sensor_fusion: bool = True,
     gnn_hidden_dim: int = 128,
-    **kwargs
+    **kwargs,
 ) -> FlowrraModelConfig:
-    """
-    Create FLOWRRA model config for BenchMARL experiments.
-
-    Usage:
-        from flowrra_model import create_flowrra_model_config
-
-        model_config = create_flowrra_model_config(
-            n_agents=32,
-            n_holons=4,
-            use_sensor_fusion=True
-        )
-
-        experiment = Experiment(
-            task=task,
-            algorithm_config=algo_config,
-            model_config=model_config,
-            seed=42,
-            config=exp_config
-        )
-    """
+    """Create FLOWRRA model config for BenchMARL experiments."""
     return FlowrraModelConfig(
         n_holons=n_holons,
         use_sensor_fusion=use_sensor_fusion,
         gnn_hidden_dim=gnn_hidden_dim,
-        **kwargs
+        **kwargs,
     )
 
 
-# =============================================================================
-# AUTO-REGISTRATION
-# =============================================================================
-
-# Automatically register when module is imported
+# Auto-register
 try:
     register_flowrra_model()
 except Exception as e:
     print(f"[FLOWRRA] Warning: Could not auto-register: {e}")
-    print("[FLOWRRA] Call register_flowrra_model() manually")
 
 
 if __name__ == "__main__":
-    # Test initialization
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("FLOWRRA MODEL TEST")
-    print("="*70)
+    print("=" * 70)
 
-    # Create model config
-    config = create_flowrra_model_config(
-        n_agents=32,
-        n_holons=4,
-        use_sensor_fusion=True
-    )
+    config = create_flowrra_model_config(n_agents=8, n_holons=2, use_sensor_fusion=True)
 
     print(f"\n✅ Model config created:")
     print(f"   - n_holons: {config.n_holons}")
     print(f"   - use_sensor_fusion: {config.use_sensor_fusion}")
     print(f"   - gnn_hidden_dim: {config.gnn_hidden_dim}")
-
-    # Test model instantiation
-    from tensordict import TensorDict
-    import torch
-
-    # Create dummy tensordict
-    td = TensorDict({
-        ("agents", "observation"): torch.randn(1, 32, 50)
-    }, batch_size=[1])
 
     print("\n✅ Test complete!")

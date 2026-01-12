@@ -10,14 +10,15 @@ Key fixes:
 4. Handles coordinate transforms and frozen nodes
 """
 
+from typing import Dict, Optional
+
 import numpy as np
 import torch
 from tensordict import TensorDict
 from torch import nn
-from typing import Dict, Optional
 
 from config import CONFIG
-from main_parallel_single import FederatedFLOWRRA
+from main import FederatedFLOWRRA
 from Noise_Cleanup import SensorProcessor
 
 
@@ -36,7 +37,7 @@ class FLOWRRABenchmarkAdapter(nn.Module):
         observation_dim: int = None,  # Auto-calculated
         action_dim: int = 4,  # 4 for 2D (left, right, up, down)
         use_sensor_fusion: bool = True,
-        **kwargs
+        **kwargs,
     ):
         super().__init__()
 
@@ -53,16 +54,15 @@ class FLOWRRABenchmarkAdapter(nn.Module):
 
         # Initialize FLOWRRA
         print(f"[Adapter] Initializing FLOWRRA: {n_agents} agents, {n_holons} holons")
-        self.flowrra = FederatedFLOWRRA(CONFIG, use_parallel=False)  # Disable parallel for stability
+        self.flowrra = FederatedFLOWRRA(
+            CONFIG, use_parallel=False
+        )  # Disable parallel for stability
 
         # Attach sensor processors if enabled
         if use_sensor_fusion:
             self.processors = {
                 i: SensorProcessor(
-                    node_id=i,
-                    dimensions=2,
-                    use_consensus=True,
-                    filter_mode="auto"
+                    node_id=i, dimensions=2, use_consensus=True, filter_mode="auto"
                 )
                 for i in range(n_agents)
             }
@@ -83,7 +83,9 @@ class FLOWRRABenchmarkAdapter(nn.Module):
         self.episode_coherence = []
         self.episode_integrity = []
 
-        print(f"[Adapter] Initialized - Obs dim: {self.observation_dim}, Action dim: {action_dim}")
+        print(
+            f"[Adapter] Initialized - Obs dim: {self.observation_dim}, Action dim: {action_dim}"
+        )
 
     def _get_observation_dim(self) -> int:
         """Calculate observation dimension from FLOWRRA nodes."""
@@ -91,9 +93,7 @@ class FLOWRRABenchmarkAdapter(nn.Module):
         sample_node = list(self.flowrra.holons.values())[0].nodes[0]
 
         # Get sample state vector
-        dummy_grid = np.zeros(
-            np.prod(CONFIG["repulsion"]["local_grid_size"])
-        )
+        dummy_grid = np.zeros(np.prod(CONFIG["repulsion"]["local_grid_size"]))
         sample_obs = sample_node.get_state_vector(dummy_grid, [], [])
 
         return len(sample_obs)
@@ -166,10 +166,9 @@ class FLOWRRABenchmarkAdapter(nn.Module):
                     all_actions.append(action)
 
         # Convert to tensor: [1, n_agents, 1]
-        actions_tensor = torch.tensor(
-            all_actions,
-            dtype=torch.long
-        ).unsqueeze(0).unsqueeze(-1)
+        actions_tensor = (
+            torch.tensor(all_actions, dtype=torch.long).unsqueeze(0).unsqueeze(-1)
+        )
 
         return actions_tensor
 
@@ -230,8 +229,12 @@ class FLOWRRABenchmarkAdapter(nn.Module):
                 frozen_counts.append(len(holon.orchestrator.frozen_nodes))
 
         # Aggregate metrics
-        metrics["system/avg_integrity"] = float(np.mean(integrities)) if integrities else 0.0
-        metrics["system/avg_coherence"] = float(np.mean(coherences)) if coherences else 0.0
+        metrics["system/avg_integrity"] = (
+            float(np.mean(integrities)) if integrities else 0.0
+        )
+        metrics["system/avg_coherence"] = (
+            float(np.mean(coherences)) if coherences else 0.0
+        )
         metrics["system/total_frozen_nodes"] = int(np.sum(frozen_counts))
         metrics["system/active_nodes"] = self.n_agents - int(np.sum(frozen_counts))
 
@@ -268,7 +271,7 @@ class FLOWRRABenchmarkAdapter(nn.Module):
                 # Execute holon step
                 holon.step(
                     episode_step=self.current_step,
-                    total_episodes=CONFIG["training"]["steps_per_episode"]
+                    total_episodes=CONFIG["training"]["steps_per_episode"],
                 )
             except Exception as e:
                 print(f"[Adapter] Error in holon {holon_id} step: {e}")
@@ -276,8 +279,7 @@ class FLOWRRABenchmarkAdapter(nn.Module):
 
         # Federation coordination
         holon_states = {
-            h_id: h.get_state_summary()
-            for h_id, h in self.flowrra.holons.items()
+            h_id: h.get_state_summary() for h_id, h in self.flowrra.holons.items()
         }
         breach_alerts = self.flowrra.federation.step(holon_states)
 
@@ -299,8 +301,7 @@ class FLOWRRABenchmarkAdapter(nn.Module):
         for metric_name, metric_value in metrics.items():
             # BenchMARL can log these if they're in the TensorDict
             td.set(
-                ("info", metric_name),
-                torch.tensor([metric_value], dtype=torch.float32)
+                ("info", metric_name), torch.tensor([metric_value], dtype=torch.float32)
             )
 
         return td
@@ -326,10 +327,10 @@ class FLOWRRABenchmarkAdapter(nn.Module):
                         self.processors[node.id].reset(node.pos.copy())
 
 
-
 # =============================================================================
 # BENCHMARL TASK WRAPPER
 # =============================================================================
+
 
 class FLOWRRAPettingZooTask:
     """
@@ -357,31 +358,44 @@ class FLOWRRAPettingZooTask:
         sample_node_obs_dim = 50  # Approximate, will be calculated properly
 
         # Override spaces
-        from torchrl.data import CompositeSpec, BoundedTensorSpec, UnboundedContinuousTensorSpec
+        from torchrl.data import (
+            BoundedTensorSpec,
+            CompositeSpec,
+            UnboundedContinuousTensorSpec,
+        )
 
-        self.observation_spec = CompositeSpec({
-            "agents": CompositeSpec({
-                "observation": UnboundedContinuousTensorSpec(
-                    shape=(sample_node_obs_dim,)
+        self.observation_spec = CompositeSpec(
+            {
+                "agents": CompositeSpec(
+                    {
+                        "observation": UnboundedContinuousTensorSpec(
+                            shape=(sample_node_obs_dim,)
+                        )
+                    }
                 )
-            })
-        })
+            }
+        )
 
-        self.action_spec = CompositeSpec({
-            "agents": CompositeSpec({
-                "action": BoundedTensorSpec(
-                    shape=(1,),
-                    minimum=0,
-                    maximum=3,  # 4 discrete actions (0-3)
-                    dtype=torch.long
+        self.action_spec = CompositeSpec(
+            {
+                "agents": CompositeSpec(
+                    {
+                        "action": BoundedTensorSpec(
+                            shape=(1,),
+                            minimum=0,
+                            maximum=3,  # 4 discrete actions (0-3)
+                            dtype=torch.long,
+                        )
+                    }
                 )
-            })
-        })
+            }
+        )
 
 
 # =============================================================================
 # USAGE EXAMPLE
 # =============================================================================
+
 
 def example_usage():
     """
@@ -410,9 +424,7 @@ def example_usage():
 
     # FLOWRRA as policy
     flowrra_model = FLOWRRABenchmarkAdapter(
-        n_agents=32,
-        n_holons=4,
-        use_sensor_fusion=True
+        n_agents=32, n_holons=4, use_sensor_fusion=True
     )
 
     # Run experiment
@@ -421,7 +433,7 @@ def example_usage():
         algorithm_config=algo_config,
         model_config=model_config,
         seed=42,
-        config=exp_config
+        config=exp_config,
     )
 
     experiment.run()

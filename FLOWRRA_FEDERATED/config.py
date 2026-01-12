@@ -22,7 +22,7 @@ CONFIG = {
     },
     # ==================== NODE CONFIG ====================
     "node": {
-        "total_nodes": 32,
+        "total_nodes": 16,
         "num_nodes_per_holon": None,  # Auto-calculated
         "move_speed": 0.010,
         "sensor_range": 0.25,

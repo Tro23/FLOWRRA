@@ -1,5 +1,7 @@
-    *.__pycache__/
-    *.pyc
-    *.json
-    *.pth
-    *.pt
+*.__pycache__/
+*.pyc
+*.json
+*.pth
+*.pt
+*.pkl
+*.csv

@@ -2,7 +2,7 @@
 
 **FLOWRRA-APP** is a domain-agnostic middleware layer designed to bridge the gap between high-level autonomous decision-making and various physical or simulated environments. 
 
-By standardizing state representations and action spaces, FLOWRRA_APP enables complex federated holonic logic to be applied across diverse industries—from **Warehouse Robotics** and **Smart City Traffic** to **Satellite Constellations**.
+By standardizing state representations and action spaces, FLOWRRA_APP enables complex federated holonic logic to be applied across diverse industries: from **Warehouse Robotics** and **Smart City Traffic** to **Satellite Constellations**.
 
 ---
 

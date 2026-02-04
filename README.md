@@ -557,7 +557,15 @@ cat metrics/holon_0_detailed.json | jq '.wfc_trigger_events | length'
 
 ## License
 
-[AGPL-3.0 license]
+FLOWRRA is dual-licensed:
+
+- **Open Source / Community Edition**: GNU Affero General Public License v3.0 (AGPLv3) — see LICENSE file.
+  - Free for personal, research, non-commercial, or open-source use.
+  - If you modify and offer it as a network service (SaaS/API) or otherwise, you must release your changes under AGPLv3.
+
+- **Commercial / Proprietary License** — For closed-source use, private modifications, enterprise integration, or avoiding AGPL obligations.
+  - Contact me at [rohittamidapati11@gmail.com] or [rohit.tamidapati@dhaarn.com] for pricing/terms.
+  - Ideal for companies building production products, SaaS, or integrations without sharing source.
 
 ## Contributing
 Contributions and Collaborations are welcome: Reach out to the Author.

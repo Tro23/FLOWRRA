@@ -557,7 +557,7 @@ cat metrics/holon_0_detailed.json | jq '.wfc_trigger_events | length'
 
 ## License
 
-[CC-BY-4.0 license]
+[AGPL-3.0 license]
 
 ## Contributing
 Contributions and Collaborations are welcome: Reach out to the Author.

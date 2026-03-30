@@ -1,0 +1,252 @@
+-federation
+	- manager.py 
+		from .quadtree import QuadtreePartitioner, SpatialPartition
+		-class BreachAlert
+			-func __init__
+			- func to_dict
+		-class FederationManager
+			-func __init__
+			-func detect_breaches
+			-func _calculate_violation_vector
+			-func get_partition_assignments
+			-func step
+			-func get_statistics
+			-func get_breach_heatmap
+			
+	- quadtree.py
+		-class SpatialPartition
+			-const id
+			-const bounds_x
+			-const bounds_y
+			-const center
+			-func contains
+			-func get_neighbors
+			-func distance_to_boundary
+		-class QuadtreePartitioner
+			-func __init__
+			-func _initialize_grid
+			-func get_partition_for_position
+			-func get_partition_by_id
+			-func get_all_partitions
+			-func visualize_grid
+			
+-holon
+	- agent.py
+		-const DEVICE
+		-class GraphAttentionLayer
+			-func __init__
+			-func forward
+		-class GNNPolicy
+			-func __init__
+			-func forward
+		-class GraphReplayBuffer
+			-func __init__
+			-func push
+			-func sample
+			-func __len__
+		-class GNNAgent
+			-func __init__
+			-func epsilon_gaussian
+			-func freeze_node
+			-func unfreeze_node
+			-func is_frozen
+			-func get_frozen_nodes
+			-func choose_actions
+			-func learn
+			-func  _mask_frozen_gradients
+			-func update_target_network
+			-func save
+			-func load
+			-func build_adjacency_matrix
+			
+	- core.py
+		from .agent import GNNAgent, build_adjacency_matrix
+		from .density import DensityFunctionEstimatorND
+		from .exploration import ExplorationMap
+		from .loop import LoopStructure
+		from .node import NodePositionND
+		from .obstacles import ObstacleManager
+		from .recovery import Wave_Function_Collapse
+		-class FLOWRRA_Orchestrator
+			-func __init__
+			-func freeze_node
+			-func check_and_manage_freeze_cycles
+			-func unfreeze_node
+			-func is_frozen
+			-func get_active_nodes
+			-func get_frozen_nodes
+			-func _repatch_loop_around_frozen_nodes
+			-func _initialize_obstacles
+			-func _initialize_nodes_in_loop
+			-func _physics_warmup
+			-func _get_current_node_features
+			-func detect_and_unstick_nodes
+			-func get_last_actions
+			-func get_action_history
+			-func _calculate_input_dim
+			-func calculate_coherence
+			-func step
+			-func record_state
+			-func get_freeze_statistics
+			-func get_statistics
+			-func save_metrics
+			-func convert_to_serializable
+			
+	- density.py
+		-class DensityFunctionEstimatorND
+			-func __init__
+			-func _precompute_kernel
+			-func reset
+			-func splat_collision_event
+			-func _splat_kernel_at_grid_pos
+			-func get_affordance_potential_for_node
+			-func _world_to_local_grid
+			-func _is_valid_index
+			-func _get_kernel_weight
+			-func update_from_sensor_data
+			-func _splat_local_to_global
+			-func get_full_repulsion_grid
+			-func apply_diffusion
+			-func get_statistics
+			
+	- exploration.py
+		-class ExplorationMap
+			-func __init__
+			-func update
+			-func get_frontier_vector
+			-func get_coverage_percentage
+			
+	- holon_core.py
+		from holon.core import FLOWRRA_Orchestrator
+		from holon.density import DensityFunctionEstimatorND
+		from holon.node import NodePositionND
+		-class Holon
+			-func __init__
+			-@property func nodes 
+			-@nodes.setter func nodes
+			-func _to_local
+			-func _to_global
+			-func _localize_internal_obstacles
+			-func initialize_orchestrator_with_nodes
+			-func receive_breach_alerts
+			-func _apply_boundary_constraints
+			-func step
+			-func get_state_summary
+			-func get_statistics
+			-func save
+			-func load
+			
+	- loop.py
+		-class Connection
+			-const node_a_id
+			-const node_b_id
+			-const ideal_distance
+			-const is_broken
+			-const break_timestep
+			-func __hash__
+			-func __eq__
+		-class LoopStructure
+			-func __init__
+			-func initialize_ring_topology
+			-func get_connection
+			-func get_node_neighbors
+			-func calculate_spring_forces
+			-func check_breaks
+			-func attempt_reconnection
+			-func calculate_integrity
+			-func is_loop_coherent
+			-func get_broken_connections
+			-func get_intact_connections
+			-func repair_all_connections
+			-func get_statistics
+			
+	- node.py
+		-class NodePositionND
+			-const id
+			-const pos
+			-const dimensions
+			-const last_pos
+			-const azimuth_idx
+			-const elevation_idx
+			-const azimuth_steps
+			-const elevation_steps
+			-const rotation_speed
+			-const move_speed
+			-const sensor_range
+			-const target_azimuth_idx
+			-const target_elevation_idx
+			-const world_bounds
+			-func __post_init__
+			-func velocity
+			-func get_direction_vector
+			-func get_spherical_coords
+			-func move
+			-func apply_directional_action
+			-func apply_rotation_action
+			-func rotate_towards_target
+			-func sense_nodes
+			-func sense_obstacles
+			-func get_state_vector
+			
+	- obstacles.py
+		-class Obstacle
+			-const id
+			-const pos
+			-const radius
+			-const velocity
+			-const is_static
+			-const dimensions
+			-func update
+			-func get_state_dict
+			-func check_collision
+			-func check_line_intersection
+		-class ObstacleManager
+			-func __init__
+			-func add_static_obstacle
+			-func add_moving_obstacle
+			-func update_all
+			-func get_all_states
+			-func check_collision
+			-func check_line_intersection
+			-func get_obstacle_by_id
+			-func remove_obstacle
+			-func clear_all
+			
+	- recovery.py
+		-class Wave_Function_Collapse
+			-func __init__
+			-func reset
+			-func assess_loop_coherence
+			-func needs_recovery
+			-func _sample_affordance
+			-func _calculate_virtual_integrity
+			-func _spatial_affordance_collapse
+			-func collapse_and_reinitialize
+			-func _find_coherent_tail
+			-func _find_best_available_tail
+			-func _apply_random_jitter
+			-func _apply_manifold_smoothing
+			-func diagnose_spatial_failure
+			-func get_statistics
+
+- main.py
+	from config import CONFIG
+	from federation.manager import FederationManager
+	from holon.holon_core import Holon
+	from holon.node import NodePositionND
+	-class FederatedFLOWRRA
+		-func __init__
+		-func _initialize_holons
+		-func _initialize_and_distribute_nodes
+		-func _execute_holon_step
+		-func plot_federation_training_results
+		-func train_episode
+		-func create_deployment_file
+		-func visualize_federated_map_with_frozen
+		-func plot_frozen_node_timeline
+		-func plot_active_vs_frozen_metrics
+		-func train
+		-func save_checkpoint
+		-func save_metrics
+		-func save_final_results
+		-func main

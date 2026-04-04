@@ -84,8 +84,8 @@ def main():
 
     orchestrator = FLOWRRA_Orchestrator(mode="training")
 
-    total_episodes = 20
-    steps_per_episode = 2000
+    total_episodes = 10
+    steps_per_episode = 1000
 
     # Initialize history tracker
     history = {
@@ -128,7 +128,7 @@ def main():
                 # Print a tiny heartbeat every 100 steps just so you know it's alive
                 if step % 100 == 0:
                     print(
-                        f"  > Ep {episode + 1} | Step {step:04d} | Rew: {stats['reward']:+06.2f} | Int: {stats['integrity']:.2f} | WFCs: {stats['wfc_collapses']}"
+                        f"  > Ep {episode + 1} | Step {step:04d} | Rew: {stats['reward']:+06.2f} | Integrity: {stats['integrity']:.2f} | WFCs: {stats['wfc_collapses']}"
                     )
 
                 global_step += 1

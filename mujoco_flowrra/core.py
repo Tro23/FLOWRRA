@@ -82,6 +82,8 @@ class FLOWRRA_Orchestrator:
         self.last_state = None
         self.frozen_nodes: Set[int] = set()
 
+        self.grace_period = 0  # To get stable states...
+
         # Telemetry Dashboard
         self.statistics = {
             "reward": 0.0,
@@ -142,6 +144,41 @@ class FLOWRRA_Orchestrator:
         )
         return np.array(node_features, dtype=np.float32), adj_matrix
 
+    def _get_mujoco_rpy_and_gyro(self) -> tuple[np.ndarray, np.ndarray]:
+        rpys = []
+        gyros = []
+        for i in range(self.num_nodes):
+            body_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_BODY, f"drone_{i}"
+            )
+            # MuJoCo quaternion format is [w, x, y, z]
+            quat = self.data.xquat[body_id].copy()
+            w, x, y, z = quat
+
+            # Convert Quaternion to Roll, Pitch, Yaw mathematically
+            sinr_cosp = 2 * (w * x + y * z)
+            cosr_cosp = 1 - 2 * (x**2 + y**2)
+            roll = np.arctan2(sinr_cosp, cosr_cosp)
+
+            sinp = 2 * (w * y - z * x)
+            if abs(sinp) >= 1:
+                pitch = np.copysign(np.pi / 2, sinp)  # out of bounds fallback
+            else:
+                pitch = np.arcsin(sinp)
+
+            siny_cosp = 2 * (w * z + x * y)
+            cosy_cosp = 1 - 2 * (y**2 + z**2)
+            yaw = np.arctan2(siny_cosp, cosy_cosp)
+
+            rpy = np.array([roll, pitch, yaw])
+
+            # cvel[0:3] is angular velocity (gyro)
+            gyro = self.data.cvel[body_id][0:3].copy()
+            rpys.append(rpy)
+            gyros.append(gyro)
+
+        return np.array(rpys), np.array(gyros)
+
     # ========================================================================
     # THE MAIN EXECUTION LOOP
     # ========================================================================
@@ -186,36 +223,97 @@ class FLOWRRA_Orchestrator:
             noise_scale=dynamic_noise_scale,
         )
 
-        # 5. The Physics Micro-Loop (The Brainstem)
-        # Run 10 frames of rigid-body physics for every 1 GNN thought
+        # 4.5. THE SWARM COHESION TETHER (The "Soft Wall" Brake)
+        max_separation = 6.0
+        current_centroid = np.mean(current_positions, axis=0)
+
+        for i in range(self.num_nodes):
+            dist_from_centroid = np.linalg.norm(current_positions[i] - current_centroid)
+            if dist_from_centroid > max_separation:
+                # OVERRIDE GNN: Hit the brakes.
+                # We don't force them back, we just stop them dead in their tracks.
+                waypoints[i] = current_positions[i].copy()
+                target_vels[i] = np.zeros(3)
+
+        # --- THE GRACE PERIOD OVERRIDE ---
+        if self.grace_period > 0:
+            # The system just rewound. Lock out the GNN and force a perfect hover.
+            for i in range(self.num_nodes):
+                waypoints[i] = current_positions[i]
+                target_vels[i] = np.zeros(3)
+            self.grace_period -= 1
+            wfc_needs_recovery = False  # Blind the WFC while we stabilize
+        else:
+            wfc_needs_recovery = self.wfc.needs_recovery()
+
+        # 5. TRIGGER RECOVERY: Pure Temporal Rewind + Safe Initialization
+        if wfc_needs_recovery:
+            print("[WFC] Swarm shattered! Executing Pure Temporal Rewind...")
+            recovery_info = self.wfc.collapse_and_reinitialize(dummy_nodes)
+
+            if recovery_info["success"]:
+                safe_targets = recovery_info["target_positions"]
+
+                for i in range(self.num_nodes):
+                    # 1. Find exact MuJoCo memory addresses
+                    body_id = mujoco.mj_name2id(
+                        self.model, mujoco.mjtObj.mjOBJ_BODY, f"drone_{i}"
+                    )
+                    jnt_id = self.model.body_jntadr[body_id]
+                    qpos_idx = self.model.jnt_qposadr[jnt_id]
+                    qvel_idx = self.model.jnt_dofadr[jnt_id]
+
+                    # 2. Teleport backward in time and wipe momentum
+                    self.data.qpos[qpos_idx : qpos_idx + 3] = safe_targets[i]
+                    self.data.qvel[qvel_idx : qvel_idx + 6] = np.zeros(6)
+                    self.pid_controllers[i].integral_error = np.zeros(3)
+
+                # Push the time-travel into the MuJoCo reality immediately
+                mujoco.mj_forward(self.model, self.data)
+                self.loop.repair_all_connections()
+
+                # --- YOUR IDEA: PRE-LOAD STABLE STATES ---
+                # Update dummy nodes to the new perfect shape
+                for i in range(self.num_nodes):
+                    dummy_nodes[i].pos = safe_targets[i]
+
+                # Inject 5 frames of "Perfect Coherence" directly into the WFC memory
+                for _ in range(5):
+                    self.wfc.assess_loop_coherence(1.0, dummy_nodes, 1.0)
+
+                # Give the PID 10 steps (1 full second) to establish a clean hover
+                self.grace_period = 10
+
+                # Update ground truth so the physics loop doesn't panic
+                current_positions = np.array(safe_targets)
+                current_velocities = np.zeros((self.num_nodes, 3))
+
+        # 6. The Physics Micro-Loop
+        current_rpys, current_gyros = self._get_mujoco_rpy_and_gyro()
+
         for _ in range(self.physics_steps_per_gnn_step):
             for i in range(self.num_nodes):
                 if i in self.frozen_nodes:
-                    # Cut motors for frozen nodes (they will drop, or we can command hover)
-                    ctrl_idx = i * 4
-                    self.data.ctrl[ctrl_idx : ctrl_idx + 4] = [0, 0, 0, 0]
                     continue
 
-                # A. PID Reflexes
+                # A. Cascaded PID Reflexes
                 thrust, roll, pitch, yaw = self.pid_controllers[i].compute(
                     current_pos=self._get_mujoco_positions()[i],
                     target_pos=waypoints[i],
                     current_vel=self._get_mujoco_velocities()[i],
                     target_vel=target_vels[i],
+                    current_rpy=current_rpys[i],
+                    current_gyro=current_gyros[i],
                     dt=self.dt,
                 )
 
-                # B. Motor Mixing
                 m1, m2, m3, m4 = self.mixer.mix(thrust, roll, pitch, yaw)
-
-                # C. Apply to MuJoCo
                 ctrl_idx = i * 4
                 self.data.ctrl[ctrl_idx : ctrl_idx + 4] = [m1, m2, m3, m4]
 
-            # D. Step the Universe
             mujoco.mj_step(self.model, self.data)
 
-        # 6. Post-Physics Reality Check
+        # 7. Post-Physics Reality Check
         new_positions = self._get_mujoco_positions()
         new_velocities = self._get_mujoco_velocities()
 
@@ -223,42 +321,87 @@ class FLOWRRA_Orchestrator:
         for i in range(self.num_nodes):
             dummy_nodes[i].pos = new_positions[i]
 
-        # Check actual physical loop breaks (obstacles blocking sight, or drift)
         self.loop.check_breaks(dummy_nodes, self.obstacle_manager)
+        self.loop.attempt_reconnection(dummy_nodes, self.obstacle_manager)
+
         new_integrity = self.loop.calculate_integrity()
 
-        # 7. Physical Rewards & Penalties
+        # 8. Physical Rewards & Penalties
         step_rewards = []
+        max_separation = 6.0
         colliding_nodes = 0
 
-        for i in range(self.num_nodes):
-            # Calculate distance actually traveled
-            dist_moved = np.linalg.norm(new_positions[i] - current_positions[i])
-            r_flow = self.cfg["rewards"]["r_flow"] * dist_moved
+        # Calculate the centroids
+        current_centroid = np.mean(current_positions, axis=0)
+        new_centroid = np.mean(new_positions, axis=0)
 
-            # Detect Physical Collisions (Velocity drops abruptly)
+        # --- THE HIVE MIND REWARD ---
+        # Did the center of the entire swarm move forward along the +X axis?
+        centroid_dx = new_centroid[0] - current_centroid[0]
+
+        # Massive global payout for moving the whole family forward!
+        global_flow_reward = self.cfg["rewards"]["r_flow"] * centroid_dx * 25.0
+
+        for i in range(self.num_nodes):
+            # --- THE COHESION TETHER (Dynamic Pain) ---
+            dist_from_centroid = np.linalg.norm(new_positions[i] - new_centroid)
+            r_cohesion = 0.0
+            if dist_from_centroid > max_separation:
+                # Dynamic Pain: -5 points for EVERY meter they stray too far
+                excess_dist = dist_from_centroid - max_separation
+                r_cohesion = -5.0 * excess_dist
+
+            # [Collision Detection]
             r_coll = 0.0
             if (
                 np.linalg.norm(new_velocities[i]) < 0.05
                 and np.linalg.norm(target_vels[i]) > 0.5
             ):
-                # The GNN asked to move fast, but physical velocity is 0. That's a wall.
                 r_coll = -self.cfg["rewards"]["r_collision"]
                 colliding_nodes += 1
-
-                # Splat the danger zone in the density field
                 self.density.splat_collision_event(
                     position=new_positions[i],
-                    velocity=current_velocities[i],  # The velocity *before* the crash
+                    velocity=current_velocities[i],
                     severity=1.0,
                 )
 
             # Loop penalty
             r_loop = self.cfg["rewards"]["r_loop_integrity"] * new_integrity
 
-            step_rewards.append(r_flow + r_coll + r_loop)
+            # Combine Global Team Reward + Individual Penalties
+            step_rewards.append(global_flow_reward + r_coll + r_loop + r_cohesion)
 
-        # 8. Calculate Coherence & Wave Function Collapse
+        # --- THE INFINITE TREADMILL (Object Pooling) ---
+        swarm_center = np.mean(new_positions, axis=0)
+
+        for geom_id in self.obstacle_manager.static_geom_ids:
+            obs_pos = self.data.geom_xpos[geom_id]
+
+            # If the obstacle is more than 15 meters behind the swarm's center...
+            if np.linalg.norm(obs_pos[:2] - swarm_center[:2]) > 15.0:
+                # ...Teleport it 15 meters IN FRONT of the swarm's flight path
+                avg_vel = np.mean(new_velocities, axis=0)[:2]
+
+                # Figure out which way the swarm is flying
+                if np.linalg.norm(avg_vel) < 0.1:
+                    flight_dir = np.array([1.0, 0.0])  # Default forward if hovering
+                else:
+                    flight_dir = avg_vel / np.linalg.norm(avg_vel)
+
+                # New spawn point: 15m ahead + random sideways spread
+                spread = np.random.uniform(-8.0, 8.0)
+                sideways_dir = np.array(
+                    [-flight_dir[1], flight_dir[0]]
+                )  # Perpendicular
+
+                new_x_y = (
+                    swarm_center[:2] + (flight_dir * 15.0) + (sideways_dir * spread)
+                )
+
+                # Update MuJoCo state directly!
+                self.data.geom_xpos[geom_id][:2] = new_x_y
+
+        # 9. Calculate Coherence & Wave Function Collapse
         step_rewards_array = np.array(step_rewards, dtype=np.float32)
 
         # Coherence drops if nodes are physically crashing
@@ -268,42 +411,7 @@ class FLOWRRA_Orchestrator:
         # Record reality into the WFC
         self.wfc.assess_loop_coherence(current_coherence, dummy_nodes, new_integrity)
 
-        # TRIGGER RECOVERY
-        if self.wfc.needs_recovery():
-            print(f"[!] SYSTEM SHATTERED. Triggering WFC Recovery.")
-
-            # Massive punishment to the GNN for causing a collapse
-            step_rewards_array -= 15.0
-
-            # Perform relative shape rewind
-            recovery_info = self.wfc.collapse_and_reinitialize(dummy_nodes)
-
-            if recovery_info["success"]:
-                # Forcefully inject the safe coordinates back into MuJoCo's physics state
-                for i in range(self.num_nodes):
-                    body_id = mujoco.mj_name2id(
-                        self.model, mujoco.mjtObj.mjOBJ_BODY, f"drone_{i}"
-                    )
-                    jnt_id = self.model.body_jntadr[body_id]
-                    qpos_idx = self.model.jnt_qposadr[jnt_id]
-                    qvel_idx = self.model.jnt_dofadr[jnt_id]
-
-                    # Set 3D Position (keeping default quaternion for rotation)
-                    self.data.qpos[qpos_idx : qpos_idx + 3] = dummy_nodes[i].pos
-                    self.data.qpos[qpos_idx + 3 : qpos_idx + 7] = [1, 0, 0, 0]
-
-                    # Zero out velocity to stop the crash momentum
-                    self.data.qvel[qvel_idx : qvel_idx + 6] = np.zeros(6)
-
-                mujoco.mj_forward(self.model, self.data)
-                self.loop.repair_all_connections()
-
-                # Re-pull safe state
-                new_positions = self._get_mujoco_positions()
-                new_velocities = self._get_mujoco_velocities()
-                new_integrity = 1.0
-
-        # 9. Store Memory & Learn
+        # 10. Store Memory & Learn
         if self.mode == "training" and self.last_state is not None:
             last_features, last_adj, last_actions = self.last_state
 

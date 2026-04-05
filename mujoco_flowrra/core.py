@@ -3,11 +3,11 @@ core.py
 
 MuJoCo-Powered FLOWRRA Orchestrator.
 Implements a Brain/Brainstem architecture:
-- GNN (Brain) runs at ~10Hz for trajectory planning.
-- PID (Brainstem) runs at 100Hz for physical motor control.
+- GNN (Brain)      runs at ~10 Hz for trajectory planning.
+- PID (Brainstem)  runs at 100 Hz for physical motor control.
 """
 
-from typing import Any, Dict, List, Set
+from typing import Set
 
 import mujoco
 import numpy as np
@@ -23,15 +23,15 @@ from scene_builder import generate_swarm_xml
 
 
 class FLOWRRA_Orchestrator:
-    def __init__(self, mode="training"):
+    def __init__(self, mode: str = "training"):
         self.cfg = CONFIG
         self.mode = mode
-        self.dims = 3  # MuJoCo is strictly 3D
+        self.dims = 3
         self.num_nodes = self.cfg["node"].get("num_nodes", 10)
 
-        # =======================================================
-        # 1. BOOT MUJOCO ENVIRONMENT
-        # =======================================================
+        # ===================================================================
+        # 1. BOOT MUJOCO
+        # ===================================================================
         print("[Orchestrator] Booting MuJoCo Physics Engine...")
         self.scene_xml = generate_swarm_xml(
             num_nodes=self.num_nodes, num_static_obs=5, num_moving_obs=3
@@ -39,19 +39,25 @@ class FLOWRRA_Orchestrator:
         self.model = mujoco.MjModel.from_xml_string(self.scene_xml)
         self.data = mujoco.MjData(self.model)
 
-        # Timings: MuJoCo runs at 100Hz (dt=0.01)
-        self.dt = self.model.opt.timestep
-        self.physics_steps_per_gnn_step = 10  # GNN runs at 10Hz
+        self.dt = self.model.opt.timestep  # 0.01 s
+        self.physics_steps_per_gnn_step = 10  # GNN at 10 Hz
 
-        # =======================================================
-        # 2. INITIALIZE LOW-LEVEL CONTROL STACK (The Brainstem)
-        # =======================================================
+        # FIX #3 — Cache body IDs once at init to avoid O(N) mj_name2id
+        # lookups inside the hot physics loop.
+        self._body_ids: list[int] = [
+            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, f"drone_{i}")
+            for i in range(self.num_nodes)
+        ]
+
+        # ===================================================================
+        # 2. BRAINSTEM
+        # ===================================================================
         self.pid_controllers = [DronePID() for _ in range(self.num_nodes)]
         self.mixer = QuadcopterMixer(motor_limit=15.0)
 
-        # =======================================================
-        # 3. INITIALIZE SYSTEM MANAGERS
-        # =======================================================
+        # ===================================================================
+        # 3. SYSTEM MANAGERS
+        # ===================================================================
         self.obstacle_manager = ObstacleManager(self.model, self.data)
 
         self.loop = LoopStructure(
@@ -62,29 +68,34 @@ class FLOWRRA_Orchestrator:
         self.loop.initialize_ring_topology(self.num_nodes)
 
         self.density = DensityFunctionEstimatorND(dimensions=self.dims)
-        self.wfc = Wave_Function_Collapse()
 
-        # =======================================================
-        # 4. INITIALIZE THE GNN (The Brain)
-        # =======================================================
-        # Calculate dummy input dim (Position + Velocity + Density + Sensor stuff)
-        # Assuming a flat vector for now based on your old get_state_vector
-        dummy_state_dim = 3 + 3 + np.prod(self.density.local_grid_size)
+        # FIX #6 — Wire config values into WFC instead of using defaults.
+        self.wfc = Wave_Function_Collapse(
+            history_length=self.cfg["wfc"]["history_length"],
+            collapse_threshold=self.cfg["wfc"]["collapse_threshold"],
+            tau=self.cfg["wfc"]["tau"],
+        )
+
+        # ===================================================================
+        # 4. GNN BRAIN
+        # ===================================================================
+        node_feature_dim = 3 + 3 + int(np.prod(self.density.local_grid_size))
 
         self.gnn = GNNAgent(
-            node_feature_dim=dummy_state_dim,
-            action_size=6,  # 3D Waypoint + 3D Target Velocity
+            node_feature_dim=node_feature_dim,
+            action_size=6,
             hidden_dim=self.cfg["gnn"]["hidden_dim"],
         )
 
-        # State tracking
         self.step_count = 0
         self.last_state = None
         self.frozen_nodes: Set[int] = set()
+        self.grace_period = 0
+        self.stagnation_counter = 0
+        self.smoothed_target_vels = np.zeros(
+            (self.num_nodes, 3)
+        )  # Acceleration Clutch.
 
-        self.grace_period = 0  # To get stable states...
-
-        # Telemetry Dashboard
         self.statistics = {
             "reward": 0.0,
             "integrity": 1.0,
@@ -96,46 +107,48 @@ class FLOWRRA_Orchestrator:
         }
 
     # ========================================================================
-    # MUJOCO DATA BRIDGES
+    # MUJOCO DATA BRIDGES  (all use cached _body_ids)
     # ========================================================================
     def _get_mujoco_positions(self) -> np.ndarray:
-        """Extracts exact 3D world coordinates for all drones."""
-        positions = []
-        for i in range(self.num_nodes):
-            body_id = mujoco.mj_name2id(
-                self.model, mujoco.mjtObj.mjOBJ_BODY, f"drone_{i}"
-            )
-            positions.append(self.data.xpos[body_id].copy())
-        return np.array(positions)
+        return np.array([self.data.xpos[bid].copy() for bid in self._body_ids])
 
     def _get_mujoco_velocities(self) -> np.ndarray:
-        """Extracts exact 3D linear velocities for all drones."""
-        velocities = []
-        for i in range(self.num_nodes):
-            body_id = mujoco.mj_name2id(
-                self.model, mujoco.mjtObj.mjOBJ_BODY, f"drone_{i}"
-            )
-            # cvel is [rot_x, rot_y, rot_z, lin_x, lin_y, lin_z]
-            velocities.append(self.data.cvel[body_id][3:6].copy())
-        return np.array(velocities)
+        # cvel layout: [rot_x, rot_y, rot_z, lin_x, lin_y, lin_z]
+        return np.array([self.data.cvel[bid][3:6].copy() for bid in self._body_ids])
 
-    def _build_gnn_inputs(self, positions, velocities):
-        """Constructs the state vectors for the neural network."""
+    def _get_mujoco_rpy_and_gyro(self) -> tuple[np.ndarray, np.ndarray]:
+        rpys, gyros = [], []
+        for bid in self._body_ids:
+            w, x, y, z = self.data.xquat[bid]
+
+            sinr_cosp = 2 * (w * x + y * z)
+            cosr_cosp = 1 - 2 * (x**2 + y**2)
+            roll = np.arctan2(sinr_cosp, cosr_cosp)
+
+            sinp = 2 * (w * y - z * x)
+            pitch = np.copysign(np.pi / 2, sinp) if abs(sinp) >= 1 else np.arcsin(sinp)
+
+            siny_cosp = 2 * (w * z + x * y)
+            cosy_cosp = 1 - 2 * (y**2 + z**2)
+            yaw = np.arctan2(siny_cosp, cosy_cosp)
+
+            rpys.append([roll, pitch, yaw])
+            gyros.append(self.data.cvel[bid][0:3].copy())
+
+        return np.array(rpys), np.array(gyros)
+
+    def _build_gnn_inputs(
+        self, positions: np.ndarray, velocities: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        obs_states = self.obstacle_manager.get_all_states()
+        peer_states = [{"pos": p, "velocity": v} for p, v in zip(positions, velocities)]
         node_features = []
 
-        # 1. Update Density Field with actual physical obstacle states
-        obs_states = self.obstacle_manager.get_all_states()
-        dummy_peer_states = [
-            {"pos": p, "velocity": v} for p, v in zip(positions, velocities)
-        ]
-
         for i in range(self.num_nodes):
-            # Affordance Vision
             local_grid = self.density.get_affordance_potential_for_node(
-                node_pos=positions[i], repulsion_sources=dummy_peer_states + obs_states
+                node_pos=positions[i],
+                repulsion_sources=peer_states + obs_states,
             )
-
-            # Combine [Pos, Vel, Affordance]
             feat = np.concatenate([positions[i], velocities[i], local_grid.flatten()])
             node_features.append(feat)
 
@@ -144,77 +157,42 @@ class FLOWRRA_Orchestrator:
         )
         return np.array(node_features, dtype=np.float32), adj_matrix
 
-    def _get_mujoco_rpy_and_gyro(self) -> tuple[np.ndarray, np.ndarray]:
-        rpys = []
-        gyros = []
-        for i in range(self.num_nodes):
-            body_id = mujoco.mj_name2id(
-                self.model, mujoco.mjtObj.mjOBJ_BODY, f"drone_{i}"
-            )
-            # MuJoCo quaternion format is [w, x, y, z]
-            quat = self.data.xquat[body_id].copy()
-            w, x, y, z = quat
-
-            # Convert Quaternion to Roll, Pitch, Yaw mathematically
-            sinr_cosp = 2 * (w * x + y * z)
-            cosr_cosp = 1 - 2 * (x**2 + y**2)
-            roll = np.arctan2(sinr_cosp, cosr_cosp)
-
-            sinp = 2 * (w * y - z * x)
-            if abs(sinp) >= 1:
-                pitch = np.copysign(np.pi / 2, sinp)  # out of bounds fallback
-            else:
-                pitch = np.arcsin(sinp)
-
-            siny_cosp = 2 * (w * z + x * y)
-            cosy_cosp = 1 - 2 * (y**2 + z**2)
-            yaw = np.arctan2(siny_cosp, cosy_cosp)
-
-            rpy = np.array([roll, pitch, yaw])
-
-            # cvel[0:3] is angular velocity (gyro)
-            gyro = self.data.cvel[body_id][0:3].copy()
-            rpys.append(rpy)
-            gyros.append(gyro)
-
-        return np.array(rpys), np.array(gyros)
-
     # ========================================================================
-    # THE MAIN EXECUTION LOOP
+    # MAIN STEP
     # ========================================================================
-    def step(self, episode_step: int, total_episodes: int) -> float:
+    def step(self, episode_step: int, steps_per_episode: int) -> float:
+        # NOTE: parameter renamed from total_episodes → steps_per_episode
+        #       to match what main.py actually passes.
 
-        # 1. Read Ground Truth from MuJoCo
+        # 1. Read ground truth
         current_positions = self._get_mujoco_positions()
         current_velocities = self._get_mujoco_velocities()
 
-        # We need pseudo-nodes for Loop Structure to check breaks
+        # Build DummyNodes — lightweight wrappers the Loop/WFC systems need.
+        # FIX #2 — Store .vel so WFC shape memory records real velocities.
         class DummyNode:
-            pass
+            __slots__ = ("id", "pos", "vel")
 
         dummy_nodes = []
         for i in range(self.num_nodes):
             n = DummyNode()
             n.id = i
             n.pos = current_positions[i]
+            n.vel = current_velocities[i]
             dummy_nodes.append(n)
 
-        # 2. Assess Topological Health
+        # 2. Topological health
         current_integrity = self.loop.calculate_integrity()
 
-        # 3. Calculate Cyclic Exploration (The Safety Governor)
-        # Gaussian pulse that throbs over the episode
-        progress = episode_step / max(1, total_episodes)
+        # 3. Exploration governor — Gaussian pulse throttled by swarm health
+        progress = episode_step / max(1, steps_per_episode)
         gaussian_pulse = np.exp(-((progress - 0.5) ** 2) / 0.05) * 0.2
-
-        # THE GOVERNOR: Throttle exploration if the swarm is dying!
         dynamic_noise_scale = gaussian_pulse * current_integrity
 
-        # 4. GNN Forward Pass (The Brain)
+        # 4. GNN forward pass (the Brain)
         node_features, adj_matrix = self._build_gnn_inputs(
             current_positions, current_velocities
         )
-
         waypoints, target_vels, raw_actions = self.gnn.choose_actions(
             node_features=node_features,
             adj_matrix=adj_matrix,
@@ -223,87 +201,109 @@ class FLOWRRA_Orchestrator:
             noise_scale=dynamic_noise_scale,
         )
 
-        # 4.5. THE SWARM COHESION TETHER (The "Soft Wall" Brake)
-        max_separation = 6.0
+        # Safety overrides — clamp velocity, project waypoint, floor guard
+        max_separation = 8.0
         current_centroid = np.mean(current_positions, axis=0)
 
         for i in range(self.num_nodes):
-            dist_from_centroid = np.linalg.norm(current_positions[i] - current_centroid)
-            if dist_from_centroid > max_separation:
-                # OVERRIDE GNN: Hit the brakes.
-                # We don't force them back, we just stop them dead in their tracks.
+            raw_target_vel = np.clip(target_vels[i], -2.0, 2.0)
+
+            # --- THE CLUTCH (EMA Smoothing) ---
+            # Blend 80% of the old velocity with 20% of the GNN's new requested velocity.
+            # This prevents instant whiplash and forces the drones to accelerate smoothly.
+            self.smoothed_target_vels[i] = (0.8 * self.smoothed_target_vels[i]) + (
+                0.2 * raw_target_vel
+            )
+
+            # Overwrite the target_vel so the PID gets the safe, smoothed version
+            target_vels[i] = self.smoothed_target_vels[i]
+
+            # Project carrot 1 s ahead along the SMOOTHED velocity
+            waypoints[i] = current_positions[i] + (target_vels[i] * 1.0)
+
+            # Hard floor: never command below Z = 1.5 m
+            waypoints[i][2] = max(1.5, waypoints[i][2])
+
+            # Soft-wall cohesion tether
+            if np.linalg.norm(current_positions[i] - current_centroid) > max_separation:
                 waypoints[i] = current_positions[i].copy()
                 target_vels[i] = np.zeros(3)
+                self.smoothed_target_vels[i] = np.zeros(
+                    3
+                )  # Reset clutch if tether pulls
 
-        # --- THE GRACE PERIOD OVERRIDE ---
+        # Grace period: lock GNN out after a WFC rewind
         if self.grace_period > 0:
-            # The system just rewound. Lock out the GNN and force a perfect hover.
             for i in range(self.num_nodes):
                 waypoints[i] = current_positions[i]
                 target_vels[i] = np.zeros(3)
+                self.smoothed_target_vels[i] = np.zeros(3)
             self.grace_period -= 1
-            wfc_needs_recovery = False  # Blind the WFC while we stabilize
+            wfc_needs_recovery = False
         else:
             wfc_needs_recovery = self.wfc.needs_recovery()
 
-        # 5. TRIGGER RECOVERY: Pure Temporal Rewind + Safe Initialization
+        # 5. WFC recovery — pure temporal rewind
+        wfc_penalty = 0.0
         if wfc_needs_recovery:
             print("[WFC] Swarm shattered! Executing Pure Temporal Rewind...")
+
+            # Zap them for triggering a WFC!
+            wfc_penalty = -self.cfg["rewards"]["r_collapse_penalty"]
+
             recovery_info = self.wfc.collapse_and_reinitialize(dummy_nodes)
 
             if recovery_info["success"]:
                 safe_targets = recovery_info["target_positions"]
 
                 for i in range(self.num_nodes):
-                    # 1. Find exact MuJoCo memory addresses
-                    body_id = mujoco.mj_name2id(
-                        self.model, mujoco.mjtObj.mjOBJ_BODY, f"drone_{i}"
-                    )
-                    jnt_id = self.model.body_jntadr[body_id]
+                    # FIX #7 — Use cached body IDs instead of re-calling mj_name2id
+                    bid = self._body_ids[i]
+                    jnt_id = self.model.body_jntadr[bid]
                     qpos_idx = self.model.jnt_qposadr[jnt_id]
                     qvel_idx = self.model.jnt_dofadr[jnt_id]
 
-                    # 2. Teleport backward in time and wipe momentum
                     self.data.qpos[qpos_idx : qpos_idx + 3] = safe_targets[i]
                     self.data.qvel[qvel_idx : qvel_idx + 6] = np.zeros(6)
                     self.pid_controllers[i].integral_error = np.zeros(3)
 
-                # Push the time-travel into the MuJoCo reality immediately
                 mujoco.mj_forward(self.model, self.data)
                 self.loop.repair_all_connections()
 
-                # --- YOUR IDEA: PRE-LOAD STABLE STATES ---
-                # Update dummy nodes to the new perfect shape
                 for i in range(self.num_nodes):
                     dummy_nodes[i].pos = safe_targets[i]
+                    dummy_nodes[i].vel = np.zeros(3)
 
-                # Inject 5 frames of "Perfect Coherence" directly into the WFC memory
                 for _ in range(5):
                     self.wfc.assess_loop_coherence(1.0, dummy_nodes, 1.0)
 
-                # Give the PID 10 steps (1 full second) to establish a clean hover
-                self.grace_period = 10
-
-                # Update ground truth so the physics loop doesn't panic
+                self.grace_period = 10.0
                 current_positions = np.array(safe_targets)
                 current_velocities = np.zeros((self.num_nodes, 3))
+            # Wipe clutch on reset
+            self.smoothed_target_vels = np.zeros((self.num_nodes, 3))
 
-        # 6. The Physics Micro-Loop
-        current_rpys, current_gyros = self._get_mujoco_rpy_and_gyro()
-
+        # 6. Physics micro-loop (100 Hz)
+        # FIX #3 + #4 — Read ALL sensor data once per sub-step, not once per
+        # drone per sub-step.  This collapses 10 × N × N mj_name2id calls
+        # down to 10 batch reads, and keeps the PID gyro loop seeing fresh
+        # attitude data every physics tick instead of stale pre-loop values.
         for _ in range(self.physics_steps_per_gnn_step):
+            step_positions = self._get_mujoco_positions()
+            step_velocities = self._get_mujoco_velocities()
+            step_rpys, step_gyros = self._get_mujoco_rpy_and_gyro()
+
             for i in range(self.num_nodes):
                 if i in self.frozen_nodes:
                     continue
 
-                # A. Cascaded PID Reflexes
                 thrust, roll, pitch, yaw = self.pid_controllers[i].compute(
-                    current_pos=self._get_mujoco_positions()[i],
+                    current_pos=step_positions[i],
                     target_pos=waypoints[i],
-                    current_vel=self._get_mujoco_velocities()[i],
+                    current_vel=step_velocities[i],
                     target_vel=target_vels[i],
-                    current_rpy=current_rpys[i],
-                    current_gyro=current_gyros[i],
+                    current_rpy=step_rpys[i],
+                    current_gyro=step_gyros[i],
                     dt=self.dt,
                 )
 
@@ -313,17 +313,16 @@ class FLOWRRA_Orchestrator:
 
             mujoco.mj_step(self.model, self.data)
 
-        # 7. Post-Physics Reality Check
+        # 7. Post-physics reality check
         new_positions = self._get_mujoco_positions()
         new_velocities = self._get_mujoco_velocities()
 
-        # Update pseudo-nodes for checking breaks
         for i in range(self.num_nodes):
             dummy_nodes[i].pos = new_positions[i]
+            dummy_nodes[i].vel = new_velocities[i]
 
         self.loop.check_breaks(dummy_nodes, self.obstacle_manager)
         self.loop.attempt_reconnection(dummy_nodes, self.obstacle_manager)
-
         new_integrity = self.loop.calculate_integrity()
 
         # 8. Physical Rewards & Penalties
@@ -335,86 +334,126 @@ class FLOWRRA_Orchestrator:
         current_centroid = np.mean(current_positions, axis=0)
         new_centroid = np.mean(new_positions, axis=0)
 
-        # --- THE HIVE MIND REWARD ---
-        # Did the center of the entire swarm move forward along the +X axis?
-        centroid_dx = new_centroid[0] - current_centroid[0]
+        # --- THE TIME-OUT FIX ---
+        if self.grace_period > 0:
+            # The environment is forcing them to be safe. They earn NO points.
+            for i in range(self.num_nodes):
+                step_rewards.append(0.0)
+        else:
+            # --- NORMAL REWARD CALCULATION ---
+            # (Only run this if they are actually in control of their bodies)
 
-        # Massive global payout for moving the whole family forward!
-        global_flow_reward = self.cfg["rewards"]["r_flow"] * centroid_dx * 25.0
+            # The Macro Hive Mind Reward (X/Y only)
+            centroid_dist_xy = np.linalg.norm(new_centroid[:2] - current_centroid[:2])
+            global_flow_reward = self.cfg["rewards"]["r_flow"] * centroid_dist_xy * 8.0
 
-        for i in range(self.num_nodes):
-            # --- THE COHESION TETHER (Dynamic Pain) ---
-            dist_from_centroid = np.linalg.norm(new_positions[i] - new_centroid)
-            r_cohesion = 0.0
-            if dist_from_centroid > max_separation:
-                # Dynamic Pain: -5 points for EVERY meter they stray too far
-                excess_dist = dist_from_centroid - max_separation
-                r_cohesion = -5.0 * excess_dist
+            # The Z-Axis Ceiling Penalty
+            r_altitude = 0.0
+            if new_centroid[2] > 3.5:
+                r_altitude = -20.0 * (new_centroid[2] - 3.5)
 
-            # [Collision Detection]
-            r_coll = 0.0
-            if (
-                np.linalg.norm(new_velocities[i]) < 0.05
-                and np.linalg.norm(target_vels[i]) > 0.5
-            ):
-                r_coll = -self.cfg["rewards"]["r_collision"]
-                colliding_nodes += 1
-                self.density.splat_collision_event(
-                    position=new_positions[i],
-                    velocity=current_velocities[i],
-                    severity=1.0,
+            # --- THE LOITERING TAX ---
+            # --- THE 5-STEP STAGNATION TRACKER ---
+            # We give them a 5cm buffer. If they move less than that, the timer ticks up.
+            if centroid_dist_xy < 0.05:
+                self.stagnation_counter += 1
+            else:
+                self.stagnation_counter = 0  # Reset the timer if they move!
+
+            r_loiter = 0.0
+            # If they sit still for 5 frames (0.5 seconds), hit them with the config penalty
+            if self.stagnation_counter >= 5:
+                r_loiter = -self.cfg["rewards"]["r_idle"]
+
+            # --- SALARY FREEZE ---
+            r_loop = 0.0
+            if self.stagnation_counter < 5:
+                # They only get their salary if they aren't officially stagnating
+                r_loop = self.cfg["rewards"]["r_loop_integrity"] * new_integrity
+
+            for i in range(self.num_nodes):
+                # The Micro Internal Hustle
+                indiv_dist_xy = np.linalg.norm(
+                    new_positions[i][:2] - current_positions[i][:2]
+                )
+                r_indiv_flow = self.cfg["rewards"]["r_flow"] * indiv_dist_xy * 5.0
+
+                # Bankruptcy Cohesion Tether
+                dist_from_centroid = np.linalg.norm(new_positions[i] - new_centroid)
+                r_cohesion = 0.0
+                if dist_from_centroid > max_separation:
+                    excess_dist = dist_from_centroid - max_separation
+                    r_cohesion = -10.0 * excess_dist
+
+                # Collision Detection
+                r_coll = 0.0
+                if (
+                    np.linalg.norm(new_velocities[i]) < 0.05
+                    and np.linalg.norm(target_vels[i]) > 0.5
+                ):
+                    r_coll = -self.cfg["rewards"]["r_collision"]
+                    colliding_nodes += 1
+                    self.density.splat_collision_event(
+                        position=new_positions[i],
+                        velocity=current_velocities[i],
+                        severity=1.0,
+                    )
+
+                # Combine it all
+                step_rewards.append(
+                    global_flow_reward
+                    + r_indiv_flow
+                    + r_altitude
+                    + r_coll
+                    + r_loop
+                    + r_cohesion
+                    + r_loiter
+                    + wfc_penalty
                 )
 
-            # Loop penalty
-            r_loop = self.cfg["rewards"]["r_loop_integrity"] * new_integrity
-
-            # Combine Global Team Reward + Individual Penalties
-            step_rewards.append(global_flow_reward + r_coll + r_loop + r_cohesion)
-
-        # --- THE INFINITE TREADMILL (Object Pooling) ---
+        # 9. Obstacle pooling — the infinite treadmill
+        # FIX #1 — data.geom_xpos is READ-ONLY (computed by MuJoCo forward).
+        # Static geom positions live in model.geom_pos.  Write there, then
+        # call mj_forward once after all teleports to flush into data.
         swarm_center = np.mean(new_positions, axis=0)
+        teleported_any = False
 
         for geom_id in self.obstacle_manager.static_geom_ids:
-            obs_pos = self.data.geom_xpos[geom_id]
+            # Read world position from model (correct for worldbody-attached geoms)
+            obs_pos = self.model.geom_pos[geom_id]
 
-            # If the obstacle is more than 15 meters behind the swarm's center...
-            if np.linalg.norm(obs_pos[:2] - swarm_center[:2]) > 15.0:
-                # ...Teleport it 15 meters IN FRONT of the swarm's flight path
+            if np.linalg.norm(obs_pos[:2] - swarm_center[:2]) > 10.0:
                 avg_vel = np.mean(new_velocities, axis=0)[:2]
 
-                # Figure out which way the swarm is flying
                 if np.linalg.norm(avg_vel) < 0.1:
-                    flight_dir = np.array([1.0, 0.0])  # Default forward if hovering
+                    flight_dir = np.array([1.0, 0.0])
                 else:
                     flight_dir = avg_vel / np.linalg.norm(avg_vel)
 
-                # New spawn point: 15m ahead + random sideways spread
                 spread = np.random.uniform(-8.0, 8.0)
-                sideways_dir = np.array(
-                    [-flight_dir[1], flight_dir[0]]
-                )  # Perpendicular
-
-                new_x_y = (
-                    swarm_center[:2] + (flight_dir * 15.0) + (sideways_dir * spread)
+                sideways_dir = np.array([-flight_dir[1], flight_dir[0]])
+                new_xy = (
+                    swarm_center[:2] + (flight_dir * 10.0) + (sideways_dir * spread)
                 )
 
-                # Update MuJoCo state directly!
-                self.data.geom_xpos[geom_id][:2] = new_x_y
+                # Write to model.geom_pos — the correct mutable location
+                self.model.geom_pos[geom_id][:2] = new_xy
+                teleported_any = True
 
-        # 9. Calculate Coherence & Wave Function Collapse
+        # Single mj_forward after ALL geom writes (not one per geom)
+        if teleported_any:
+            mujoco.mj_forward(self.model, self.data)
+
+        # 10. WFC coherence assessment
         step_rewards_array = np.array(step_rewards, dtype=np.float32)
-
-        # Coherence drops if nodes are physically crashing
         collision_penalty = (colliding_nodes / self.num_nodes) * 1.5
         current_coherence = np.clip(new_integrity - collision_penalty, 0.0, 1.0)
 
-        # Record reality into the WFC
         self.wfc.assess_loop_coherence(current_coherence, dummy_nodes, new_integrity)
 
-        # 10. Store Memory & Learn
+        # 11. Store memory & learn
         if self.mode == "training" and self.last_state is not None:
             last_features, last_adj, last_actions = self.last_state
-
             new_features, new_adj = self._build_gnn_inputs(
                 new_positions, new_velocities
             )
@@ -423,16 +462,15 @@ class FLOWRRA_Orchestrator:
                 state=last_features,
                 adj=last_adj,
                 action=last_actions,
-                reward=np.clip(step_rewards_array, -50.0, 50.0),
+                reward=np.clip(step_rewards_array, -100.0, 100.0),
                 next_state=new_features,
                 next_adj=new_adj,
                 done=False,
-                integrity=float(new_integrity),  # Critic Target!
+                integrity=float(new_integrity),
             )
 
             if len(self.gnn.memory) >= self.gnn.batch_size:
                 actor_loss, critic_loss = self.gnn.learn()
-                # Update losses only when learning happens
                 self.statistics["actor_loss"] = actor_loss
                 self.statistics["critic_loss"] = critic_loss
 
@@ -440,8 +478,6 @@ class FLOWRRA_Orchestrator:
         self.step_count += 1
 
         step_reward = float(np.mean(step_rewards_array))
-
-        # Update the public telemetry state
         self.statistics.update(
             {
                 "reward": step_reward,
@@ -451,5 +487,4 @@ class FLOWRRA_Orchestrator:
                 "wfc_recoveries": self.wfc.successful_recoveries,
             }
         )
-
         return step_reward

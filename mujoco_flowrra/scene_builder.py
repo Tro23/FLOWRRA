@@ -6,8 +6,14 @@ def generate_swarm_xml(
     num_nodes: int,
     num_static_obs: int = 5,
     num_moving_obs: int = 3,
-    spacing: float = random.uniform(1.5, 3.0),
+    # FIX #5 — Default mutable/random args are evaluated ONCE at import time in
+    # Python, not at each call.  Every run would use the same spacing value for
+    # the entire lifetime of the program.  Use None and compute inside instead.
+    spacing: float = None,
 ) -> str:
+    if spacing is None:
+        spacing = random.uniform(1.5, 3.0)
+
     xml = """<mujoco model="FLOWRRA_Swarm">
         <option timestep="0.01" gravity="0 0 -9.81"/>
         <asset>
@@ -32,7 +38,7 @@ def generate_swarm_xml(
     for i in range(num_moving_obs):
         ox = random.uniform(-8, 8)
         oy = random.uniform(-8, 8)
-        oz = random.uniform(2, 5)  # Spawn them in the air so they drop and roll
+        oz = random.uniform(2, 5)
         xml += f"""
             <body name="mov_obs_{i}" pos="{ox} {oy} {oz}">
                 <freejoint/>

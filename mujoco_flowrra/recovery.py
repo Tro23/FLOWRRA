@@ -13,15 +13,16 @@ import numpy as np
 
 class Wave_Function_Collapse:
     def __init__(
-        self, history_length: int = 200, collapse_threshold: float = 0.6, tau: int = 3
+        self,
+        history_length: int = 150,
+        collapse_threshold: float = 0.5,
+        tau: int = 3,
     ):
         self.history_length = history_length
         self.collapse_threshold = collapse_threshold
-        self.tau = tau  # Consecutive unstable frames before collapse triggers
+        self.tau = tau
 
-        # History stores the RELATIVE shape of the swarm
         self.history: List[Dict[str, Any]] = []
-
         self.total_collapses = 0
         self.successful_recoveries = 0
 
@@ -29,17 +30,17 @@ class Wave_Function_Collapse:
         self, coherence: float, nodes: List[Any], loop_integrity: float
     ):
         """Records the relative shape of the swarm at this timestep."""
-
-        # 1. Find the Swarm Centroid (Center of Mass)
         positions = np.array([n.pos for n in nodes])
         centroid = np.mean(positions, axis=0)
 
-        # 2. Store RELATIVE positions
+        # FIX #2 — DummyNode exposes .vel (an ndarray), not .velocity() (a method).
+        # The old code called n.velocity() which doesn't exist on DummyNode, so
+        # hasattr(...) was always False and all stored velocities were zeros.
+        # That made safe_centroid = current_centroid - 0*0.5 = current_centroid,
+        # teleporting the swarm right back into whatever it crashed into.
         snapshot = {
             "relative_positions": [n.pos - centroid for n in nodes],
-            "velocities": [
-                n.velocity() if hasattr(n, "velocity") else np.zeros(3) for n in nodes
-            ],
+            "velocities": [getattr(n, "vel", np.zeros(3)).copy() for n in nodes],
             "coherence": coherence,
             "loop_integrity": loop_integrity,
         }
@@ -55,11 +56,9 @@ class Wave_Function_Collapse:
 
         recent = self.history[-self.tau :]
         is_unstable = all(h["coherence"] < self.collapse_threshold for h in recent)
-        critically_broken = any(h["loop_integrity"] < 0.5 for h in recent)
+        critically_broken = any(h["loop_integrity"] < 0.4 for h in recent)
 
         return is_unstable or critically_broken
-
-    # recovery.py (Update the collapse_and_reinitialize method)
 
     def collapse_and_reinitialize(self, nodes: List[Any]) -> Dict[str, Any]:
         """Pure Temporal Rewind. No hardcoded shapes. Only topological memory."""
@@ -69,7 +68,6 @@ class Wave_Function_Collapse:
         best_shape = None
         best_score = -1.0
 
-        # Find the most coherent shape in recent history
         for memory in reversed(self.history):
             if memory["coherence"] > best_score:
                 best_score = memory["coherence"]
@@ -78,9 +76,7 @@ class Wave_Function_Collapse:
                 break
 
         current_positions = np.array([n.pos for n in nodes])
-        target_safe_positions = []
 
-        # --- Extreme Edge Case Fallback (Just in case memory is wiped) ---
         if best_shape is None:
             print("[WFC] WARNING: No memory found! Freezing in place.")
             self.history.clear()
@@ -90,19 +86,15 @@ class Wave_Function_Collapse:
                 "target_positions": current_positions,
             }
 
-        # --- Normal Relative Rewind Calculation ---
         current_centroid = np.mean(current_positions, axis=0)
+        # Now avg_velocity is non-zero because .vel is properly stored
         avg_velocity = np.mean(best_shape["velocities"], axis=0)
-
-        # Calculate where the center of the safe swarm should be
-        # (slightly pulled back from their current crash trajectory)
         safe_centroid = current_centroid - (avg_velocity * 0.5)
 
-        # Reconstruct the organic shape around the new safe centroid
-        for i in range(len(nodes)):
-            target_safe_positions.append(
-                safe_centroid + best_shape["relative_positions"][i]
-            )
+        target_safe_positions = [
+            safe_centroid + best_shape["relative_positions"][i]
+            for i in range(len(nodes))
+        ]
 
         self.successful_recoveries += 1
         self.history.clear()

@@ -21,13 +21,11 @@ def plot_training_history(history):
     fig, axs = plt.subplots(2, 2, figsize=(14, 10))
     fig.suptitle("FLOWRRA Swarm Training Telemetry", fontsize=16, fontweight="bold")
 
-    # 1. Reward History
     axs[0, 0].plot(history["step"], history["reward"], color="#2ca02c", alpha=0.8)
     axs[0, 0].set_title("Average Step Reward")
     axs[0, 0].set_ylabel("Reward")
     axs[0, 0].grid(True, alpha=0.3)
 
-    # 2. Topological Health
     axs[0, 1].plot(
         history["step"], history["integrity"], label="Integrity", color="#1f77b4"
     )
@@ -43,7 +41,6 @@ def plot_training_history(history):
     axs[0, 1].legend()
     axs[0, 1].grid(True, alpha=0.3)
 
-    # 3. Neural Network Losses
     axs[1, 0].plot(
         history["step"],
         history["actor_loss"],
@@ -63,7 +60,6 @@ def plot_training_history(history):
     axs[1, 0].legend()
     axs[1, 0].grid(True, alpha=0.3)
 
-    # 4. Wave Function Collapses
     axs[1, 1].plot(
         history["step"], history["wfc_collapses"], color="#d62728", linewidth=2
     )
@@ -84,10 +80,9 @@ def main():
 
     orchestrator = FLOWRRA_Orchestrator(mode="training")
 
-    total_episodes = 10
-    steps_per_episode = 1000
+    total_episodes = 5
+    steps_per_episode = 800
 
-    # Initialize history tracker
     history = {
         "step": [],
         "reward": [],
@@ -109,13 +104,16 @@ def main():
             for step in range(steps_per_episode):
                 step_start_time = time.time()
 
-                # Execute one Brain/Brainstem cycle
-                orchestrator.step(episode_step=step, total_episodes=steps_per_episode)
+                # FIX — parameter renamed from total_episodes to steps_per_episode
+                # to match what core.py's step() actually uses it for.
+                orchestrator.step(
+                    episode_step=step,
+                    steps_per_episode=steps_per_episode,
+                )
                 viewer.sync()
 
                 stats = orchestrator.statistics
 
-                # Record telemetry every 10 steps (keeps the graph high-res but saves memory)
                 if global_step % 10 == 0:
                     history["step"].append(global_step)
                     history["reward"].append(stats["reward"])
@@ -125,10 +123,12 @@ def main():
                     history["critic_loss"].append(stats["critic_loss"])
                     history["wfc_collapses"].append(stats["wfc_collapses"])
 
-                # Print a tiny heartbeat every 100 steps just so you know it's alive
                 if step % 100 == 0:
                     print(
-                        f"  > Ep {episode + 1} | Step {step:04d} | Rew: {stats['reward']:+06.2f} | Integrity: {stats['integrity']:.2f} | WFCs: {stats['wfc_collapses']}"
+                        f"  > Ep {episode + 1} | Step {step:04d} | "
+                        f"Rew: {stats['reward']:+06.2f} | "
+                        f"Integrity: {stats['integrity']:.2f} | "
+                        f"WFCs: {stats['wfc_collapses']}"
                     )
 
                 global_step += 1
@@ -149,7 +149,6 @@ def main():
     print("🏁 SIMULATION TERMINATED 🏁")
     print("==================================================")
 
-    # Generate the graphs when the viewer closes or finishes!
     if len(history["step"]) > 0:
         plot_training_history(history)
 

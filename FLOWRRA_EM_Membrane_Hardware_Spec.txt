@@ -22,7 +22,7 @@ artificial nervous system for embodied AI and robotics.
 
 2. ARCHITECTURAL MECHANISMS
 - Holonic Nodes: The membrane consists of a microscopic grid of electromagnetic nodes. 
-  Each node acts as an individual holon within the FLOWRRA matrix.
+  Set of nodes act as an individual holon (ex: forming a wrist and/or a feet) within the FLOWRRA matrix.
 - The EM Flow: The multi-agent "swarm" is represented by the continuous flow of 
   electromagnetic currents across the membrane.
 - Passive Sensory Skin: Nodes do not require active, energy-draining sensors. Physical 

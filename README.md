@@ -6,9 +6,9 @@ FLOWRRA is a novel multi-agent reinforcement learning framework that enables swa
 
 <div align="center">
   <p>SINGLE HOLON - FLOWRRA 2D Simulation showing instant recovery/evation</p>
-  <img src="assets/Single_Holon.gif" alt="SINGLE HOLON - FLOWRRA 2D Simulation showing instant recovery/evation" width="200"/> <br></br>
+  <img src="assets/Single_Holon.gif" alt="SINGLE HOLON - FLOWRRA 2D Simulation showing instant recovery/evation" width="400"/> <br></br>
   <p>MULTI HOLON - FLOWRRA 2D Simulation showing instant recovery from node partitions</p>
-  <img src="assets/The_Beautiful_Swarm.gif" alt="MULTI HOLON - FLOWRRA 2D Simulation showing instant recovery from node partitions" width="200"/><br></br>
+  <img src="assets/The_Beautiful_Swarm.gif" alt="MULTI HOLON - FLOWRRA 2D Simulation showing instant recovery from node partitions" width="400"/><br></br>
   <p><i>Live 2D simulation demonstrating 81.7% average flow coherence under severe node partitions.</i></p>
   <p><b>For interactive visual, visit: [ https://dhaarn.com ]</b></p>
 </div>

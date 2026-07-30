@@ -4,6 +4,13 @@
 
 FLOWRRA is a novel multi-agent reinforcement learning framework that enables swarm systems to dynamically recognize, adapt, and reconfigure in response to changing environmental conditions. Built on a federated holonic architecture, FLOWRRA allows agents to self-organize into hierarchical structures (holons) that can autonomously make decisions while maintaining global coordination.
 
+<div align="center">
+  <img src="assets/Single_Holon.mp4" alt="SINGLE HOLON - FLOWRRA 2D Simulation showing instant recovery from node partitions" width="800"/>
+  <img src="assets/The_Beautiful_Swarm.mp4" alt="MULTI HOLON - FLOWRRA 2D Simulation showing instant recovery from node partitions" width="800"/>
+  <p><i>Live 2D simulation demonstrating 81.7% average flow coherence under severe node partitions.</i></p>
+  <p><b>For interactive visual, visit: [ https://dhaarn.com ]</b></p>
+</div>
+
     - For Conceptual Understanding and Evolution of FLOWRRA visit: https://open.substack.com/pub/rohittamidapati/p/flowrra-flow-recognition-reconfiguration?r=721j7i&utm_campaign=post&utm_medium=web&showWelcomeOnShare=true -
 
 

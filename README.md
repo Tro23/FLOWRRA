@@ -6,7 +6,7 @@ FLOWRRA is a novel multi-agent reinforcement learning framework that enables swa
 
 <div align="center">
   <p>SINGLE HOLON - FLOWRRA 2D Simulation showing instant recovery/evation</p>
-  <img src="assets/Single_Holon.gif" alt="SINGLE HOLON - FLOWRRA 2D Simulation showing instant recovery/evation" width="400"/> <br></br>
+  <img src="assets/Single_Holon.gif" alt="SINGLE HOLON - FLOWRRA 2D Simulation showing instant recovery/evasion" width="400"/> <br></br>
   <p>MULTI HOLON - FLOWRRA 2D Simulation showing instant recovery from node partitions</p>
   <img src="assets/The_Beautiful_Swarm.gif" alt="MULTI HOLON - FLOWRRA 2D Simulation showing instant recovery from node partitions" width="400"/><br></br>
   <p><i>Live 2D simulation demonstrating 81.7% average flow coherence under severe node partitions.</i></p>
@@ -18,7 +18,7 @@ FLOWRRA is a novel multi-agent reinforcement learning framework that enables swa
 
 ## What is FLOWRRA?
 
-FLOWRRA introduces a paradigm shift in swarm intelligence through a radical reorientation: **the entire swarm treats itself as its primary environment (Environment A)**, while everything external—obstacles, boundaries, external forces—becomes a secondary, interacting entity (Environment B). This Ouroboros principle enables the system to maintain structural and informational coherence through recursive self-awareness.
+FLOWRRA introduces a paradigm shift in swarm intelligence through a radical reorientation: **the entire swarm treats itself as its primary environment (Environment A)**, while everything external: obstacles, boundaries, external forces becomes a secondary, interacting entity (Environment B). This Ouroboros principle enables the system to maintain structural and informational coherence through recursive self-awareness.
 
 The framework combines:
 
@@ -42,7 +42,7 @@ The framework combines:
 - 🎯 **Active/Frozen Node Management**: Adaptive computation allocation - nodes can "crystallize" as static landmarks once their zone is secured
 - 🌊 **Density Field Memory**: Spatial repulsion fields that encode collective failure history, teaching avoidance through retrocausal splatting
 - ⚡ **Wave Function Collapse**: Bidirectional recovery mechanism combining forward spatial projection and backward temporal restoration
-- 🔁 **Retrocausal-Inspired Intelligence**: System doesn't just predict—it reorganizes recursively across time, using future observations to inform past configurations
+- 🔁 **Retrocausal-Inspired Intelligence**: System doesn't just predict, it reorganizes recursively across time, using future observations to inform past configurations
 
 ## Architecture Overview
 
@@ -71,9 +71,9 @@ FLOWRRA_FEDERATED
 
 FLOWRRA inverts the traditional agent-environment paradigm:
 
-1. **Environment A (Primary)**: The swarm's own internal state—node positions, loop integrity, density fields, coherence metrics. The system continuously acts upon itself to preserve flow.
+1. **Environment A (Primary)**: The swarm's own internal state: node positions, loop integrity, density fields, coherence metrics. The system continuously acts upon itself to preserve flow.
 
-2. **Environment B (Secondary)**: External world—obstacles, boundaries, external forces. These are perturbations that the swarm must navigate while maintaining its internal coherence.
+2. **Environment B (Secondary)**: External world: obstacles, boundaries, external forces. These are perturbations that the swarm must navigate while maintaining its internal coherence.
 
 3. **The Critical Loop**:
    - **Sense**: Observe both environments (internal coherence + external obstacles)
@@ -267,7 +267,7 @@ This runs standardized multi-agent benchmarks and outputs comparative results to
 
 ## The Core Innovation: Retrocausal-Inspired Intelligence
 
-FLOWRRA's breakthrough lies in treating **disruption as information** that flows backward through time to inform system configuration. This isn't actual time travel—it's a directed inference mechanism inspired by quantum retrocausality.
+FLOWRRA's breakthrough lies in treating **disruption as information** that flows backward through time to inform system configuration. This isn't actual time travel, it's a directed inference mechanism inspired by quantum retrocausality.
 
 ### How It Works
 
@@ -299,14 +299,14 @@ density.splat_collision_event(
 )
 ```
 
-This creates **spatial scars**—geometric memories of failure encoded in the topology itself. The swarm learns not "don't collide with obstacle at (x,y)" but "avoid this configuration space."
+This creates **spatial scars**, geometric memories of failure encoded in the topology itself. The swarm learns not "don't collide with obstacle at (x,y)" but "avoid this configuration space."
 
 ### Why This Matters
 
 Traditional RL: State → Action → Reward → Update Policy  
 FLOWRRA: State → Disruption → **Collapse** → **Rewrite History** → Update Density
 
-The system doesn't just learn from failure—it reorganizes its operational history to make the failure "never happened" while encoding the lesson in the density field. This is **intelligence as sustained presence** rather than perfect prediction.
+The system doesn't just learn from failure, it reorganizes its operational history to make the failure "never happened" while encoding the lesson in the density field. This is **intelligence as sustained presence** rather than perfect prediction.
 
 
 
@@ -568,11 +568,11 @@ cat metrics/holon_0_detailed.json | jq '.wfc_trigger_events | length'
 
 FLOWRRA is dual-licensed:
 
-- **Open Source / Community Edition**: GNU Affero General Public License v3.0 (AGPLv3) — see LICENSE file.
+- **Open Source / Community Edition**: GNU Affero General Public License v3.0 (AGPLv3) - see LICENSE file.
   - Free for personal, research, non-commercial, or open-source use.
   - If you modify and offer it as a network service (SaaS/API) or otherwise, you must release your changes under AGPLv3.
 
-- **Commercial / Proprietary License** — For closed-source use, private modifications, enterprise integration, or avoiding AGPL obligations.
+- **Commercial / Proprietary License** - For closed-source use, private modifications, enterprise integration, or avoiding AGPL obligations.
   - Contact me at [rohittamidapati11@gmail.com] or [rohit.tamidapati@dhaarn.com] for pricing/terms.
   - Ideal for companies building production products, SaaS, or integrations without sharing source.
 

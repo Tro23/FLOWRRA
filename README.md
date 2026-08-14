@@ -23,16 +23,16 @@ FLOWRRA introduces a paradigm shift in swarm intelligence through a radical reor
 The framework combines:
 
 - **Flow Recognition**: The swarm continuously monitors its own internal coherence and structural integrity, treating deviations as signals to adapt
-- **Flow Reconfiguration**: Real-time self-reorganization through density field manipulation and wave function collapse, enabling the system to "fold time inward" and recover from disruptions
+- **Flow Reconfiguration**: Real-time self-reorganization through density field manipulation and spatial-temporal Sampling, enabling the system to "fold time inward" and recover from disruptions
 - **Retrocausal-Inspired Learning**: Uses observed disruptions to select optimal past configurations, effectively influencing operational history toward desired future states
 - **Density Field Evolution**: A spatial memory system where collision events and failures are "splatted" into the environment as repulsion fields, teaching the swarm to avoid dangerous configurations
 - **Spatial-Temporal Sampling:** Dual-mode recovery mechanism that can:
   - * **Spatial Resolution (Forward):** Project into high-affordance regions using current density gradients.
   - * **Temporal Resolution (Backward):** Return to historically coherent states through manifold smoothing.
--**Federated Holonic Architecture:** Self-similar hierarchical structures from individual agents to swarm level, enabling scalability without sacrificing coherence.
+- **Federated Holonic Architecture:** Self-similar hierarchical structures from individual agents to swarm level, enabling scalability without sacrificing coherence.
 
 > 📝 **Architecture Note (August 15, 2026):** 
-> FLOWRRA’s current temporal-spatial resolution engine utilizes continuous density fields to execute classical **Spatial-Temporal Sampling** (referred to conceptually as Wave Function Collapse in our earlier conceptual designs). We designed this module as a classical placeholder; as the architecture matures and interfaces with advanced hardware substrates, this engine is built to be seamlessly substituted with true physical Wave Function Collapse, while the surrounding peer-to-peer GNN coordination remains invariant.
+> FLOWRRA’s current temporal-spatial resolution engine utilizes continuous density fields to execute classical **Spatial-Temporal Sampling** (referred to conceptually as Wave Function Collapse in our earlier conceptual designs). We designed this module as a classical placeholder; as the architecture matures and interfaces with advanced hardware substrates, this engine is built to be seamlessly substituted with true physical Spatial-Temporal Collapse, while the surrounding peer-to-peer GNN coordination remains invariant.
 
 ### Key Features
 
@@ -44,7 +44,7 @@ The framework combines:
 - 📊 **Real-time Metrics**: Comprehensive tracking of training, exploration, recovery, and frozen node behaviors
 - 🎯 **Active/Frozen Node Management**: Adaptive computation allocation - nodes can "crystallize" as static landmarks once their zone is secured
 - 🌊 **Density Field Memory**: Spatial repulsion fields that encode collective failure history, teaching avoidance through retrocausal splatting
-- ⚡ **Wave Function Collapse**: Bidirectional recovery mechanism combining forward spatial projection and backward temporal restoration
+- ⚡ **Spatial-Temporal Collapse**: Bidirectional recovery mechanism combining forward spatial projection and backward temporal restoration
 - 🔁 **Retrocausal-Inspired Intelligence**: System doesn't just predict, it reorganizes recursively across time, using future observations to inform past configurations
 
 ## Architecture Overview
@@ -56,7 +56,7 @@ FLOWRRA_FEDERATED
 │   ├── agent.py        # GAT-GNN with multi-head attention
 │   ├── r_gnn_agent.py  # Relational GNN alternative
 │   ├── density.py      # Density field with retrocausal splatting
-│   ├── recovery.py     # Wave Function Collapse (spatial + temporal)
+│   ├── recovery.py     # Spatial-Temporal Collapse (spatial + temporal)
 │   ├── loop.py         # Spring topology with non-linear forces
 │   └── obstacles.py    # Obstacle detection (Environment B)
 ├── federation/         # Federation manager and spatial partitioning
@@ -81,7 +81,7 @@ FLOWRRA inverts the traditional agent-environment paradigm:
 3. **The Critical Loop**:
    - **Sense**: Observe both environments (internal coherence + external obstacles)
    - **Evaluate**: Compute flow coherence Φ(S(t)) and loop integrity
-   - **Decide**: If coherent, optimize via policy πθ; if disrupted, trigger WFC
+   - **Decide**: If coherent, optimize via policy πθ; if disrupted, trigger Spatial-Temporal Collapse (In code still called as WFC -Wave Function collapse)
    - **Act**: Apply actions to Environment A (self-reconfiguration)
    - **Learn**: Update policy and density field based on outcomes
 
@@ -222,7 +222,7 @@ Then open the Visualization file in the browser: `http://localhost:8000/visualiz
 - **holon/r_gnn_agent.py**: Alternative relational GNN implementation for enhanced communication
 - **holon/density.py**: N-dimensional density field with collision splatting and retrocausal repulsion
 - **holon/exploration.py**: Exploration strategies and frontier detection
-- **holon/recovery.py**: Wave Function Collapse with dual-mode recovery (spatial forward + temporal backward)
+- **holon/recovery.py**: Spatial-Temporal Collapse with dual-mode recovery (spatial forward + temporal backward)
 - **holon/loop.py**: Spring topology management with non-linear warning forces
 - **holon/obstacles.py**: Static and moving obstacle detection with line intersection checks
 - **federation/manager.py**: Global coordination and holon management with Quadtree partitioning
@@ -258,15 +258,6 @@ Training produces several outputs:
 - Exploration completeness
 - Recovery time from failures
 
-## BenchMARL Integration
-
-FLOWRRA includes adapters for BenchMARL benchmarking:
-
-```bash
-python run_flowrra_benchmarl.py
-```
-
-This runs standardized multi-agent benchmarks and outputs comparative results to `benchmarl_results/`.
 
 ## The Core Innovation: Retrocausal-Inspired Intelligence
 
@@ -275,7 +266,7 @@ FLOWRRA's breakthrough lies in treating **disruption as information** that flows
 ### How It Works
 
 1. **Disruption Detection**: System detects coherence drop (Φ(S(t)) < threshold)
-2. **Wave Function Collapse**: 
+2. **Spatial-Temporal Sampling**: 
    - **Spatial Mode (Forward)**: Sample affordance field to find high-coherence regions ahead
    - **Temporal Mode (Backward)**: Extract coherent tail from historical buffer
 3. **Retrocausal Splatting**: Failed trajectory is "splatted" into density field as repulsion
@@ -321,9 +312,9 @@ FLOWRRA provides two GNN implementations:
 ```python
 # Graph Attention Network with:
 # - Multi-head attention (4 heads default)
-# - LSTM temporal memory for path stability
 # - Epsilon-greedy exploration with Gaussian schedule
 # - Gradient masking for frozen nodes
+# - LSTM temporal memory for path stability (this can be made used by implementing r_gnn_agent.py)
 
 from holon.agent import GNNAgent
 
@@ -376,7 +367,7 @@ affordance = density.get_affordance_potential_for_node(
 )
 ```
 
-### Wave Function Collapse Configuration
+### Spatial-Temporal Sampling (*previously Wave Function Collapse-WFC) Configuration
 
 Tune WFC behavior in `config.py`:
 
@@ -633,7 +624,7 @@ If you want to use FLOWRRA in your research, reach out to the author:
 FLOWRRA draws inspiration from:
 - **Active Inference** (Karl Friston) - Free energy minimization
 - **Holonic Systems** (Arthur Koestler) - Self-similar hierarchies  
-- **Quantum Mechanics** - Wave function collapse metaphor
+- **Quantum Mechanics** - Spatial-Temporal Collapse metaphor
 - **Swarm Intelligence** - Emergent coordination without central control
 - **Graph Neural Networks** - Relational reasoning in multi-agent systems
 

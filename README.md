@@ -26,10 +26,13 @@ The framework combines:
 - **Flow Reconfiguration**: Real-time self-reorganization through density field manipulation and wave function collapse, enabling the system to "fold time inward" and recover from disruptions
 - **Retrocausal-Inspired Learning**: Uses observed disruptions to select optimal past configurations, effectively influencing operational history toward desired future states
 - **Density Field Evolution**: A spatial memory system where collision events and failures are "splatted" into the environment as repulsion fields, teaching the swarm to avoid dangerous configurations
-- **Wave Function Collapse (WFC)**: Dual-mode recovery mechanism that can:
-  - **Spatial Collapse (Forward)**: Project into high-affordance regions using current density gradients
-  - **Temporal Collapse (Backward)**: Return to historically coherent states through manifold smoothing
-- **Federated Holonic Architecture**: Self-similar hierarchical structures from individual agents to swarm level, enabling scalability without sacrificing coherence
+- **Spatial-Temporal Sampling:** Dual-mode recovery mechanism that can:
+  - * **Spatial Resolution (Forward):** Project into high-affordance regions using current density gradients.
+  - * **Temporal Resolution (Backward):** Return to historically coherent states through manifold smoothing.
+-**Federated Holonic Architecture:** Self-similar hierarchical structures from individual agents to swarm level, enabling scalability without sacrificing coherence.
+
+> 📝 **Architecture Note (August 15, 2026):** 
+> FLOWRRA’s current temporal-spatial resolution engine utilizes continuous density fields to execute classical **Spatial-Temporal Sampling** (referred to conceptually as Wave Function Collapse in our earlier conceptual designs). We designed this module as a classical placeholder; as the architecture matures and interfaces with advanced hardware substrates, this engine is built to be seamlessly substituted with true physical Wave Function Collapse, while the surrounding peer-to-peer GNN coordination remains invariant.
 
 ### Key Features
 

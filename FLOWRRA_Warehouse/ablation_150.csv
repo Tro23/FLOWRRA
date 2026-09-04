@@ -1,0 +1,49 @@
+map,agents,completion,collisions,steps,variant
+50_5_5_10_5_10,37,0.9459459459459459,1,780,all fixes (baseline)
+50_10_2_10_5_2,41,0.9512195121951219,3,780,all fixes (baseline)
+50_5_5_10_5_2,50,0.9,2,780,all fixes (baseline)
+50_10_5_10_10_2,43,1.0,0,151,all fixes (baseline)
+50_10_2_10_5_2,29,0.8620689655172413,4,780,all fixes (baseline)
+50_5_5_10_5_2,42,0.9047619047619048,2,780,all fixes (baseline)
+50_10_2_10_5_2,28,1.0,0,141,all fixes (baseline)
+50_10_5_10_5_1,42,1.0,0,152,all fixes (baseline)
+50_5_5_10_5_10,37,0.8378378378378378,3,780,RANDOM policy (no network)
+50_10_2_10_5_2,41,1.0,0,554,RANDOM policy (no network)
+50_5_5_10_5_2,50,0.78,14,780,RANDOM policy (no network)
+50_10_5_10_10_2,43,0.9302325581395349,4,780,RANDOM policy (no network)
+50_10_2_10_5_2,29,0.9310344827586207,1,780,RANDOM policy (no network)
+50_5_5_10_5_2,42,0.8809523809523809,8,780,RANDOM policy (no network)
+50_10_2_10_5_2,28,0.8571428571428571,2,780,RANDOM policy (no network)
+50_10_5_10_5_1,42,0.9285714285714286,1,780,RANDOM policy (no network)
+50_5_5_10_5_10,37,0.9459459459459459,0,780,GREEDY gradient (no network)
+50_10_2_10_5_2,41,1.0,0,126,GREEDY gradient (no network)
+50_5_5_10_5_2,50,0.96,0,780,GREEDY gradient (no network)
+50_10_5_10_10_2,43,1.0,0,114,GREEDY gradient (no network)
+50_10_2_10_5_2,29,1.0,0,74,GREEDY gradient (no network)
+50_5_5_10_5_2,42,0.9761904761904762,1,780,GREEDY gradient (no network)
+50_10_2_10_5_2,28,1.0,1,147,GREEDY gradient (no network)
+50_10_5_10_5_1,42,1.0,0,100,GREEDY gradient (no network)
+50_5_5_10_5_10,37,0.918918918918919,0,780,braking bug restored
+50_10_2_10_5_2,41,0.9024390243902439,2,780,braking bug restored
+50_5_5_10_5_2,50,0.74,10,780,braking bug restored
+50_10_5_10_10_2,43,1.0,0,525,braking bug restored
+50_10_2_10_5_2,29,0.896551724137931,4,780,braking bug restored
+50_5_5_10_5_2,42,0.9285714285714286,2,780,braking bug restored
+50_10_2_10_5_2,28,0.9642857142857143,1,780,braking bug restored
+50_10_5_10_5_1,42,0.9761904761904762,0,780,braking bug restored
+50_5_5_10_5_10,37,0.9459459459459459,0,780,hardcoded bounds restored
+50_10_2_10_5_2,41,0.9512195121951219,0,780,hardcoded bounds restored
+50_5_5_10_5_2,50,0.98,4,780,hardcoded bounds restored
+50_10_5_10_10_2,43,1.0,0,156,hardcoded bounds restored
+50_10_2_10_5_2,29,0.9655172413793104,1,780,hardcoded bounds restored
+50_5_5_10_5_2,42,0.9285714285714286,1,780,hardcoded bounds restored
+50_10_2_10_5_2,28,1.0,0,142,hardcoded bounds restored
+50_10_5_10_5_1,42,1.0,0,166,hardcoded bounds restored
+50_5_5_10_5_10,37,0.918918918918919,3,780,both bugs restored
+50_10_2_10_5_2,41,0.975609756097561,1,780,both bugs restored
+50_5_5_10_5_2,50,0.76,7,780,both bugs restored
+50_10_5_10_10_2,43,0.9767441860465116,0,780,both bugs restored
+50_10_2_10_5_2,29,0.9310344827586207,1,780,both bugs restored
+50_5_5_10_5_2,42,0.8809523809523809,3,780,both bugs restored
+50_10_2_10_5_2,28,0.9285714285714286,0,780,both bugs restored
+50_10_5_10_5_1,42,0.9761904761904762,0,780,both bugs restored

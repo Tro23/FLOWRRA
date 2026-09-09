@@ -478,7 +478,9 @@ def plan_windowed(G, starts, goals, window: int, method: str):
 def run_rolling_horizon_instance(G, pos_dict, fleet_missions, goal_pool, method: str,
                                  max_steps: int, assignment: Dict[str, str],
                                  window: int = 20, replan_every: int = 5,
-                                 disturbance: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                                 disturbance: Optional[Dict[str, Any]] = None,
+                                 failure: Optional[Dict[str, Any]] = None,
+                                 steps_per_hop: int = 1) -> Dict[str, Any]:
     """
     RHCR-style execution: plan collision-free for a bounded WINDOW, execute
     `replan_every` timesteps, replan from wherever the agents actually are,
@@ -518,13 +520,94 @@ def run_rolling_horizon_instance(G, pos_dict, fleet_missions, goal_pool, method:
         d = pos_dict[nid]
         return np.array([d["X"], d["Y"], d["Z"]], dtype=np.float32)
 
+    # ---- PERMANENT FAILURE MODEL ------------------------------------------
+    # `disturbance` is a temporary STALL: the vehicle resumes and its order is
+    # never in question. That is the setting the existing MAPF malfunction
+    # literature covers (k-robust MAPF; Fioravantes et al. 2025 bound the
+    # makespan increase after k malfunctions by k turns).
+    #
+    # `failure` is the setting this harness exists to measure: the vehicle is
+    # DEAD and the order it carried is stranded AT ITS CELL. Delivering it means
+    # routing another vehicle to that cell FIRST, then to the destination -- a
+    # two-leg pickup-and-delivery induced by the failure. That structure is
+    # forced by physics, not by design: the package is on the broken robot, not
+    # at the goal.
+    #
+    #   recovery="none"  the order is lost. Not a strawman -- an accurate
+    #                    depiction of what a planner alone does.
+    #   recovery="naive" the obvious fleet-manager heuristic: nearest vehicle
+    #                    already parked at its own goal is retargeted to the dead
+    #                    cell, then on to the orphaned destination.
     stalled_until = {}
     if disturbance:
         for a in disturbance.get("agents", []):
             stalled_until[a] = disturbance["step"] + disturbance.get("duration", 10)
 
+    # TRIGGER ON MISSION PROGRESS, NOT CLOCK STEP.
+    #
+    # A shared step index is not a shared point in the mission. FLOWRRA moves at
+    # base_speed 0.5 and ran 287 steps on the same instances RHCR finished in 44,
+    # so "hop 25" landed 17% into FLOWRRA's run and 57% into RHCR's. Late means
+    # more vehicles already parked, so fewer were still carrying anything to
+    # orphan -- measured: FLOWRRA saw 11 failures, the baselines 7, on identical
+    # instances. Dividing by base_speed does not fix it, because the step ratio
+    # is 6.5x, not 2x.
+    #
+    # Firing when a FRACTION OF ORDERS HAS BEEN DELIVERED is self-normalising:
+    # it needs no pre-pass, no per-arm calibration, and it guarantees vehicles
+    # are still active to fail (1 - progress of them). Both arms are then hit at
+    # the same point in the work, whatever their clocks are doing.
+    failure = failure or {}
+    # MULTIPLE WAVES. A rescuer can only die if it is ALREADY rescuing, and at
+    # the instant of a single burst nobody is. Raising the failure COUNT gives
+    # simultaneous deaths, not a death mid-rescue -- the case that separates
+    # re-dispatch (FLOWRRA) from a pickup stranded on a dead rescuer forever
+    # (naive). A second wave, after dispatch has happened, is what creates it.
+    #
+    # Victims are drawn from vehicles still carrying an order, lowest index
+    # first. Rescuers on leg 1 or leg 2 ARE carrying an order, so they are in
+    # the pool on equal terms -- not preferentially targeted, which would stack
+    # the deck for the mechanism under test.
+    fail_waves = list(failure.get("progress_waves", []))
+    if failure.get("progress") is not None and not fail_waves:
+        fail_waves = [failure["progress"]]
+    fail_waves = sorted(fail_waves)
+    fail_step = int(failure.get("step", -1))
+    fail_agents = set(failure.get("agents", []))
+    n_to_fail = int(failure.get("count", len(fail_agents)))
+    _wave_i = 0
+    rescuer_deaths = 0
+    recovery_mode = failure.get("recovery", "none")
+    dead = set()
+    orphan_goal = {}       # dead agent -> goal it never reached
+    orphan_cell = {}       # dead agent -> where its load is stranded
+    assigned_rescuer = {}  # dead agent -> rescuer index
+    leg2 = {}              # rescuer -> destination after pickup
+    orders_recovered = 0
+    recover_latency = []
+    _hcache = {}
+
+    def _h(goal):
+        if goal not in _hcache:
+            _hcache[goal] = bfs_distances(G, goal)
+        return _hcache[goal]
+
+    # DISTANCE, COUNTED, so both arms report the same physical quantity. Each
+    # executed move here traverses exactly one edge, so counting moves IS the
+    # hop count -- no conversion, no assumption about what a timestep is worth.
+    distance_travelled = 0
+
+    # TRANSFER DWELL. FLOWRRA charges pickup_dwell_steps for the physical
+    # handover; this arm previously teleported the load, which is not a fairer
+    # baseline but an unmodelled one. Matched on DISTANCE, not tick count:
+    # FLOWRRA's 4 steps at base_speed 0.5 forgo 2 hops, so this arm waits 2
+    # timesteps to forgo the same 2 hops. Matching tick-for-tick would cost it
+    # 4 hops and quietly charge the baseline double.
+    transfer_dwell_until = {}
+    TRANSFER_DWELL = 2
+
     cur = list(starts)
-    finish_step: Dict[int, int] = {}
+    finish_step = {}
     integrity_trace, integrity_strict, deadlock_sizes, step_ms = [], [], [], []
     plan_s = replan_s = 0.0
     replans = 0
@@ -532,6 +615,98 @@ def run_rolling_horizon_instance(G, pos_dict, fleet_missions, goal_pool, method:
 
     for t in range(max_steps):
         t0 = time.perf_counter()
+
+        # ---- inject permanent failures, and respond ------------------------
+        if _wave_i < len(fail_waves):
+            # TERMINAL states, not deliveries. Measuring progress as orders
+            # DELIVERED gives an arm that cannot recover orphans a ceiling of
+            # (n - dead)/n -- RHCR alone tops out near 0.82, so later waves never
+            # fire and it received 10.7 failures where the recovering arms took
+            # 15.0. The metric rewarded being bad at recovery. Counting a vehicle
+            # as resolved when it has delivered OR died always climbs to 1.0, so
+            # every arm takes the same waves.
+            _done = len(finish_step) + orders_recovered + len(dead)
+            # DEADLINE FALLBACK. Progress-triggering alone means an arm that
+            # struggles never reaches the later thresholds and so receives FEWER
+            # failures than an arm that does well -- measured: 2.67 vs 4.00
+            # orphans on identical instances, because one arm stalled at 53%
+            # completion and the 0.60 wave never fired. That rewards failing.
+            # Each wave therefore also fires at a step deadline spread across the
+            # budget, so every arm takes the same number of hits whatever its
+            # clock or its competence.
+            _deadline = int(max_steps * (_wave_i + 1) / (len(fail_waves) + 1))
+            if _done / max(1, n) >= fail_waves[_wave_i] or t >= _deadline:
+                fail_agents = set([i for i in range(n)
+                                   if i not in dead and cur[i] != goals[i]][:n_to_fail])
+                # A victim that was servicing a pickup strands it: the naive
+                # policy never re-dispatches, so that load is lost for good.
+                for a in fail_agents:
+                    if a in assigned_rescuer.values() or a in leg2:
+                        rescuer_deaths += 1
+                fail_step = t
+                _wave_i += 1
+
+        if t == fail_step and fail_agents:
+            for a in fail_agents:
+                if a < n and cur[a] != goals[a]:
+                    dead.add(a)
+                    orphan_goal[a] = goals[a]
+                    orphan_cell[a] = cur[a]
+                    # The dead vehicle is pinned where it stopped. Its goal is
+                    # set to its own cell so the planner routes the others
+                    # around it as a static obstacle -- which is exactly what
+                    # RHCR alone can do about a breakdown.
+                    goals[a] = cur[a]
+            paths = None  # force an immediate replan around the new obstacles
+
+        if recovery_mode == "naive" and dead:
+            for d in list(dead):
+                if d in assigned_rescuer:
+                    continue
+                # Nearest IDLE vehicle by true hop distance to the stranded load.
+                # Idle means parked at its own goal: a naive fleet manager will
+                # not interrupt a delivery in progress, which is also why it
+                # cannot recruit anyone when everyone is still busy.
+                hh = _h(orphan_cell[d])
+                best, best_d = None, float("inf")
+                for i in range(n):
+                    if i in dead or i in leg2 or i in assigned_rescuer.values():
+                        continue
+                    if cur[i] != goals[i]:
+                        continue          # busy; naive policy will not divert it
+                    dd = hh.get(cur[i])
+                    if dd is not None and dd < best_d:
+                        best, best_d = i, dd
+                if best is None:
+                    continue
+                assigned_rescuer[d] = best
+                leg2[best] = orphan_goal[d]
+                goals[best] = orphan_cell[d]      # leg 1: go collect the load
+                finish_step.pop(best, None)       # back in service
+                paths = None
+
+        # leg 1 complete -> switch the rescuer to the delivery destination.
+        #
+        # `r not in dead` matters. Killing a vehicle PINS it by setting
+        # goals[a] = cur[a], which makes `cur[r] == goals[r]` true -- the same
+        # condition this loop uses to mean "arrived at the pickup". A rescuer
+        # killed mid-rescue was therefore read as having arrived, had its goal
+        # switched to the delivery destination, and was un-pinned as a side
+        # effect. It then sat motionless with cur != goals for the rest of the
+        # episode, outside the collision exemption, logging a fresh fatal
+        # collision every step against the very vehicle it was sent to rescue.
+        for r, dest in list(leg2.items()):
+            if r in dead:
+                continue
+            if cur[r] == goals[r] and goals[r] != dest:
+                if transfer_dwell_until.get(r, -1) < 0:
+                    transfer_dwell_until[r] = t + TRANSFER_DWELL
+                    continue          # arrived at the pickup: stand still
+                if t < transfer_dwell_until[r]:
+                    continue          # still transferring
+                goals[r] = dest
+                finish_step.pop(r, None)
+                paths = None
 
         if paths is None or path_t >= replan_every:
             p0 = time.perf_counter()
@@ -545,18 +720,54 @@ def run_rolling_horizon_instance(G, pos_dict, fleet_missions, goal_pool, method:
             replans += 1
             path_t = 0
 
-        nxt = []
-        for i in range(n):
-            if t < stalled_until.get(i, -1) or cur[i] == goals[i]:
-                nxt.append(cur[i])                     # stalled, or parked at goal
-            else:
-                p = paths[i]
-                nxt.append(p[min(path_t + 1, len(p) - 1)])
-        cur = nxt
-        path_t += 1
+        # MATCHED EXECUTION CLOCK.
+        #
+        # Standard MAPF is discrete: unit-length edges, one vertex move per
+        # timestep. These planners follow that convention. FLOWRRA does not --
+        # it moves at base_speed 0.5, so it spends TWO simulator steps per hop.
+        #
+        # Comparing raw step counts across that gap is meaningless, and
+        # converting afterwards (steps x base_speed) is worse: sum_of_costs
+        # measures TIME, so the conversion produces "hops that could have been
+        # covered at nominal speed", which is an upper bound on distance rather
+        # than a measurement of it -- and a loose one for FLOWRRA, whose
+        # affordance braking means it often covers far less.
+        #
+        # Equalising the clock at execution instead leaves BOTH algorithms
+        # untouched: the planner still plans in unit hops and FLOWRRA still runs
+        # its own policy. Only the rate at which a planned hop is consumed
+        # changes, so both arms take steps_per_hop simulator steps per graph
+        # edge and raw step counts become directly comparable with no conversion
+        # anywhere.
+        if t % steps_per_hop == 0:
+            nxt = []
+            for i in range(n):
+                if (i in dead or t < stalled_until.get(i, -1)
+                        or cur[i] == goals[i]
+                        or t < transfer_dwell_until.get(i, -1)):
+                    nxt.append(cur[i])   # dead, stalled, parked, or transferring
+                else:
+                    p = paths[i]
+                    nxt.append(p[min(path_t + 1, len(p) - 1)])
+            distance_travelled += sum(1 for a, b in zip(cur, nxt) if a != b)
+            cur = nxt
+            path_t += 1
 
         nodes = [_P(i, coord(v)) for i, v in enumerate(cur)]
-        frozen = {str(i) for i in range(n) if cur[i] == goals[i]}
+        # EXEMPT EVERY VEHICLE THAT CANNOT MOVE, not just the ones parked on
+        # their goal. `cur[i] == goals[i]` alone misses two cases and both occur:
+        #
+        #   * a DEAD vehicle is pinned by setting goals[a] = cur[a], so it is
+        #     covered -- but only until something else changes its goal;
+        #   * a dead RESCUER still holds goals[r] = the pickup cell it was
+        #     travelling to and will now never reach, so cur != goals forever.
+        #
+        # The second case leaves two motionless vehicles a cell apart being
+        # re-counted as a fresh fatal collision on every step for the rest of the
+        # episode -- observed as 140+ logged collisions between one dead fleet
+        # and one retired fleet across 700 steps. total_collisions increments per
+        # deadlocked STEP, so a single unresolvable pair can dominate the metric.
+        frozen = {str(i) for i in range(n) if cur[i] == goals[i] or i in dead}
         integ = loop.check_integrity(nodes, t, frozen)
         integrity_trace.append(float(integ))
         integrity_strict.append(0.0 if loop.deadlocked_nodes else 1.0)
@@ -565,12 +776,24 @@ def run_rolling_horizon_instance(G, pos_dict, fleet_missions, goal_pool, method:
         step_ms.append((time.perf_counter() - t0) * 1000.0)
 
         for i in range(n):
+            if i in dead:
+                continue
             if cur[i] == goals[i] and i not in finish_step:
                 finish_step[i] = t + 1
-        if len(finish_step) == n:
+                # a rescuer arriving at the DESTINATION (not the pickup) has
+                # delivered an orphaned order
+                if i in leg2 and goals[i] == leg2[i]:
+                    orders_recovered += 1
+                    recover_latency.append(t + 1 - fail_step)
+                    del leg2[i]
+        if len(finish_step) + len(dead) == n and not leg2:
             break
 
-    per_agent = [finish_step.get(i, max_steps) for i in range(n)]
+    # SURVIVORS ONLY -- see the matching note in benchmark_flowrra. A killed
+    # vehicle is charged the full cap under the MAPF convention, and with 9
+    # deaths that penalty alone was 89-95% of sum_of_costs, so the metric was
+    # measuring how many vehicles died rather than how well the rest routed.
+    per_agent = [finish_step.get(i, max_steps) for i in range(n) if i not in dead]
     runs, c = [], 0
     for v in integrity_strict:
         if v < 1.0:
@@ -580,15 +803,46 @@ def run_rolling_horizon_instance(G, pos_dict, fleet_missions, goal_pool, method:
     if c:
         runs.append(c)
 
+    n_fail = len(dead)
     return {
-        "algorithm": f"RHCR-{method}",
+        # Recovery mode is part of the identity of the arm: "RHCR-PIBT" with no
+        # failure response and "RHCR-PIBT+naive" are different systems and must
+        # not be averaged together in the summary table.
+        "algorithm": f"RHCR-{method}" + ("+naive" if recovery_mode == "naive" else ""),
+        "distance_travelled": distance_travelled,
+        # Collisions as a RATE. The raw count is a count of deadlocked STEPS,
+        # and the arms run for wildly different lengths -- RHCR finishes in
+        # ~22-51 steps where naive runs to the 780 cap -- so a short run has an
+        # order of magnitude fewer chances to register anything.
+        "collision_rate": loop.get_statistics()["total_collisions_occurred"] / max(t + 1, 1),
+        "failures_injected": n_fail,
+        "orders_orphaned": n_fail,
+        "orders_recovered": orders_recovered,
+        "rescuer_deaths": rescuer_deaths,
+        "orders_lost": n_fail - orders_recovered,
+        "recovery_rate": (orders_recovered / n_fail) if n_fail else float("nan"),
+        # HOPS. One edge per timestep here, so steps and hops are the same
+        # number -- named to match FLOWRRA's converted column so the two are
+        # never compared in different units again.
+        "mean_recovery_hops": (round(float(np.mean(recover_latency)), 1)
+                               if recover_latency else float("nan")),
         "num_agents": n,
-        "success": int(len(finish_step) == n),
-        "completed": len(finish_step),
-        "completion_rate": len(finish_step) / n,
+        "success": int(len(finish_step) + orders_recovered == n),
+        # Orders DELIVERED, matching completion_rate. An order carried to its
+        # destination by a rescuer is delivered, and the rate was updated to say
+        # so when recovery was added -- but this counter was not, so it read the
+        # raw arrival count and undercounted by exactly orders_recovered. Two
+        # columns describing the same thing with different definitions is a trap
+        # left in the CSV for whoever reads it next.
+        "completed": len(finish_step) + orders_recovered,
+        # Orders DELIVERED over orders issued. A dead vehicle parked at its own
+        # cell must not count as "finished" -- that would score a lost order as a
+        # success and erase the entire effect being measured.
+        "completion_rate": (len(finish_step) + orders_recovered) / n,
         "agents_planned": n,
         "makespan": int(max(per_agent)) if per_agent else 0,
         "sum_of_costs": int(sum(per_agent)),
+        "agents_costed": len(per_agent),
         "collisions": loop.get_statistics()["total_collisions_occurred"],
         "steps_run": len(integrity_trace),
         "plan_time_s": round(plan_s, 4),

@@ -420,6 +420,11 @@ def main():
                "risk_steps_acted": est["risk_steps_acted"],
                "warning_steps": est["warning_steps"],
                "intervention_rate": est["intervention_rate"],
+               # The honest density measure: fraction of fleet-steps spent
+               # inside the warning band, i.e. under brake. Occupancy is a
+               # map-dependent proxy; this is the mechanism itself.
+               "brake_duty_cycle": est["brake_duty_cycle"],
+               "mean_peer_gap": est["mean_peer_gap"],
                "errors_injected": est["errors_injected"],
                "handovers_completed": est["handovers_completed"],
                "retired_recalled": est["retired_fleets_recalled"],

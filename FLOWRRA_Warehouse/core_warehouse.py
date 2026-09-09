@@ -287,6 +287,10 @@ class FLOWRRA:
         # uninterpretable on its own: 'rec inv 2' is excellent if there
         # were 2 chances and poor if there were 50. These count the
         # chances, so intervention becomes a RATE.
+        self._goal_claim_step: Dict[str, int] = {}   # goal id -> step it was delivered
+        self._brake_eval_steps = 0   # (fleet, step) pairs where braking was evaluated
+        self._braked_fleet_steps = 0 # of those, how many were inside the warning band
+        self._min_dist_sum = 0.0     # running sum, for the mean gap
         self.risk_steps = 0        # steps with any deadlocked/warning fleet
         self.risk_steps_acted = 0  # of those, steps the policy invoked
         self.warning_steps = 0     # steps with a warning but no deadlock yet
@@ -1169,6 +1173,20 @@ class FLOWRRA:
             "warning_steps": self.warning_steps,
             "intervention_rate": (self.risk_steps_acted / self.risk_steps
                                   if self.risk_steps else 0.0),
+            # DISTANCE, COUNTED. soc_hops is sum_of_costs (a TIME) multiplied by
+            # base_speed, which answers "how far could it have gone at nominal
+            # speed?" -- and FLOWRRA never sustains nominal speed. Affordance
+            # braking floors it as low as 0.05, the final-approach override only
+            # lifts the ramp to 0.7, and dwelling at a pickup moves it not at all.
+            # So the conversion overstates FLOWRRA's distance by an unknown
+            # margin. _fleet_travel already sums the Manhattan distance actually
+            # moved each step; reporting it removes the assumption entirely and
+            # makes the number directly comparable to a baseline hop count.
+            "distance_travelled": float(sum(self._fleet_travel.values())),
+            "brake_duty_cycle": (self._braked_fleet_steps / self._brake_eval_steps
+                                 if self._brake_eval_steps else 0.0),
+            "mean_peer_gap": (self._min_dist_sum / self._brake_eval_steps
+                              if self._brake_eval_steps else float("nan")),
             "pickups_open": len(self.open_pickups),
             "stopped_fleets": sorted(self.stopped_nodes),
         }
@@ -1553,6 +1571,20 @@ class FLOWRRA:
                 else:
                     min_dist = float('inf')
 
+                # BRAKE DUTY CYCLE. Occupancy (agents/nodes) is a convenient
+                # axis but not a physical one: it treats a degree-2 corridor
+                # cell and a junction as equivalent, ignores that traffic
+                # concentrates on routes, and says nothing about how close
+                # vehicles actually are. What throttles a fleet is THIS number --
+                # distance to the nearest live peer -- so the honest density
+                # measure is the fraction of fleet-steps spent inside the
+                # warning band, i.e. the fraction of operating time under brake.
+                # Dimensionless, comparable across any map or fleet count, and
+                # it is the mechanism rather than a proxy for it.
+                self._brake_eval_steps += 1
+                self._min_dist_sum += float(min_dist)
+                if min_dist <= self.loop.warning_threshold:
+                    self._braked_fleet_steps += 1
                 if min_dist <= self.loop.collision_threshold:
                     # Floor at a small positive value instead of letting this hit
                     # exactly 0 (same anti-deadlock reasoning as before: exactly-zero
@@ -1675,6 +1707,15 @@ class FLOWRRA:
                         # per fleet keeps active count shrinking in step with
                         # the pool instead.
                         self.claimed_goals.add(node.current_goal_id)
+                        # Stamp WHEN each goal was claimed. Needed to measure
+                        # rescue latency -- steps from the failure that orphaned
+                        # an order to the delivery that recovered it. The naive
+                        # baseline reports this because its rescuer is retargeted
+                        # explicitly; FLOWRRA's rescues run through the
+                        # orchestrator and produced no latency figure at all,
+                        # which made the comparison one-sided for no reason
+                        # other than missing instrumentation.
+                        self._goal_claim_step[node.current_goal_id] = self.step_count
                         delivered = node.current_goal_id
                         rvec[H["goal"]] += self.reward_mission_complete
 

@@ -161,7 +161,8 @@ def load_instance(nodes_csv: str, edges_csv: str, scen_csv: str, num_agents: Opt
 def run_flowrra_instance(G, pos_dict, fleet_missions, goal_pool,
                          agent: GNNAgent, max_steps: int,
                          eval_epsilon: float = 0.02,
-                         shared_pool: bool = True) -> Dict[str, Any]:
+                         shared_pool: bool = True,
+                         failure: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Runs ONE instance and returns a flat metrics dict.
 
@@ -197,8 +198,88 @@ def run_flowrra_instance(G, pos_dict, fleet_missions, goal_pool,
     decision_times: List[float] = []
 
     t_start = time.perf_counter()
+    # ---- MATCHED PERMANENT FAILURE ----------------------------------------
+    # FAIRNESS: the baselines were previously the only arm that received the
+    # disturbance -- run_flowrra_instance took no such argument, so --disturb hit
+    # the planners and left FLOWRRA on a clean instance. Any comparison drawn
+    # from that is void.
+    #
+    # Failures are injected here at the SAME step and on the SAME agent indices
+    # the baselines get, through FLOWRRA's own error path so its recovery layer
+    # engages exactly as it does in training. Its own stochastic injection is
+    # disabled for the run so the two arms see identical failures and nothing
+    # else.
+    # Progress-triggered, matching baselines_mapf -- see the long note there.
+    # A shared step index is not a shared point in the mission when one arm runs
+    # 6.5x more steps than the other.
+    failure = failure or {}
+    # Multiple waves, matching baselines_mapf -- see the note there. The second
+    # wave is what can kill a vehicle mid-rescue, which is the case FLOWRRA's
+    # re-dispatch exists for and the naive layer has no answer to.
+    fail_waves = sorted(failure.get("progress_waves", [])
+                        or ([failure["progress"]] if failure.get("progress") is not None else []))
+    fail_step = int(failure.get("step", -1))
+    fail_idx = list(failure.get("agents", []))
+    n_to_fail = int(failure.get("count", len(fail_idx)))
+    _wave_i = 0
+    rescuer_deaths = 0
+    if failure:
+        env.errors_enabled = False
+    n_orphaned = 0
+    orphaned_goal_ids = set()   # the ORDERS stranded, not just the count
+    _orphan_step = {}           # goal id -> step it was orphaned
+    n_stale_at_injection = 0    # failures whose order was already delivered
+
     for step in range(max_steps):
         t0 = time.perf_counter()
+
+        if _wave_i < len(fail_waves):
+            # Deadline fallback -- see the note in baselines_mapf. Without it an
+            # arm that stalls never reaches the later progress thresholds and is
+            # rewarded with fewer failures.
+            _deadline = int(max_steps * (_wave_i + 1) / (len(fail_waves) + 1))
+            # Terminal states, matching baselines_mapf -- delivered OR dead.
+            _prog = ((len(env.claimed_goals) + len(env.stopped_nodes))
+                     / max(1, len(env.goal_pool)))
+            if _prog >= fail_waves[_wave_i] or step >= _deadline:
+                fail_idx = [i for i, nd in enumerate(env.nodes)
+                            if nd.id not in env.immobile_nodes and nd.current_goal_id][:n_to_fail]
+                for i in fail_idx:
+                    if env.nodes[i].id in env._pickup_assignment:
+                        rescuer_deaths += 1
+                fail_step = step
+                _wave_i += 1
+
+        if step == fail_step and fail_idx:
+            for a in fail_idx:
+                if a < len(env.nodes):
+                    node = env.nodes[a]
+                    if node.id in env.immobile_nodes or not node.current_goal_id:
+                        continue
+                    env.stopped_nodes.add(node.id)
+                    env._error_step[node.id] = env.step_count
+                    node.direction = np.zeros(3, dtype=np.float32)
+                    env.total_errors += 1
+                    # Only an order that is STILL OUTSTANDING is orphaned. Core
+                    # already makes this distinction -- it prints "confirmed
+                    # dead; no recoverable order" and opens no pickup when the
+                    # goal was claimed by someone else while the fleet sat
+                    # there.
+                    #
+                    # BOTH sides of the ratio have to agree. A first attempt
+                    # filtered only the numerator's source set and left this
+                    # counter incrementing on every failure, which deflated the
+                    # recovery rate by exactly the number of stale goals --
+                    # measured as one order per instance. An order that was
+                    # already delivered was never orphaned, so it belongs in
+                    # neither the numerator nor the denominator.
+                    if node.current_goal_id not in env.claimed_goals:
+                        n_orphaned += 1
+                        orphaned_goal_ids.add(node.current_goal_id)
+                        _orphan_step[node.current_goal_id] = step
+                    else:
+                        n_stale_at_injection += 1
+
         env.step(episode_step=1, total_episodes=1)
         decision_times.append((time.perf_counter() - t0) * 1000.0)
 
@@ -214,7 +295,7 @@ def run_flowrra_instance(G, pos_dict, fleet_missions, goal_pool,
             if node.id in env.frozen_nodes and node.id not in finish_step:
                 finish_step[node.id] = step + 1
 
-        if len(env.frozen_nodes) == n:
+        if env.is_episode_over():
             break
     runtime_s = time.perf_counter() - t_start
     steps_run = len(integrity_trace)
@@ -222,9 +303,25 @@ def run_flowrra_instance(G, pos_dict, fleet_missions, goal_pool,
     # --- standard MAPF costs -------------------------------------------------
     # Unfinished agents are charged the full step budget. This is the usual
     # convention and it keeps SoC comparable across methods that fail differently.
-    per_agent_cost = [finish_step.get(node.id, max_steps) for node in env.nodes]
+    # SURVIVORS ONLY. The MAPF convention charges an unfinished agent the full
+    # step budget, which is correct for an agent that was alive and failed to
+    # arrive -- that is a routing failure and should cost. It is NOT correct for
+    # a vehicle that was deliberately killed: it did not route badly, it was
+    # destroyed, and charging it the cap conflates the two.
+    #
+    # With 9 deaths and a 780-step cap that penalty is 7,020 before a single
+    # vehicle has moved -- measured at 89-95% of the total, so every sum_of_costs
+    # comparison was reading a ~5% remainder while the number was dominated by a
+    # constant. makespan was worse: a max over agents, so one corpse pinned it at
+    # 780 on an episode that actually finished in 146 steps.
+    #
+    # Excluding the dead makes both quantities mean what they are supposed to:
+    # among the vehicles that were alive to finish, how efficiently did they?
+    _alive = [n for n in env.nodes if n.id not in env.stopped_nodes]
+    per_agent_cost = [finish_step.get(node.id, max_steps) for node in _alive]
     sum_of_costs = int(sum(per_agent_cost))
     makespan = int(max(per_agent_cost)) if per_agent_cost else 0
+    agents_costed = len(per_agent_cost)
     # base_speed 0.5 -> one graph hop costs two timesteps.
     soc_lb = soc_lb_hops / max(CONFIG["warehouse"]["base_speed"], 1e-9)
 
@@ -248,14 +345,127 @@ def run_flowrra_instance(G, pos_dict, fleet_missions, goal_pool,
     total_actions = max(steps_run * n, 1)
     unfinished = [nd for nd in env.nodes if nd.id not in env.frozen_nodes]
 
+    _est = env.get_error_statistics()
+
+    # RECOVERED = the orphaned ORDER was delivered, by whatever route.
+    #
+    # This used to be handovers_completed, which counts pickup TRANSFERS and
+    # undercounts in three ways: a rescuer inheriting two stranded orders counts
+    # once, a transfer whose goal was claimed meanwhile counts as a handover but
+    # recovers nothing, and -- the big one -- in shared-pool mode a dead fleet's
+    # goal returns to the pool and can be delivered by an ordinary retarget with
+    # no handover at all. That order is recovered and the terminal shows it, but
+    # the CSV scored it as lost.
+    #
+    # The baselines have only one route to an orphaned order (goals are fixed per
+    # agent, so the rescue is the only way it gets delivered), so counting
+    # delivery-by-any-route makes the two arms measure the same thing. The
+    # handover count is kept separately, because the split between "recovered by
+    # the handover mechanic" and "recovered by ordinary pool retargeting" is
+    # exactly what says how much the mechanic is contributing.
+    _rec = len(orphaned_goal_ids & set(env.claimed_goals))
+    # Rescue latency, matching what the naive baseline reports: steps from the
+    # failure that orphaned an order to the delivery that recovered it.
+    # Only count a rescue whose delivery came AFTER the failure. A negative
+    # latency means the goal was already claimed when the fleet holding it
+    # died -- i.e. the fleet was carrying a stale goal id for an order somebody
+    # else had already delivered. That is a real condition worth knowing about,
+    # not a rounding artefact, so it is counted separately rather than clamped
+    # away: `stale_orphans` is the number of "orphaned" orders that were never
+    # actually outstanding.
+    _pairs = [(env._goal_claim_step[g], _orphan_step[g])
+              for g in (orphaned_goal_ids & set(env.claimed_goals))
+              if g in getattr(env, "_goal_claim_step", {}) and g in _orphan_step]
+    _lat = [c - o for c, o in _pairs if c > o]
+    _stale = sum(1 for c, o in _pairs if c <= o)
     return {
+        # --- failure recovery (the comparison this harness exists for) ---
+        # TWO DIFFERENT COUNTS, deliberately.
+        #   failures_injected : vehicles killed. Identical across arms by
+        #                       construction, so this is what the harness check
+        #                       should compare.
+        #   orders_orphaned   : failures that actually stranded an OUTSTANDING
+        #                       order, which is the denominator recovery rate is
+        #                       measured against.
+        # They differ only for FLOWRRA, and only because shared-pool mode lets
+        # another fleet claim a goal while the fleet holding it sits dying. The
+        # baselines assign a fixed goal per agent, so the case cannot arise for
+        # them. Reporting one number for both would either break the matched-
+        # failure check or put un-recoverable orders in the denominator.
+        "failures_injected": n_orphaned + n_stale_at_injection,
+        "orders_orphaned": n_orphaned,
+        "orders_recovered": _rec,
+        "recovered_via_handover": _est["handovers_completed"],
+        "rescuer_deaths": rescuer_deaths,
+        "orders_lost": max(0, n_orphaned - _rec),
+        "recovery_rate": (_rec / n_orphaned) if n_orphaned else float("nan"),
+        "retired_recalled": _est["retired_fleets_recalled"],
+        # HOPS, not steps. FLOWRRA spends two simulator steps per hop at
+        # base_speed 0.5 while the baseline moves one edge per timestep, so a raw
+        # step count silently doubled FLOWRRA's apparent rescue time. Converting
+        # here means the CSV column is directly comparable and nothing
+        # downstream has to remember the factor.
+        "mean_recovery_hops": (float(np.mean(_lat)) * 0.5 if _lat else float("nan")),
+        "stale_orphans": _stale + n_stale_at_injection,
+        # Density, measured rather than assumed. agents/nodes treats a
+        # corridor cell and a junction as equivalent and ignores that
+        # traffic concentrates on routes; this is the fraction of
+        # fleet-steps actually spent inside the warning band, which is what
+        # throttles the fleet. Measured 0.33 on a 1,435-node map versus 0.06
+        # on a 6,300-node one at the SAME fleet count.
+        # ACTUAL DISTANCE TRAVELLED, summed over fleets, in cell units.
+        #
+        # sum_of_costs measures TIME (finish step per agent), and converting it
+        # to distance by multiplying by base_speed assumes fleets sustain
+        # nominal speed. They do not: affordance braking floors them as low as
+        # 0.05 cells/step, the final-approach override only lifts the warning-
+        # zone floor to 0.7 of the ramp, and dwelling at a pickup costs steps
+        # with no movement at all. So the converted figure is an UPPER BOUND on
+        # distance, not a measurement of it, and the looser the braking the
+        # looser the bound.
+        #
+        # env already accumulates the real thing per fleet per step
+        # (_fleet_travel, Manhattan distance actually moved). Reporting it makes
+        # the distance comparison a measurement instead of an inference, and it
+        # needs no unit conversion: one cell is one cell in either arm.
+        "distance_travelled": float(sum(env._fleet_travel.values()))
+        if hasattr(env, "_fleet_travel") else float("nan"),
+        # DISTANCE, COUNTED -- not inferred from the clock. soc_hops is
+        # sum_of_costs (finish STEPS) x base_speed, i.e. "how far could it have
+        # gone at nominal speed". FLOWRRA never sustains nominal speed: affordance
+        # braking floors it as low as 0.05, the final-approach override only
+        # lifts it to 0.7 of the ramp, and pickup dwell burns steps with no
+        # movement at all. _fleet_travel sums the actual Manhattan distance moved
+        # each step, so this needs no assumption about what a timestep is worth.
+        "distance_travelled": round(float(sum(env._fleet_travel.values())), 1),
+        # COLLISIONS AS A RATE. The raw count is collision-STEPS, and the arms run
+        # for wildly different durations -- RHCR alone finishes in 22-51 steps,
+        # FLOWRRA runs 380-600, naive runs to the 780 cap. Comparing counts
+        # rewards whichever arm had least opportunity to register one.
+        "collision_rate": round(env.loop.total_collisions / max(steps_run, 1), 5),
+        # Measured cells traversed, and collisions as a RATE. A raw collision
+        # count is a count of deadlocked STEPS, and the arms run for wildly
+        # different lengths -- RHCR finishes in ~22-51 steps, FLOWRRA takes
+        # 380-600, naive runs to the 780 cap. An arm that finishes quickly has
+        # an order of magnitude fewer chances to register anything, so the raw
+        # count flatters it for reasons unrelated to safety.
+        "distance_travelled": _est.get("distance_travelled", float("nan")),
+        "collision_rate": (env.loop.get_statistics()["total_collisions_occurred"]
+                           / max(steps_run, 1)),
+        "brake_duty_cycle": _est.get("brake_duty_cycle", float("nan")),
+        "mean_peer_gap": _est.get("mean_peer_gap", float("nan")),
         # --- standard MAPF ---
         "num_agents": n,
-        "success": int(len(env.frozen_nodes) == n),
-        "completed": len(env.frozen_nodes),
-        "completion_rate": len(env.frozen_nodes) / n,
+        # Orders DELIVERED over orders issued, counted the same way as the
+        # baselines. claimed_goals, not frozen_nodes: a recalled fleet leaves
+        # frozen_nodes although its delivery already happened, and a dead fleet
+        # must never be scored as finished.
+        "success": int(len(env.claimed_goals) == len(env.goal_pool)),
+        "completed": len(env.claimed_goals),
+        "completion_rate": len(env.claimed_goals) / max(1, len(env.goal_pool)),
         "makespan": makespan,
         "sum_of_costs": sum_of_costs,
+        "agents_costed": agents_costed,   # survivors the cost is averaged over
         "soc_lower_bound": round(soc_lb, 1),
         "suboptimality": round(sum_of_costs / soc_lb, 3) if soc_lb > 0 else float("nan"),
         "collisions": env.loop.get_statistics()["total_collisions_occurred"],
@@ -292,7 +502,7 @@ def build_agent(G, pos_dict, fleet_missions, goal_pool, checkpoint: str) -> GNNA
     """
     Builds the agent once and reuses it for every instance.
 
-    input_dim is map-INDEPENDENT: 54 state dims + 231 affordance dims = 285,
+    input_dim is map-INDEPENDENT: 60 state dims + 231 affordance dims = 291,
     regardless of warehouse size or fleet count (the GAT handles variable N via
     the adjacency matrix). That is what makes cross-map evaluation of a single
     checkpoint possible at all.
@@ -310,6 +520,12 @@ def build_agent(G, pos_dict, fleet_missions, goal_pool, checkpoint: str) -> GNNA
         hidden_dim=CONFIG["gnn"]["hidden_dim"],
         num_layers=CONFIG["gnn"]["num_layers"],
         n_heads=CONFIG["gnn"]["num_heads"],
+        # The checkpoint carries one decoder per reward head; building the agent
+        # without declaring them gives K=1 and load_state_dict fails on
+        # "Unexpected key(s) action_decoders.1..4". Sourced from CONFIG so this
+        # cannot drift from what the orchestrator emits.
+        reward_heads=CONFIG["reward_decomposition"]["heads"],
+        head_weights=CONFIG["reward_decomposition"]["weights"],
         dropout=CONFIG["gnn"]["dropout"],
         stability_coef=CONFIG["gnn"]["stability_coef"],
     )

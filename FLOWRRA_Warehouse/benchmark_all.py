@@ -56,16 +56,27 @@ def hungarian_assignment(G, pos_dict, fleet_missions, goal_pool) -> Dict[str, st
 
 
 def normalise(row: Dict[str, Any], algorithm: str) -> Dict[str, Any]:
+    """
+    DEPRECATED CONVERSION, kept only so old CSVs still parse.
+
+    makespan_hops / soc_hops multiplied a TIME by base_speed to approximate a
+    distance. Two things make that unsound: FLOWRRA never sustains nominal speed
+    (affordance braking floors it at 0.05, dwelling at a pickup moves it not at
+    all), and the underlying sum_of_costs charged every dead vehicle the full
+    step budget. distance_travelled now counts cells actually traversed on both
+    arms, which needs no conversion and no assumption about what a timestep is
+    worth. Prefer it.
+    """
     """Adds hop-normalised costs. FLOWRRA counts simulator steps; planners count
     hops. Without this the comparison is off by 1/base_speed."""
-    scale = SPEED if algorithm == "FLOWRRA" else 1.0
+    scale = SPEED if algorithm.startswith("FLOWRRA") else 1.0
     row["makespan_hops"] = round(row.get("makespan", 0) * scale, 1)
     row["soc_hops"] = round(row.get("sum_of_costs", 0) * scale, 1)
     return row
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(allow_abbrev=False)
     ap.add_argument("--maps-dir", default="all_maps")
     ap.add_argument("--scens-dir", default="all_scens")
     ap.add_argument("--checkpoint", default="checkpoints/flowrra_warehouse_gnn.pth")
@@ -77,10 +88,27 @@ def main():
                     help="RHCR-* are rolling-horizon reimplementations of the warehouse "
                          "SOTA mechanism (Li et al., AAAI 2021), not ports of the tuned "
                          "C++ originals -- label them as such in any write-up.")
+    ap.add_argument("--steps-per-hop", type=int, default=int(round(1.0 / SPEED)),
+                    help="simulator steps a BASELINE spends per graph edge. Default "
+                         "matches FLOWRRA's base_speed so both arms share one clock "
+                         "and raw step counts compare directly, with no conversion. "
+                         "Set 1 for the textbook MAPF convention (one edge per "
+                         "timestep), which makes the planners twice as fast as "
+                         "FLOWRRA by construction.")
     ap.add_argument("--rhcr-window", type=int, default=20)
     ap.add_argument("--rhcr-replan-every", type=int, default=5)
     ap.add_argument("--max-steps", type=int, default=CONFIG["training"]["max_steps_per_episode"])
-    ap.add_argument("--epsilon", type=float, default=0.02)
+    ap.add_argument("--epsilon", default="0.02",
+                    help="FLOWRRA's evaluation epsilon. Comma-separated values run "
+                         "FLOWRRA once PER VALUE as separate rows (FLOWRRA(eps=0.10) "
+                         "etc), which is more informative than drawing one at random "
+                         "per instance: a random draw averages the effect of epsilon "
+                         "into the noise, and the effect is the question. FLOWRRA "
+                         "scored 0.25 success on the easy run -- if that is the policy "
+                         "locking deterministically, epsilon should fix it, and a "
+                         "sweep shows exactly where. Not 0.0: at exactly zero the "
+                         "policy can deadlock with no stochastic escape, which the "
+                         "replanning baselines get for free.")
     ap.add_argument("--fixed-assignment", action="store_true",
                     help="each agent goes to ITS OWN scenario goal (classical MAPF, "
                          "comparable to published numbers). Default is shared-pool: "
@@ -93,10 +121,43 @@ def main():
     ap.add_argument("--disturb-step", type=int, default=60)
     ap.add_argument("--disturb-agents", type=int, default=3)
     ap.add_argument("--disturb-duration", type=int, default=20)
+    ap.add_argument("--fail", action="store_true",
+                    help="PERMANENT failure: the vehicle dies and the order it was "
+                         "carrying is stranded at its cell. Distinct from --disturb, "
+                         "which is a temporary stall the vehicle recovers from. This "
+                         "is the setting the recovery claim is about.")
+    ap.add_argument("--fail-waves", default="",
+                    help="comma-separated progress fractions, e.g. '0.35,0.6'. Each "
+                         "fires a wave of --fail-agents failures. TWO OR MORE WAVES "
+                         "ARE REQUIRED to test rescuer death: at a single burst nobody "
+                         "is rescuing yet, so raising --fail-agents gives simultaneous "
+                         "deaths, never a death mid-rescue. Overrides --fail-progress.")
+    ap.add_argument("--fail-progress", type=float, default=0.4,
+                    help="fire the failure once this FRACTION OF ORDERS has been "
+                         "delivered. Self-normalising across arms with very different "
+                         "clocks -- a shared step index landed 17%% into FLOWRRA's run "
+                         "and 57%% into RHCR's, so they saw 11 and 7 failures on the "
+                         "same instances. Raise toward 0.7 to make rescuers scarce, "
+                         "which is where recall and re-dispatch are supposed to matter.")
+    ap.add_argument("--fail-hop", type=int, default=15,
+                    help="inject the failure after this many HOPS of travel, not "
+                         "simulator steps. FLOWRRA moves at base_speed 0.5 so it "
+                         "spends 1/base_speed steps per hop, while the planners move "
+                         "one hop per step. A shared step index therefore lands "
+                         "mid-mission for one arm and after the episode has finished "
+                         "for the other -- measured: at step 40, FLOWRRA saw 2 "
+                         "orphaned orders and RHCR saw 0, because RHCR was done by "
+                         "step 8. Converted per arm, exactly as costs already are.")
+    ap.add_argument("--fail-agents", type=int, default=3)
     args = ap.parse_args()
 
     counts = [int(a) for a in args.agents.split(",") if a.strip()]
+    eps_list = [float(e) for e in str(args.epsilon).split(",") if e.strip()]
     methods = [m.strip() for m in args.methods.split(",") if m.strip()]
+    # One FLOWRRA arm per epsilon value.
+    if "FLOWRRA" in methods and len(eps_list) > 1:
+        i = methods.index("FLOWRRA")
+        methods = (methods[:i] + [f"FLOWRRA@{e}" for e in eps_list] + methods[i+1:])
     seed_f = {int(s) for s in args.seeds.split(",") if s.strip()}
     map_f = {m.strip() for m in args.maps.split(",") if m.strip()}
 
@@ -117,7 +178,7 @@ def main():
           + (" [DISTURBED]" if args.disturb else " [clean]"))
 
     agent = None
-    if "FLOWRRA" in methods:
+    if any(m == "FLOWRRA" or m.startswith("FLOWRRA@") for m in methods):
         G0, p0, m0, pool0 = load_instance(instances[0]["nodes_csv"],
                                           instances[0]["edges_csv"],
                                           instances[0]["scen_csv"], counts[0])
@@ -153,24 +214,55 @@ def main():
                                "agents": list(range(min(args.disturb_agents, k))),
                                "duration": args.disturb_duration}
 
+            # IDENTICAL failures for every arm: same step, same agent indices.
+            # Without this the arms face different instances and the comparison
+            # measures which one got luckier.
+            fail_spec = None
+            if args.fail:
+                waves = [float(v) for v in args.fail_waves.split(",") if v.strip()] \
+                        or [args.fail_progress]
+                fail_spec = {"progress_waves": waves,
+                             "count": min(args.fail_agents, k),
+                             "agents": []}
+
             for method in methods:
+                # WHICH ARM IS TALKING. Every arm writes [Loop]/[Core] lines to
+                # the same console, and fleet IDs are not comparable between
+                # them: FLOWRRA takes its IDs from the scenario file (1..n) while
+                # the baseline runner uses positional indices (0..n-1). So
+                # "Fleet 5" from a baseline is a different vehicle from
+                # "Fleet 5" in FLOWRRA's log, and with no arm marker the two
+                # streams read as one episode. Without this line, a baseline
+                # collision appears to follow FLOWRRA's completion message.
+                print(f"\n===== {method} | {inst['map']} seed{inst['seed']} "
+                      f"k={k} =====", flush=True)
                 try:
-                    if method == "FLOWRRA":
+                    if method == "FLOWRRA" or method.startswith("FLOWRRA@"):
+                        _eps = (float(method.split("@")[1]) if "@" in method
+                                else eps_list[0])
                         # FLOWRRA has no replan step; a stall is just a fleet that
                         # did not move, which its policy already handles inline.
                         r = run_flowrra_instance(G, pos_dict, missions, pool, agent,
-                                                 args.max_steps, args.epsilon,
-                                                 shared_pool=not args.fixed_assignment)
-                        r["algorithm"] = "FLOWRRA"
+                                                 args.max_steps, _eps,
+                                                 shared_pool=not args.fixed_assignment,
+                                                 failure=fail_spec)
+                        r["algorithm"] = (f"FLOWRRA(eps={_eps:.2f})"
+                                          if len(eps_list) > 1 else "FLOWRRA")
+                        r["eval_epsilon"] = _eps
                         r["plan_time_s"] = 0.0
                         r["replan_s"] = 0.0
                     elif method.startswith("RHCR-"):
                         r = run_rolling_horizon_instance(
-                            G, pos_dict, missions, pool, method.split("-", 1)[1],
+                            G, pos_dict, missions, pool, method.split("-", 1)[1].replace("+naive", ""),
                             args.max_steps, assignment,
                             window=args.rhcr_window,
                             replan_every=args.rhcr_replan_every,
-                            disturbance=disturbance)
+                            steps_per_hop=args.steps_per_hop,
+                            disturbance=disturbance,
+                            failure=(dict(fail_spec,
+                                          recovery=("naive" if method.endswith("+naive")
+                                                    else "none"))
+                                     if fail_spec else None))
                     else:
                         r = run_baseline_instance(G, pos_dict, missions, pool, method,
                                                   args.max_steps, assignment, disturbance)
@@ -180,6 +272,7 @@ def main():
 
                 r = normalise(r, method)
                 r.update(map=inst["map"], seed=inst["seed"], requested_agents=k,
+                         map_nodes=G.number_of_nodes(),
                          disturbed=int(args.disturb),
                      protocol="fixed" if args.fixed_assignment else "shared_pool")
                 rows.append(r)
@@ -194,10 +287,32 @@ def main():
     df.to_csv(args.out, index=False)
     print(f"\n[Bench] Wrote {len(df)} rows -> {args.out}\n")
 
-    cols = ["success", "completion_rate", "makespan_hops", "soc_hops", "collisions",
+    cols = ["success", "completion_rate", "distance_travelled", "collision_rate",
+            "orders_orphaned", "orders_recovered",
+            "rescuer_deaths",
+            "orders_lost", "recovery_rate", "mean_recovery_hops", "makespan_hops", "soc_hops", "collisions",
             "mean_integrity", "proximity_margin", "plan_time_s", "replan_s",
             "decision_ms_per_step", "mean_time_to_recoherence", "blast_radius",
             "replan_count"]
+    # OCCUPANCY and TIER MIX. The collision result is a claim about whether
+    # spatial escape has room to work, so the summary has to show the two
+    # quantities that decide it. Measured at k=200 on the 120k-node map: 0.17%
+    # occupancy, Tier 1 fired 3 times in a whole episode, Tiers 2 and 3 never.
+    # Zero collisions there is a statement about an empty warehouse, not about
+    # the policy -- and without these columns the table cannot tell you that.
+    if "num_agents" in df.columns and "map_nodes" in df.columns:
+        df["occupancy_pct"] = (df.num_agents / df.map_nodes * 100).round(3)
+    tiers = [c for c in ("tier1_spatial", "tier2_temporal", "tier3_yield")
+             if c in df.columns]
+    if tiers:
+        tot = df[tiers].sum(axis=1)
+        # Share of interventions resolved by SPATIAL escape. This is the number
+        # the density question turns on: Tier 1 needs a free adjacent cell, so
+        # as occupancy rises it should fall and Tier 2 should pick up the slack.
+        df["tier1_share"] = (df.tier1_spatial / tot.replace(0, float("nan"))).round(3)
+        df["tier_total"] = tot
+        cols[1:1] = ["occupancy_pct"] + tiers + ["tier1_share", "tier_total"]
+
     have = [c for c in cols if c in df.columns]
     print("=" * 78)
     print(("COMPARISON [" + ("FIXED assignment" if args.fixed_assignment

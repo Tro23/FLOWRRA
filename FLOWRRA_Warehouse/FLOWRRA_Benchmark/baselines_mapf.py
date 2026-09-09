@@ -479,7 +479,8 @@ def run_rolling_horizon_instance(G, pos_dict, fleet_missions, goal_pool, method:
                                  max_steps: int, assignment: Dict[str, str],
                                  window: int = 20, replan_every: int = 5,
                                  disturbance: Optional[Dict[str, Any]] = None,
-                                 failure: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                                 failure: Optional[Dict[str, Any]] = None,
+                                 steps_per_hop: int = 1) -> Dict[str, Any]:
     """
     RHCR-style execution: plan collision-free for a bounded WINDOW, execute
     `replan_every` timesteps, replan from wherever the agents actually are,
@@ -591,6 +592,20 @@ def run_rolling_horizon_instance(G, pos_dict, fleet_missions, goal_pool, method:
             _hcache[goal] = bfs_distances(G, goal)
         return _hcache[goal]
 
+    # DISTANCE, COUNTED, so both arms report the same physical quantity. Each
+    # executed move here traverses exactly one edge, so counting moves IS the
+    # hop count -- no conversion, no assumption about what a timestep is worth.
+    distance_travelled = 0
+
+    # TRANSFER DWELL. FLOWRRA charges pickup_dwell_steps for the physical
+    # handover; this arm previously teleported the load, which is not a fairer
+    # baseline but an unmodelled one. Matched on DISTANCE, not tick count:
+    # FLOWRRA's 4 steps at base_speed 0.5 forgo 2 hops, so this arm waits 2
+    # timesteps to forgo the same 2 hops. Matching tick-for-tick would cost it
+    # 4 hops and quietly charge the baseline double.
+    transfer_dwell_until = {}
+    TRANSFER_DWELL = 2
+
     cur = list(starts)
     finish_step = {}
     integrity_trace, integrity_strict, deadlock_sizes, step_ms = [], [], [], []
@@ -670,9 +685,25 @@ def run_rolling_horizon_instance(G, pos_dict, fleet_missions, goal_pool, method:
                 finish_step.pop(best, None)       # back in service
                 paths = None
 
-        # leg 1 complete -> switch the rescuer to the delivery destination
+        # leg 1 complete -> switch the rescuer to the delivery destination.
+        #
+        # `r not in dead` matters. Killing a vehicle PINS it by setting
+        # goals[a] = cur[a], which makes `cur[r] == goals[r]` true -- the same
+        # condition this loop uses to mean "arrived at the pickup". A rescuer
+        # killed mid-rescue was therefore read as having arrived, had its goal
+        # switched to the delivery destination, and was un-pinned as a side
+        # effect. It then sat motionless with cur != goals for the rest of the
+        # episode, outside the collision exemption, logging a fresh fatal
+        # collision every step against the very vehicle it was sent to rescue.
         for r, dest in list(leg2.items()):
+            if r in dead:
+                continue
             if cur[r] == goals[r] and goals[r] != dest:
+                if transfer_dwell_until.get(r, -1) < 0:
+                    transfer_dwell_until[r] = t + TRANSFER_DWELL
+                    continue          # arrived at the pickup: stand still
+                if t < transfer_dwell_until[r]:
+                    continue          # still transferring
                 goals[r] = dest
                 finish_step.pop(r, None)
                 paths = None
@@ -689,18 +720,54 @@ def run_rolling_horizon_instance(G, pos_dict, fleet_missions, goal_pool, method:
             replans += 1
             path_t = 0
 
-        nxt = []
-        for i in range(n):
-            if i in dead or t < stalled_until.get(i, -1) or cur[i] == goals[i]:
-                nxt.append(cur[i])                     # dead, stalled, or parked
-            else:
-                p = paths[i]
-                nxt.append(p[min(path_t + 1, len(p) - 1)])
-        cur = nxt
-        path_t += 1
+        # MATCHED EXECUTION CLOCK.
+        #
+        # Standard MAPF is discrete: unit-length edges, one vertex move per
+        # timestep. These planners follow that convention. FLOWRRA does not --
+        # it moves at base_speed 0.5, so it spends TWO simulator steps per hop.
+        #
+        # Comparing raw step counts across that gap is meaningless, and
+        # converting afterwards (steps x base_speed) is worse: sum_of_costs
+        # measures TIME, so the conversion produces "hops that could have been
+        # covered at nominal speed", which is an upper bound on distance rather
+        # than a measurement of it -- and a loose one for FLOWRRA, whose
+        # affordance braking means it often covers far less.
+        #
+        # Equalising the clock at execution instead leaves BOTH algorithms
+        # untouched: the planner still plans in unit hops and FLOWRRA still runs
+        # its own policy. Only the rate at which a planned hop is consumed
+        # changes, so both arms take steps_per_hop simulator steps per graph
+        # edge and raw step counts become directly comparable with no conversion
+        # anywhere.
+        if t % steps_per_hop == 0:
+            nxt = []
+            for i in range(n):
+                if (i in dead or t < stalled_until.get(i, -1)
+                        or cur[i] == goals[i]
+                        or t < transfer_dwell_until.get(i, -1)):
+                    nxt.append(cur[i])   # dead, stalled, parked, or transferring
+                else:
+                    p = paths[i]
+                    nxt.append(p[min(path_t + 1, len(p) - 1)])
+            distance_travelled += sum(1 for a, b in zip(cur, nxt) if a != b)
+            cur = nxt
+            path_t += 1
 
         nodes = [_P(i, coord(v)) for i, v in enumerate(cur)]
-        frozen = {str(i) for i in range(n) if cur[i] == goals[i]}
+        # EXEMPT EVERY VEHICLE THAT CANNOT MOVE, not just the ones parked on
+        # their goal. `cur[i] == goals[i]` alone misses two cases and both occur:
+        #
+        #   * a DEAD vehicle is pinned by setting goals[a] = cur[a], so it is
+        #     covered -- but only until something else changes its goal;
+        #   * a dead RESCUER still holds goals[r] = the pickup cell it was
+        #     travelling to and will now never reach, so cur != goals forever.
+        #
+        # The second case leaves two motionless vehicles a cell apart being
+        # re-counted as a fresh fatal collision on every step for the rest of the
+        # episode -- observed as 140+ logged collisions between one dead fleet
+        # and one retired fleet across 700 steps. total_collisions increments per
+        # deadlocked STEP, so a single unresolvable pair can dominate the metric.
+        frozen = {str(i) for i in range(n) if cur[i] == goals[i] or i in dead}
         integ = loop.check_integrity(nodes, t, frozen)
         integrity_trace.append(float(integ))
         integrity_strict.append(0.0 if loop.deadlocked_nodes else 1.0)
@@ -722,7 +789,11 @@ def run_rolling_horizon_instance(G, pos_dict, fleet_missions, goal_pool, method:
         if len(finish_step) + len(dead) == n and not leg2:
             break
 
-    per_agent = [finish_step.get(i, max_steps) for i in range(n)]
+    # SURVIVORS ONLY -- see the matching note in benchmark_flowrra. A killed
+    # vehicle is charged the full cap under the MAPF convention, and with 9
+    # deaths that penalty alone was 89-95% of sum_of_costs, so the metric was
+    # measuring how many vehicles died rather than how well the rest routed.
+    per_agent = [finish_step.get(i, max_steps) for i in range(n) if i not in dead]
     runs, c = [], 0
     for v in integrity_strict:
         if v < 1.0:
@@ -738,17 +809,32 @@ def run_rolling_horizon_instance(G, pos_dict, fleet_missions, goal_pool, method:
         # failure response and "RHCR-PIBT+naive" are different systems and must
         # not be averaged together in the summary table.
         "algorithm": f"RHCR-{method}" + ("+naive" if recovery_mode == "naive" else ""),
+        "distance_travelled": distance_travelled,
+        # Collisions as a RATE. The raw count is a count of deadlocked STEPS,
+        # and the arms run for wildly different lengths -- RHCR finishes in
+        # ~22-51 steps where naive runs to the 780 cap -- so a short run has an
+        # order of magnitude fewer chances to register anything.
+        "collision_rate": loop.get_statistics()["total_collisions_occurred"] / max(t + 1, 1),
         "failures_injected": n_fail,
         "orders_orphaned": n_fail,
         "orders_recovered": orders_recovered,
         "rescuer_deaths": rescuer_deaths,
         "orders_lost": n_fail - orders_recovered,
         "recovery_rate": (orders_recovered / n_fail) if n_fail else float("nan"),
-        "mean_recovery_steps": (round(float(np.mean(recover_latency)), 1)
-                                if recover_latency else float("nan")),
+        # HOPS. One edge per timestep here, so steps and hops are the same
+        # number -- named to match FLOWRRA's converted column so the two are
+        # never compared in different units again.
+        "mean_recovery_hops": (round(float(np.mean(recover_latency)), 1)
+                               if recover_latency else float("nan")),
         "num_agents": n,
         "success": int(len(finish_step) + orders_recovered == n),
-        "completed": len(finish_step),
+        # Orders DELIVERED, matching completion_rate. An order carried to its
+        # destination by a rescuer is delivered, and the rate was updated to say
+        # so when recovery was added -- but this counter was not, so it read the
+        # raw arrival count and undercounted by exactly orders_recovered. Two
+        # columns describing the same thing with different definitions is a trap
+        # left in the CSV for whoever reads it next.
+        "completed": len(finish_step) + orders_recovered,
         # Orders DELIVERED over orders issued. A dead vehicle parked at its own
         # cell must not count as "finished" -- that would score a lost order as a
         # success and erase the entire effect being measured.
@@ -756,6 +842,7 @@ def run_rolling_horizon_instance(G, pos_dict, fleet_missions, goal_pool, method:
         "agents_planned": n,
         "makespan": int(max(per_agent)) if per_agent else 0,
         "sum_of_costs": int(sum(per_agent)),
+        "agents_costed": len(per_agent),
         "collisions": loop.get_statistics()["total_collisions_occurred"],
         "steps_run": len(integrity_trace),
         "plan_time_s": round(plan_s, 4),

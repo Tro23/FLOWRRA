@@ -56,6 +56,17 @@ def hungarian_assignment(G, pos_dict, fleet_missions, goal_pool) -> Dict[str, st
 
 
 def normalise(row: Dict[str, Any], algorithm: str) -> Dict[str, Any]:
+    """
+    DEPRECATED CONVERSION, kept only so old CSVs still parse.
+
+    makespan_hops / soc_hops multiplied a TIME by base_speed to approximate a
+    distance. Two things make that unsound: FLOWRRA never sustains nominal speed
+    (affordance braking floors it at 0.05, dwelling at a pickup moves it not at
+    all), and the underlying sum_of_costs charged every dead vehicle the full
+    step budget. distance_travelled now counts cells actually traversed on both
+    arms, which needs no conversion and no assumption about what a timestep is
+    worth. Prefer it.
+    """
     """Adds hop-normalised costs. FLOWRRA counts simulator steps; planners count
     hops. Without this the comparison is off by 1/base_speed."""
     scale = SPEED if algorithm.startswith("FLOWRRA") else 1.0
@@ -77,6 +88,13 @@ def main():
                     help="RHCR-* are rolling-horizon reimplementations of the warehouse "
                          "SOTA mechanism (Li et al., AAAI 2021), not ports of the tuned "
                          "C++ originals -- label them as such in any write-up.")
+    ap.add_argument("--steps-per-hop", type=int, default=int(round(1.0 / SPEED)),
+                    help="simulator steps a BASELINE spends per graph edge. Default "
+                         "matches FLOWRRA's base_speed so both arms share one clock "
+                         "and raw step counts compare directly, with no conversion. "
+                         "Set 1 for the textbook MAPF convention (one edge per "
+                         "timestep), which makes the planners twice as fast as "
+                         "FLOWRRA by construction.")
     ap.add_argument("--rhcr-window", type=int, default=20)
     ap.add_argument("--rhcr-replan-every", type=int, default=5)
     ap.add_argument("--max-steps", type=int, default=CONFIG["training"]["max_steps_per_episode"])
@@ -208,6 +226,16 @@ def main():
                              "agents": []}
 
             for method in methods:
+                # WHICH ARM IS TALKING. Every arm writes [Loop]/[Core] lines to
+                # the same console, and fleet IDs are not comparable between
+                # them: FLOWRRA takes its IDs from the scenario file (1..n) while
+                # the baseline runner uses positional indices (0..n-1). So
+                # "Fleet 5" from a baseline is a different vehicle from
+                # "Fleet 5" in FLOWRRA's log, and with no arm marker the two
+                # streams read as one episode. Without this line, a baseline
+                # collision appears to follow FLOWRRA's completion message.
+                print(f"\n===== {method} | {inst['map']} seed{inst['seed']} "
+                      f"k={k} =====", flush=True)
                 try:
                     if method == "FLOWRRA" or method.startswith("FLOWRRA@"):
                         _eps = (float(method.split("@")[1]) if "@" in method
@@ -229,6 +257,7 @@ def main():
                             args.max_steps, assignment,
                             window=args.rhcr_window,
                             replan_every=args.rhcr_replan_every,
+                            steps_per_hop=args.steps_per_hop,
                             disturbance=disturbance,
                             failure=(dict(fail_spec,
                                           recovery=("naive" if method.endswith("+naive")
@@ -243,6 +272,7 @@ def main():
 
                 r = normalise(r, method)
                 r.update(map=inst["map"], seed=inst["seed"], requested_agents=k,
+                         map_nodes=G.number_of_nodes(),
                          disturbed=int(args.disturb),
                      protocol="fixed" if args.fixed_assignment else "shared_pool")
                 rows.append(r)
@@ -257,12 +287,32 @@ def main():
     df.to_csv(args.out, index=False)
     print(f"\n[Bench] Wrote {len(df)} rows -> {args.out}\n")
 
-    cols = ["success", "completion_rate", "orders_orphaned", "orders_recovered",
+    cols = ["success", "completion_rate", "distance_travelled", "collision_rate",
+            "orders_orphaned", "orders_recovered",
             "rescuer_deaths",
-            "orders_lost", "recovery_rate", "mean_recovery_steps", "makespan_hops", "soc_hops", "collisions",
+            "orders_lost", "recovery_rate", "mean_recovery_hops", "makespan_hops", "soc_hops", "collisions",
             "mean_integrity", "proximity_margin", "plan_time_s", "replan_s",
             "decision_ms_per_step", "mean_time_to_recoherence", "blast_radius",
             "replan_count"]
+    # OCCUPANCY and TIER MIX. The collision result is a claim about whether
+    # spatial escape has room to work, so the summary has to show the two
+    # quantities that decide it. Measured at k=200 on the 120k-node map: 0.17%
+    # occupancy, Tier 1 fired 3 times in a whole episode, Tiers 2 and 3 never.
+    # Zero collisions there is a statement about an empty warehouse, not about
+    # the policy -- and without these columns the table cannot tell you that.
+    if "num_agents" in df.columns and "map_nodes" in df.columns:
+        df["occupancy_pct"] = (df.num_agents / df.map_nodes * 100).round(3)
+    tiers = [c for c in ("tier1_spatial", "tier2_temporal", "tier3_yield")
+             if c in df.columns]
+    if tiers:
+        tot = df[tiers].sum(axis=1)
+        # Share of interventions resolved by SPATIAL escape. This is the number
+        # the density question turns on: Tier 1 needs a free adjacent cell, so
+        # as occupancy rises it should fall and Tier 2 should pick up the slack.
+        df["tier1_share"] = (df.tier1_spatial / tot.replace(0, float("nan"))).round(3)
+        df["tier_total"] = tot
+        cols[1:1] = ["occupancy_pct"] + tiers + ["tier1_share", "tier_total"]
+
     have = [c for c in cols if c in df.columns]
     print("=" * 78)
     print(("COMPARISON [" + ("FIXED assignment" if args.fixed_assignment

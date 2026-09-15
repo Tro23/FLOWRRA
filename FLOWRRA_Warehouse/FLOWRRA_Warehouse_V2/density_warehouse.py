@@ -78,6 +78,7 @@ class WarehouseDensityField:
         project_stationary: bool = True,
         projection_mode: str = "intended",
         kernel_metric: str = "graph",
+        output_mode: str = "affordance",
         grid_pos_dict: Optional[Dict[Tuple[int, int, int], str]] = None,
         graph: Any = None,
         # --- accepted for drop-in compatibility with the Poisson constructor ---
@@ -133,6 +134,17 @@ class WarehouseDensityField:
         # instead of the flattened 231-dim affordance. Set via get_local_volume(),
         # never left on -- the flat path is what the current encoder expects.
         self._return_volume = False
+
+        # "affordance" -> 231 dims, mask/(1+R): what the flat encoder expects.
+        # "channels"   -> 462 dims, mask and R packed separately, for the gated
+        #                 convolution. The multiply is what makes 0 mean BOTH
+        #                 "no track here" and "fully contested", and no
+        #                 convolution can recover that distinction afterwards.
+        if output_mode not in ("affordance", "channels"):
+            raise ValueError(
+                f"output_mode must be 'affordance' or 'channels', "
+                f"got {output_mode!r}")
+        self.output_mode = output_mode
 
         # Per-step drivers for the cost curve. Without these, a flat ms/step is
         # ambiguous: on the 2026-09-13 run active fleets fell 196 -> 137 (about
@@ -194,6 +206,10 @@ class WarehouseDensityField:
         )
         self._diamond_mask = self._center_manhattan <= L
         self.output_dim = int(np.count_nonzero(self._diamond_mask))
+        # Consumers size input_dim from output_dim, so it must reflect the mode.
+        self.diamond_cells = self.output_dim
+        if output_mode == "channels":
+            self.output_dim *= 2
 
         # Index of the centre cell WITHIN the flattened diamond output. Callers
         # that probe a single cell (recovery's Tier-1 check, braking) index
@@ -202,6 +218,19 @@ class WarehouseDensityField:
         flat_center = np.zeros(self.grid_shape, dtype=bool)
         flat_center[L, L, L] = True
         self.center_index = int(np.argmax(flat_center[self._diamond_mask]))
+
+        # Flat indices, within the 231-vector, of the six cells one step away
+        # along each axis. Used by action_entropy() to read a fleet's immediate
+        # options without recomputing the field. Precomputed because the
+        # flattening is boolean-mask indexing in C order, so the flat position of
+        # a cube cell is the count of live cells before it -- constant for a
+        # given radius, and not worth deriving per call.
+        _flat_pos = (np.cumsum(self._diamond_mask.ravel()) - 1).reshape(self.grid_shape)
+        self._neighbour_flat_idx: List[int] = []
+        for _d in ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)):
+            _i = (L + _d[0], L + _d[1], L + _d[2])
+            if self._diamond_mask[_i]:
+                self._neighbour_flat_idx.append(int(_flat_pos[_i]))
 
         # Linear falloff kernel, indexed by Manhattan distance. Replaces the
         # Poisson survival curve: same monotone-decreasing shape, one legible
@@ -564,6 +593,65 @@ class WarehouseDensityField:
     # ----------------------------------------------------------------------
     # Spatial-temporal memory
     # ----------------------------------------------------------------------
+    def action_entropy(self, affordance: np.ndarray) -> float:
+        """
+        How DECISIVE this fleet's immediate options are, in [0, 1].
+
+        Normalise the affordance of the six neighbouring cells into a
+        distribution and take Shannon entropy over it, scaled by log(n) so the
+        result is comparable across cells with different numbers of live
+        neighbours.
+
+            1.0  every option looks equally good -- no reason to prefer any
+            0.0  one option dominates -- the choice is made for you
+            0.0  nothing is reachable at all (an isolated or walled-in cell)
+
+        This is the `S` of `F = E - T*S`, computed rather than posited, and it is
+        the LOCAL half: the global field entropy needs a partition function over
+        a shared field, which does not exist yet.
+
+        WHY OVER AFFORDANCE AND NOT OVER REPULSION. Entropy over R alone is
+        undefined when nothing is contested, which at 0.24% occupancy is almost
+        always. Affordance folds the reachability mask in, so a walled-in cell
+        and a jammed cell both read low -- which is the correct reading for a
+        DECISIVENESS measure, even though it would be the wrong one for a
+        congestion measure. Do not reuse this as a congestion signal.
+
+        Note the consequence: in open space every reachable neighbour has
+        affordance 1.0, so entropy is exactly 1.0 and the feature is a constant.
+        It only becomes informative under contention -- which is precisely where
+        it is meant to be read.
+        """
+        if not self._neighbour_flat_idx:
+            return 0.0
+        vals = affordance[self._neighbour_flat_idx]
+        total = float(vals.sum())
+        if total <= 1e-9:
+            return 0.0
+        p = vals / total
+        p = p[p > 1e-12]
+        if p.size <= 1:
+            return 0.0
+        h = float(-(p * np.log(p)).sum())
+
+        # Normalised by log(LIVE neighbours), not log(6).
+        #
+        # Dividing by log(6) would make the feature mostly a measure of DEGREE:
+        # a mid-aisle cell has only 2 live neighbours, so its entropy could never
+        # exceed log(2)/log(6) = 0.387 however undecided it was, while a junction
+        # with 4 could reach 0.774. The policy would read "corridor vs junction",
+        # which it already gets from the mask, instead of "decisive vs undecided",
+        # which is the point.
+        #
+        # Against log(n_live) a corridor with two equally good options and a
+        # junction with four both read 1.0, and both fall the same way as
+        # contention concentrates. Degree-independent by construction.
+        # Clipped: the quantity is mathematically bounded by [0, 1], but
+        # float32 affordances promoted to float64 can overshoot by ~3e-9, which
+        # is enough to fail a bounds assertion and to hand the encoder a value
+        # outside the range every other feature respects.
+        return float(min(1.0, max(0.0, h / np.log(p.size))))
+
     def get_local_volume(self, *args, **kwargs) -> np.ndarray:
         """
         The local field as a 2-channel VOLUME, shape (2, S, S, S) with S = 2L+1.
@@ -654,6 +742,8 @@ class WarehouseDensityField:
         own_id: Optional[str] = None,
         stopped_node_ids: Optional[Set[str]] = None,
         stopped_obstacle_severity: float = 1.4,
+        static_obstacles: Optional[Set[Tuple[int, int, int]]] = None,
+        static_obstacle_severity: float = 3.0,
     ) -> np.ndarray:
         """
         Builds the local affordance vector for one fleet.
@@ -783,6 +873,24 @@ class WarehouseDensityField:
                 iz = coords[2] - _cz + L
                 if 0 <= ix < S and 0 <= iy < S and 0 <= iz < S:
                     repulsion[ix, iy, iz] += w * severity
+
+        # --- 0. Unregistered obstacles -------------------------------------
+        # Humans, debris, a dropped pallet. Stamped HARDER than any fleet: a
+        # stopped fleet is 1.4 and finite so a rescuer can push through it,
+        # whereas nothing should ever want to be where a person is.
+        #
+        # NO near-goal discount, deliberately. That mechanism exists so an
+        # obstacle sitting on the OBSERVER'S OWN GOAL becomes transparent to
+        # that one fleet -- which is exactly right for a corpse being rescued
+        # and exactly wrong for a human. Nobody's goal is ever a person.
+        #
+        # Repulsion alone is a preference, and a large enough reward can outbid
+        # a preference. The hard veto lives in
+        # FleetNode.get_valid_action_mask(), which refuses the move outright.
+        if static_obstacles:
+            for _cell in static_obstacles:
+                stamp_cell(int(_cell[0]), int(_cell[1]), int(_cell[2]),
+                           static_obstacle_severity)
 
         # --- 1. Fleets -----------------------------------------------------
         # Own goal hoisted to plain floats. The near-goal discount below runs
@@ -951,6 +1059,21 @@ class WarehouseDensityField:
         if self._return_volume:
             # TWO CHANNELS, NOT MULTIPLIED. See get_local_volume().
             return np.stack([mask, repulsion.astype(np.float32)], axis=0)
+
+        if self.output_mode == "channels":
+            # PACKED DIAMOND: mask then repulsion, each over the 231 live cells.
+            # 462 numbers rather than the 2,662 of a dense cube -- at
+            # buffer_capacity 15,000 and 60 fleets that is 3.9 GB of replay
+            # instead of 19.8 GB, and the cube is ~97% padding anyway.
+            #
+            # The encoder scatters it back into a cube before convolving, and
+            # the scatter is a fixed index assignment, so undoing the packing is
+            # free. Crucially this leaves the PIPELINE UNCHANGED: still one flat
+            # vector per fleet, so memory.push and _pad_transition need no edits.
+            return np.concatenate([
+                mask[self._diamond_mask],
+                repulsion.astype(np.float32)[self._diamond_mask],
+            ])
 
         affordance = 1.0 / (1.0 + repulsion)
         affordance = affordance * mask

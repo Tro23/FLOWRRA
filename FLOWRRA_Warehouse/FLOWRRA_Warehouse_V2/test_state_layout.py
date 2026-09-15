@@ -73,10 +73,19 @@ def test_layout_total_matches_vector():
     v = a.get_state_vector([a, b])
     layout = a.state_layout()
     check("base_len_matches", int(layout["_base_len"][1]), int(len(v)))
-    check("rays_all_is_42", layout["rays_all"][1] - layout["rays_all"][0], 42)
+    # rays_all grew 42 -> 60 with the Phase-2 hit semantics (ray_hit_waiting,
+    # ray_hit_permanent, ray_hit_unknown). ray_semantics covers just those 18,
+    # so they can be lesioned separately from the distances.
+    check("rays_all_is_60", layout["rays_all"][1] - layout["rays_all"][0], 60)
+    check("ray_semantics_is_18",
+          layout["ray_semantics"][1] - layout["ray_semantics"][0], 18)
     check("ray_distances_at_6", layout["ray_distances"], (6, 12))
-    check("goal_gradient_at_48", layout["goal_gradient"], (48, 54))
-    check("situation_at_54", layout["situation_features"], (54, 60))
+    check("goal_gradient_moved", layout["goal_gradient"], (66, 72))
+    # Widened 6 -> 8 by the Phase-2 waiting features (sf_is_waiting,
+    # sf_wait_steps). Asserted against the DERIVED layout rather than a constant
+    # so this test fails loudly when the vector changes, instead of silently
+    # indexing the wrong dimensions.
+    check("situation_moved", layout["situation_features"], (72, 80))
 
 
 def test_blocks_are_contiguous_and_complete():
@@ -84,7 +93,7 @@ def test_blocks_are_contiguous_and_complete():
     a = make_node("a", (3.0, 0.0, 0.0), G, grid, aisle, dmap)
     layout = a.state_layout()
     named = [(k, v) for k, v in layout.items()
-             if not k.startswith("_") and k != "rays_all"]
+             if not k.startswith("_") and k not in ("rays_all", "ray_semantics")]
     named.sort(key=lambda kv: kv[1][0])
     cursor, gaps = 0, 0
     for k, (lo, hi) in named:
@@ -132,9 +141,9 @@ def test_ray_block_equals_ray_function():
     b = make_node("b", (4.0, 0.0, 0.0), G, grid, aisle, dmap)
     layout = a.state_layout()
     v = a.get_state_vector([a, b])
-    rd, pv, pd = a.sense_6_axis_rays([a, b])
+    rd, pv, pd, hw, hp, hu = a.sense_6_axis_rays([a, b])
     lo, hi = layout["rays_all"]
-    expected = np.concatenate([rd, pv.flatten(), pd.flatten()])
+    expected = np.concatenate([rd, pv.flatten(), pd.flatten(), hw, hp, hu])
     check("rays_all_slice_equals_function",
           np.allclose(v[lo:hi], expected), True)
 
@@ -211,8 +220,10 @@ def test_lesion_resolution_against_shipped_code():
     class _Stub:
         pass
 
-    for block, width in (("rays_all", 42), ("goal_gradient", 6),
-                         ("density", 231), ("situation_features", 6)):
+    base_len = a.state_layout()["_base_len"][1]
+    for block, width in (("rays_all", 60), ("goal_gradient", 6),
+                         ("density", dens.output_dim),
+                         ("situation_features", 8)):
         env = _Stub()
         env.nodes = [a]
         env.density = dens
@@ -221,12 +232,13 @@ def test_lesion_resolution_against_shipped_code():
         env._resolve_lesion_slices = ns["_resolve_lesion_slices"].__get__(env)
         env._apply_lesion = ns["_apply_lesion"].__get__(env)
 
-        vec = np.ones(291, dtype=np.float32)
+        vec = np.ones(base_len + dens.output_dim, dtype=np.float32)
         out = env._apply_lesion(vec.copy())
         lo, hi = env._lesion_slices[0]
         check(f"lesion_{block}_width", hi - lo, width)
         check(f"lesion_{block}_zeroed", int((out == 0.0).sum()), width)
-        check(f"lesion_{block}_rest_intact", int((out == 1.0).sum()), 291 - width)
+        check(f"lesion_{block}_rest_intact", int((out == 1.0).sum()),
+              base_len + dens.output_dim - width)
 
     # Unknown block name must raise, not silently do nothing.
     env = _Stub()
@@ -237,7 +249,7 @@ def test_lesion_resolution_against_shipped_code():
     env._resolve_lesion_slices = ns["_resolve_lesion_slices"].__get__(env)
     env._apply_lesion = ns["_apply_lesion"].__get__(env)
     try:
-        env._apply_lesion(np.ones(291, dtype=np.float32))
+        env._apply_lesion(np.ones(base_len + dens.output_dim, dtype=np.float32))
         check("bad_block_raises", False, True)
     except KeyError:
         check("bad_block_raises", True, True)

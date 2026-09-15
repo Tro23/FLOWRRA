@@ -169,6 +169,9 @@ class GNNPolicy(nn.Module):
         n_heads: int = 4,
         dropout: float = 0.1,
         reward_heads: Optional[List[str]] = None,
+        encoder_mode: str = "flat",
+        base_feature_dim: Optional[int] = None,
+        density_diamond_mask: Optional[np.ndarray] = None,
     ):
         super().__init__()
 
@@ -178,13 +181,38 @@ class GNNPolicy(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
 
-        # Node feature encoder
-        self.node_encoder = nn.Sequential(
-            nn.Linear(node_feature_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, hidden_dim),
-        )
+        # Node feature encoder.
+        #
+        # "conv" replaces the flat Linear with a GATED 3D CONVOLUTION over the
+        # density volume plus a SEPARATE encoder for the base features. See
+        # encoder_warehouse.py for the full diagnosis; in short, the flat path
+        # spends ~74% of its input width on a near-constant binary reachability
+        # mask, and flattens a geodesic ball into an unordered list so the
+        # network cannot know cell 47 neighbours cell 48.
+        #
+        # Separate encoders -- not LayerNorm -- are what fix the drowning:
+        # LayerNorm normalises AFTER a layer, and the imbalance is at its input.
+        if encoder_mode == "conv":
+            if density_diamond_mask is None or base_feature_dim is None:
+                raise ValueError(
+                    "encoder_mode='conv' needs base_feature_dim and "
+                    "density_diamond_mask. The encoder has to know where the "
+                    "base half ends and how to scatter the packed diamond back "
+                    "into a cube.")
+            from encoder_warehouse import FusedEncoder
+            self.node_encoder = FusedEncoder(
+                base_dim=int(base_feature_dim),
+                diamond_mask=density_diamond_mask,
+                hidden_dim=hidden_dim,
+                dropout=dropout,
+            )
+        else:
+            self.node_encoder = nn.Sequential(
+                nn.Linear(node_feature_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, hidden_dim),
+            )
 
         # Graph Attention layers
         self.gat_layers = nn.ModuleList()
@@ -576,6 +604,9 @@ class GNNAgent:
         buffer_capacity: int = 15000,
         batch_size: int = 64,
         dropout: float = 0.1,
+        encoder_mode: str = "flat",
+        base_feature_dim: Optional[int] = None,
+        density_diamond_mask: Optional[np.ndarray] = None,
         seed: Optional[int] = None,
         stability_coef: float = 0.5,  # Weight for auxilary loss
     ):
@@ -608,6 +639,9 @@ class GNNAgent:
             n_heads=n_heads,
             dropout=dropout,
             reward_heads=reward_heads,
+            encoder_mode=encoder_mode,
+            base_feature_dim=base_feature_dim,
+            density_diamond_mask=density_diamond_mask,
         ).to(DEVICE)
 
         self.target_net = GNNPolicy(
@@ -619,6 +653,9 @@ class GNNAgent:
             n_heads=n_heads,
             dropout=dropout,
             reward_heads=reward_heads,
+            encoder_mode=encoder_mode,
+            base_feature_dim=base_feature_dim,
+            density_diamond_mask=density_diamond_mask,
         ).to(DEVICE)
 
         self.reward_heads = list(reward_heads) if reward_heads else ["total"]

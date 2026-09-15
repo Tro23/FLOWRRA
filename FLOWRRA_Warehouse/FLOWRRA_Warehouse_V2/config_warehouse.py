@@ -190,6 +190,14 @@ CONFIG = {
         # Verified identical to the old kernel down an unobstructed corridor
         # (test_kernel.py::test_straight_corridor_matches_manhattan_exactly).
         # "manhattan" reproduces published runs bit-for-bit.
+        # "affordance" -> 231 dims, mask/(1+R), for the flat encoder.
+        # "channels"   -> 462 dims, mask and repulsion packed separately, for
+        #                 the gated 3D convolution. Must be set together with
+        #                 gnn.encoder = "conv": the encoder needs the two
+        #                 channels apart to gate on the mask, and the flat path
+        #                 has no idea what to do with 462 dims.
+        "output_mode": "affordance",       # "affordance" | "channels"
+
         "kernel_metric": "graph",          # "graph" | "manhattan"
 
         # Passed through to FleetNode. See its ray_transform field: "clip25"
@@ -212,6 +220,55 @@ CONFIG = {
                                             # version projected nothing for these. Set
                                             # False to restore that if intent-splatting
                                             # stationary fleets over-repels in congestion.
+    },
+
+    # ==========================================
+    # 2. WAITING
+    # ==========================================
+    # Standing still is available (action 0, always structurally valid) and was
+    # unconditionally punished: idle_penalty fires on every non-moving step
+    # while progress pays movement_reward_multiplier * distance_closed. The
+    # policy was taught, at every density, that waiting costs and pushing pays.
+    #
+    # Measured at 4.18% occupancy on 2026-09-14: 13,041 collapse events, one
+    # fleet pair colliding 314 separate times, and 25.7% of Tier-1 "successful"
+    # escapes moving the fleet to its own position.
+    #
+    # A real multi-step hold already existed (_yield_until) but ONLY Tier-3
+    # recovery could invoke it, at a single call site. Its own comment records
+    # that it replaced a one-step version because that "let a loser immediately
+    # retry the same losing move the very next step." The lesson was learned
+    # once, for recovery. The policy had no equivalent.
+    #
+    # WAITING is a peer-VISIBLE state, not just an internal flag. A waiting
+    # fleet, a dead fleet and a parked fleet all have direction 0 and are
+    # indistinguishable through peer_velocities -- so a fleet could never tell
+    # whether the one in front of it would ever move again. ray_hit_waiting
+    # reads this set; a VDA 5050 state report would carry it.
+    "waiting": {
+        "enabled": False,                  # default OFF until the retrain
+        "max_wait_steps": 12,              # the idle-penalty exemption LAPSES after
+                                            # this many consecutive waiting steps, so
+                                            # the penalty resumes and the policy is
+                                            # pushed to try something else. Bounded on
+                                            # purpose: an exemption can only ever be
+                                            # worth zero, where a positive reward for
+                                            # inaction could be farmed by parking
+                                            # beside a peer forever.
+        "mutual_wait_steps": 3,            # shorter cap when the BLOCKER IS ALSO
+                                            # WAITING. A mutual standoff does not
+                                            # clear by waiting, so the exemption
+                                            # lapses fast. Symmetry is broken by
+                                            # remaining graph distance: the fleet
+                                            # further from its goal keeps the long
+                                            # cap and holds, the closer one is
+                                            # pushed to move first. Without that,
+                                            # both lapse on the same step, both
+                                            # move, and re-collide.
+        "block_threshold": 2.0,            # graph cells. A mobile peer this close
+                                            # means "blocked"; further means the fleet
+                                            # is idling in open space and is penalised
+                                            # exactly as before.
     },
 
     # ==========================================
@@ -309,6 +366,12 @@ CONFIG = {
     # 3. GRAPH NEURAL NETWORK (GAT)
     # ==========================================
     "gnn": {
+        # "flat" -> Linear(input_dim, hidden). "conv" -> gated 3D convolution
+        # over the density volume plus a SEPARATE base encoder and LayerNorm on
+        # the fusion. Requires density.output_mode = "channels".
+        # See encoder_warehouse.py.
+        "encoder": "flat",                 # "flat" | "conv"
+
         "action_size": 7,                  # {-1, 0, 1} across X, Y, Z + Idle (0)
         "hidden_dim": 128,                 # Neural network width
         "num_layers": 3,                   # Graph Attention Layers
@@ -568,6 +631,16 @@ CONFIG = {
                                             # progress, while an idle one has nothing to
                                             # delay. Set to 1.0 for pure nearest-first, or
                                             # 0 to disable the preference entirely.
+        "static_obstacle_severity": 3.0,   # Density stamp for an UNREGISTERED obstacle
+                                            # -- a human, debris, a dropped pallet.
+                                            # Harder than any fleet (1.0 parked, 1.4
+                                            # stopped) and with NO near-goal discount:
+                                            # that discount exists to make an obstacle
+                                            # transparent to whoever needs to reach it,
+                                            # which is right for a corpse being rescued
+                                            # and wrong for a person. Repulsion is only
+                                            # the soft half; the HARD veto is in
+                                            # FleetNode.get_valid_action_mask().
         "stopped_obstacle_severity": 1.4,  # Density stamp for a stopped fleet, vs 1.0
                                             # for a parked one. Higher because a parked
                                             # fleet is where somebody WANTED to be

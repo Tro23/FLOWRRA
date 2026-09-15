@@ -94,6 +94,12 @@ class _Density:
         self.calls += 1
         return np.zeros(231, dtype=np.float32)
 
+    def action_entropy(self, affordance):
+        # _perceive computes the local entropy scalar from the affordance and
+        # writes it back onto the node BEFORE building the base vector, so the
+        # stub has to answer this too.
+        return 1.0
+
 
 class _Env:
     """Minimal stand-in exposing exactly what _perceive touches."""
@@ -108,6 +114,13 @@ class _Env:
         self.frozen_near_goal_radius = 3.0
         self.stopped_obstacle_severity = 1.4
         self.step_count = 0
+        self._throughput_t = 1.0
+        # _perceive passes these straight through to get_local_affordance.
+        # Every time _perceive gains a dependency this stub has to follow -- the
+        # cost of testing a real method against a fake environment, and still
+        # cheaper than requiring torch to run a one-second test.
+        self.static_obstacles = set()
+        self.static_obstacle_severity = 3.0
         self._idle_mode = mode
         self._idle_refresh_every = refresh
         self._idle_perception_reused = 0

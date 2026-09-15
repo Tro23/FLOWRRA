@@ -307,6 +307,37 @@ class FleetNode:
     # These exist to test a specific claim rather than argue about it: that
     # blind rays contributed to the dense-training regression. If recovered
     # steps are a fraction of a percent of fleet-steps, they did not.
+    # Cells blocked by something unregistered -- a human, debris, a dropped
+    # pallet. Assigned by the orchestrator each step. Rays are the ONLY channel
+    # in which these can be detected: position reports cover the fleet registry
+    # and the graph covers static structure, so without a ray an unregistered
+    # obstacle has nowhere to exist.
+    static_obstacles: Optional[Set[Tuple[int, int, int]]] = None
+    # Peer-visible flag set by the orchestrator: 1.0 when this fleet is dead or
+    # parked and will not move again.
+    sf_is_immobile: float = 0.0
+    # ---- GIBBS STATE (Phase 2) ------------------------------------------
+    # The two scalars of F = E - T*S, both MEASURED rather than posited.
+    #
+    # sf_local_entropy  S, the local half. Shannon entropy over the affordance
+    #                   of the six neighbouring cells, normalised by log(live
+    #                   neighbours) so it is degree-independent. 1.0 = every
+    #                   option equally good, nothing to choose between them;
+    #                   lower = contention has concentrated and the choice is
+    #                   being made for you. The GLOBAL half needs a partition
+    #                   function over a shared field, which does not exist yet.
+    #
+    # sf_throughput_t   T, throughput pressure. Low T means push and accept
+    #                   risk; high T means hold and stay clean. This is already
+    #                   present in the system as a HARDCODED constant -- the
+    #                   ratio of idle_penalty to movement_reward_multiplier is a
+    #                   fixed exchange rate between safety and progress, applied
+    #                   at every density, always. Making it explicit and
+    #                   state-dependent is the same change at a different
+    #                   altitude, and it is what the 13,041 collapse events look
+    #                   like when the constant is wrong.
+    sf_local_entropy: float = 1.0
+    sf_throughput_t: float = 1.0
     ray_origin_recovered: int = 0
     ray_origin_blind: int = 0
     # Ray information content, accumulated per cast. The question these answer:
@@ -708,15 +739,36 @@ class FleetNode:
         immediately adjacent node (grid nodes are 1 unit apart).
 
         Idle (action 0) is always valid -- it's never structurally constrained.
+
+        UNREGISTERED OBSTACLES ARE A HARD BLOCK HERE. A human or a dropped
+        pallet is not a fleet: you can push through a stopped fleet -- that is
+        how a rescuer reaches a pickup, and the near-goal discount makes the
+        corpse transparent to exactly that one fleet -- but you must never drive
+        into a person. That distinction cannot be expressed by repulsion, which
+        is a preference a large enough reward can outbid.
+
+        So the obstacle appears in TWO places, doing two different jobs: high
+        severity in the density field so routes avoid it, and a hard veto here so
+        the move is impossible. Same division as the layout itself -- soft
+        preference in the field, absolute constraint at the mask.
         """
         mask = np.zeros(len(ACTION_DELTAS), dtype=bool)
         mask[0] = True
+        obstacles = self.static_obstacles or ()
         for action in range(1, len(ACTION_DELTAS)):
             proposed_pos = self.current_pos + (ACTION_DELTAS[action] * reference_speed)
-            mask[action] = self.is_structurally_valid(proposed_pos, action)
+            if not self.is_structurally_valid(proposed_pos, action):
+                continue
+            if obstacles:
+                cell = tuple(int(round(float(v))) for v in proposed_pos)
+                if cell in obstacles:
+                    continue          # hard veto: never drive into a human
+            mask[action] = True
         return mask
 
-    def sense_6_axis_rays(self, all_fleets: List["FleetNode"]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def sense_6_axis_rays(self, all_fleets: List["FleetNode"]) -> Tuple[
+            np.ndarray, np.ndarray, np.ndarray,
+            np.ndarray, np.ndarray, np.ndarray]:
         """
         Six axis-aligned rays: how far the corridor is clear, and what stopped it.
 
@@ -775,6 +827,30 @@ class FleetNode:
         peer_velocities = np.zeros((6, 3), dtype=np.float32)
         peer_displacements = np.zeros((6, 3), dtype=np.float32)
 
+        # ---- RAY HIT SEMANTICS (Phase 2) -----------------------------------
+        # WHAT STOPPED THIS RAY, not just how far away it was.
+        #
+        # Without these, a ray that reports "8 cells then something" cannot
+        # distinguish four completely different situations, because a WAITING
+        # fleet, a DEAD fleet, a PARKED fleet and a WALL all present as
+        # direction 0. The policy could not tell "this will move when the
+        # corridor clears" from "this will never move again" -- which makes
+        # waiting a coin flip rather than a decision.
+        #
+        # Three binary channels; the remaining cases fall out free:
+        #     all zero + zero velocity     -> a WALL
+        #     all zero + non-zero velocity -> a MOVING fleet
+        #
+        # That ambiguity is also a live hypothesis for why the 42 ray dims
+        # lesioned harmlessly at 4.18% occupancy on 2026-09-14: a block that
+        # cannot tell a wall from a parked fleet may be unused BECAUSE it is
+        # ambiguous, not because the information is worthless. Falsifiable --
+        # the post-retrain ray lesion either moves or it does not.
+        ray_hit_waiting = np.zeros(6, dtype=np.float32)
+        ray_hit_permanent = np.zeros(6, dtype=np.float32)
+        ray_hit_unknown = np.zeros(6, dtype=np.float32)
+        obstacles = self.static_obstacles or ()
+
         pos = self.current_pos
         start_cell = (int(round(float(pos[0]))),
                       int(round(float(pos[1]))),
@@ -820,7 +896,8 @@ class FleetNode:
             # Genuinely off-graph: inside a rack. Every ray reads 0, which is
             # what the original produced too -- its first is_structurally_valid
             # would have failed immediately.
-            return ray_distances, peer_velocities, peer_displacements
+            return (ray_distances, peer_velocities, peer_displacements,
+                ray_hit_waiting, ray_hit_permanent, ray_hit_unknown)
 
         G = self.G
         reach = int(self.ray_range)
@@ -864,6 +941,15 @@ class FleetNode:
                 cells += 1
                 cur = nxt
                 cur_id = nxt_id
+
+                # An unregistered obstacle stops the ray like a fleet does, but
+                # it is not in the registry, so there is no peer object and no
+                # velocity or goal to report. It gets NO transparency rule
+                # either: nobody's goal is ever a human.
+                if nxt in obstacles:
+                    ray_hit_unknown[ray_idx] = 1.0
+                    break
+
                 peer = fleet_pos_map.get(nxt)
                 if peer is not None:
                     peer_hit = peer
@@ -886,8 +972,13 @@ class FleetNode:
             if peer_hit is not None:
                 peer_velocities[ray_idx] = peer_hit.direction.copy()
                 peer_displacements[ray_idx] = peer_hit.get_relative_goal_displacement()
+                ray_hit_waiting[ray_idx] = float(
+                    getattr(peer_hit, "sf_is_waiting", 0.0))
+                ray_hit_permanent[ray_idx] = float(
+                    getattr(peer_hit, "sf_is_immobile", 0.0))
 
-        return ray_distances, peer_velocities, peer_displacements
+        return (ray_distances, peer_velocities, peer_displacements,
+                ray_hit_waiting, ray_hit_permanent, ray_hit_unknown)
 
     def get_goal_gradient(self) -> np.ndarray:
         """
@@ -999,13 +1090,38 @@ class FleetNode:
             float(getattr(self, "sf_in_warning", 0.0)),
             float(getattr(self, "sf_in_deadlock", 0.0)),
             float(getattr(self, "sf_peer_proximity", 0.0)),
+            # ---- WAITING (Phase 2) -------------------------------------
+            # sf_is_waiting   1.0 when this fleet held still BECAUSE it was
+            #                 blocked, as opposed to idling in open space.
+            # sf_wait_steps   how long it has been waiting, normalised by
+            #                 max_wait_steps. "Waited 2 steps" and "waited 40"
+            #                 call for different actions, and without duration
+            #                 the policy cannot tell them apart.
+            #
+            # These exist because standing still was available (action 0) and
+            # unconditionally punished: idle_penalty = -0.5 fires every
+            # non-moving step while progress pays, so the policy was taught at
+            # every density that waiting costs and pushing pays. Measured at
+            # 4.18% occupancy: 13,041 collapse events, one fleet pair colliding
+            # 314 separate times, 25.7% of Tier-1 escapes moving nowhere.
+            float(getattr(self, "sf_is_waiting", 0.0)),
+            float(getattr(self, "sf_wait_steps", 0.0)),
+        ], dtype=np.float32)
+
+    def get_gibbs_state(self) -> np.ndarray:
+        """The two scalars of F = E - T*S. See the field definitions above."""
+        return np.array([
+            float(getattr(self, "sf_local_entropy", 1.0)),
+            float(getattr(self, "sf_throughput_t", 1.0)),
         ], dtype=np.float32)
 
     def get_state_vector(self, all_fleets: List["FleetNode"]) -> np.ndarray:
         self_direction = self.direction.copy()
         self_displacement = self.get_relative_goal_displacement()
 
-        ray_dists, peer_vels, peer_disps = self.sense_6_axis_rays(all_fleets=all_fleets)
+        (ray_dists, peer_vels, peer_disps,
+         ray_waiting, ray_permanent, ray_unknown) = self.sense_6_axis_rays(
+            all_fleets=all_fleets)
 
         state_components = [
             self_direction,                     
@@ -1013,6 +1129,21 @@ class FleetNode:
             ray_dists,                          
             peer_vels.flatten(),                
             peer_disps.flatten(),
+            # +18 dims. RAY HIT SEMANTICS -- what stopped each ray, not just how
+            # far away it was. Without these, a WAITING fleet, a DEAD fleet, a
+            # PARKED fleet and a WALL are indistinguishable (all present as
+            # direction 0), so the policy cannot tell "this will move when the
+            # corridor clears" from "this will never move again". Waiting
+            # becomes a coin flip instead of a decision.
+            #
+            # ray_hit_unknown is the only channel in which a HUMAN or DEBRIS can
+            # exist at all: position reports cover the fleet registry, the graph
+            # covers static structure, and neither knows about anything nobody
+            # registered. Reserved now so that adding obstacles later is a line
+            # of code rather than another retrain.
+            ray_waiting,
+            ray_permanent,
+            ray_unknown,
             # +6 dims. The true graph-distance gradient over the 6 movement
             # actions -- the single piece of information the reward function
             # measures and the state vector previously did not contain. See
@@ -1030,6 +1161,9 @@ class FleetNode:
             # Order: [is_rescuer, orders_carried, on_pickup_cell,
             #         in_warning_zone, in_deadlock, nearest_peer_proximity]
             self.get_situation_features(),
+            # +2 dims. GIBBS STATE: local action entropy (S) and throughput
+            # pressure (T).
+            self.get_gibbs_state(),
         ]
 
         if self.use_orientation:
@@ -1061,8 +1195,12 @@ class FleetNode:
             ("ray_distances", 6),
             ("peer_velocities", 18),
             ("peer_displacements", 18),
+            ("ray_hit_waiting", 6),
+            ("ray_hit_permanent", 6),
+            ("ray_hit_unknown", 6),
             ("goal_gradient", 6),
-            ("situation_features", 6),
+            ("situation_features", 8),
+            ("gibbs_state", 2),
         ]
         if self.use_orientation:
             widths.append(("heading", 1))
@@ -1076,6 +1214,15 @@ class FleetNode:
         # Convenience group: everything derived from the 6-axis ray cast. This
         # is the block the "how much does the policy use its rays" lesion
         # switches off, and it is 42 of the 60 base dims.
-        layout["rays_all"] = (layout["ray_distances"][0], layout["peer_displacements"][1])
+        # Everything derived from the 6-axis cast, including the Phase-2 hit
+        # semantics. This is the block the "does the policy read its rays"
+        # lesion switches off.
+        layout["rays_all"] = (layout["ray_distances"][0], layout["ray_hit_unknown"][1])
+        # The three hit-semantics channels alone, so they can be lesioned
+        # SEPARATELY from the distances after the retrain -- which is what makes
+        # "the wall/parked-fleet ambiguity was why rays went unused" falsifiable
+        # rather than a story.
+        layout["ray_semantics"] = (layout["ray_hit_waiting"][0],
+                                   layout["ray_hit_unknown"][1])
         layout["_base_len"] = (0, cursor)
         return layout

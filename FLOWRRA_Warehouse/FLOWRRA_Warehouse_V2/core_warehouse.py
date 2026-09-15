@@ -188,6 +188,7 @@ class FLOWRRA:
             projection_max_branches=CONFIG["density"].get("projection_max_branches", 6),
             project_stationary=CONFIG["density"].get("project_stationary", True),
             kernel_metric=CONFIG["density"].get("kernel_metric", "graph"),
+            output_mode=CONFIG["density"].get("output_mode", "affordance"),
             projection_mode=CONFIG["density"].get("projection_mode", "intended"),
             grid_pos_dict=self.grid_pos_dict,   # both already built above, at lines 36 and 40-45
             graph=self.G,
@@ -349,6 +350,56 @@ class FLOWRRA:
         # Fleets that have errored and stopped moving. Immobile from the moment
         # they enter this set; the mission response waits for confirmation.
         self.stopped_nodes: Set[str] = set()
+
+        # ---- WAITING (Phase 2) ---------------------------------------------
+        # A fleet is WAITING when it held still BECAUSE it was blocked, as
+        # distinct from idling in open space, from being parked at its goal, and
+        # from being dead. Those four look identical through peer_velocities --
+        # all have direction 0 -- which is why a peer could never tell whether
+        # the fleet in front of it would ever move again.
+        #
+        # This is a peer-VISIBLE state, not just an internal flag: it is what
+        # ray_hit_waiting reads, and what a VDA 5050 state report would carry.
+        # ---- UNREGISTERED OBSTACLES ----------------------------------------
+        # Humans, debris, a dropped pallet. Cells that are blocked by something
+        # NOBODY TOLD THE ORCHESTRATOR ABOUT.
+        #
+        # They are categorically different from every fleet obstacle. A fleet is
+        # in the registry, so its position is reported, and the near-goal
+        # discount can make it transparent to whoever needs to reach it. Nobody's
+        # goal is ever a human, so an unregistered obstacle gets NO transparency
+        # rule -- it is simply in the way, for everyone, always.
+        #
+        # Humans and debris are one category deliberately. They differ in how
+        # they arrive and how long they last, not in what a fleet should do
+        # about them, and a single channel keeps the state vector honest until
+        # there is evidence the distinction matters.
+        #
+        # Detected only by RAY CAST. Position reports cover the fleet registry;
+        # the graph covers static structure; a ray is the only channel in which
+        # something unregistered can exist at all.
+        self.static_obstacles: Set[Tuple[int, int, int]] = set()
+        self.static_obstacle_severity = float(
+            CONFIG["density"].get("static_obstacle_severity", 3.0))
+
+        self.waiting_nodes: Set[str] = set()
+        self._wait_steps: Dict[str, int] = {}
+        self._wait_cap: Dict[str, int] = {}
+        _wcfg = CONFIG.get("waiting", {})
+        self.waiting_enabled = bool(_wcfg.get("enabled", False))
+        self.max_wait_steps = int(_wcfg.get("max_wait_steps", 12))
+        self.wait_block_threshold = float(
+            _wcfg.get("block_threshold", CONFIG["warehouse"]["warning_threshold"]))
+        self.waits_started = 0
+        self.wait_steps_total = 0
+        self.waits_capped = 0
+        # Denominator for throughput pressure. Read from CONFIG rather than
+        # threaded in, because step() has no view of the runner's step budget.
+        self._max_steps_hint = int(
+            CONFIG["training"].get("max_steps_per_episode", 780))
+        self._throughput_t = 1.0
+        self.mutual_waits = 0
+        self.mutual_wait_steps = int(_wcfg.get("mutual_wait_steps", 3))
         # fleet_id -> step at which it errored (for the confirmation timer).
         self._error_step: Dict[str, int] = {}
         # Confirmed dead, order cancelled, goal released back to the pool.
@@ -1364,6 +1415,12 @@ class FLOWRRA:
             "ray_peer_hit_rate": (
                 sum(getattr(n, "ray_peer_hits", 0) for n in self.nodes)
                 / max(1, sum(getattr(n, "ray_casts", 0) for n in self.nodes))),
+            "waits_started": self.waits_started,
+            "wait_steps_total": self.wait_steps_total,
+            "waits_capped": self.waits_capped,
+            "mutual_waits": self.mutual_waits,
+            "static_obstacles": len(self.static_obstacles),
+            "waiting_now": len(self.waiting_nodes),
             "tabu_overrides": self.tabu_overrides,
             "tabu_overrides_stuck": self.tabu_overrides_stuck,
             "projection_fallbacks": getattr(self.density, "_projection_fallbacks", 0),
@@ -1403,7 +1460,14 @@ class FLOWRRA:
 
     def _perceive(self, node) -> np.ndarray:
         """
-        Full 291-dim state vector for one fleet, with optional idle caching.
+        The full state vector for one fleet, with optional idle caching.
+
+        Width is never hardcoded anywhere: the runner, the lesion harness and
+        the correlation script all compute input_dim as
+        len(get_state_vector) + density.output_dim, so a change to either half
+        propagates on its own. What does NOT propagate is a saved checkpoint --
+        load_state_dict is strict, so any width change invalidates it and forces
+        the retrain. That is by design; the bundle was always going to need one.
 
         WHY THIS EXISTS. Both state-build loops iterate self.nodes, not
         get_active_nodes(), so a PARKED fleet casts six rays, builds a 231-dim
@@ -1442,7 +1506,10 @@ class FLOWRRA:
                 self._idle_perception_reused += 1
                 return memo[1]
 
-        base_state = node.get_state_vector(self.nodes)
+        # Affordance FIRST, then the base vector. The order matters: the local
+        # entropy scalar is computed from the affordance and read back inside
+        # get_state_vector(), so building the base vector first would fold in
+        # last step's value.
         local_affordance = self.density.get_local_affordance(
             node.current_pos, self.nodes, self.immobile_nodes,
             own_goal_pos=node.goal_pos,
@@ -1451,7 +1518,12 @@ class FLOWRRA:
             own_id=node.id,
             stopped_node_ids=self.stopped_nodes,
             stopped_obstacle_severity=self.stopped_obstacle_severity,
+            static_obstacles=self.static_obstacles,
+            static_obstacle_severity=self.static_obstacle_severity,
         )
+        node.sf_local_entropy = self.density.action_entropy(local_affordance)
+        node.sf_throughput_t = self._throughput_t
+        base_state = node.get_state_vector(self.nodes)
         full_state = self._apply_lesion(
             np.concatenate([base_state, local_affordance]))
         self._idle_perception_computed += 1
@@ -1529,6 +1601,39 @@ class FLOWRRA:
         # safety reward) must see the same snapshot, or the state feature and the
         # reward that scores it can disagree about where the fleets are.
         self.proximity.refresh(self.nodes, excluded_ids=self.immobile_nodes)
+        # A fleet that became immobile or finished while waiting is no longer
+        # waiting -- leaving it in the set would advertise "I will move when
+        # clear" to peers about a fleet that never will, which is precisely the
+        # ambiguity this state exists to remove.
+        # Peer-visible flags, refreshed before any state vector is built. Rays
+        # read these off the peer they hit, which avoids threading four more
+        # sets through get_state_vector -> sense_6_axis_rays.
+        for _n in self.nodes:
+            _n.sf_is_immobile = 1.0 if _n.id in self.immobile_nodes else 0.0
+            _n.static_obstacles = self.static_obstacles
+
+        # ---- THROUGHPUT PRESSURE, the T of F = E - T*S ---------------------
+        #     urgency = orders_remaining / steps_remaining
+        #     T       = 1 / (1 + urgency)
+        #
+        # Many orders and little time -> urgency high -> T LOW -> push, accept
+        # risk. Plenty of slack -> T HIGH -> hold, stay clean.
+        #
+        # Bounded in (0, 1], one number, and it becomes order-queue depth
+        # unchanged when a continuous order stream replaces the fixed pool --
+        # which is the point of defining it this way rather than as a step
+        # counter. Global for now; per-fleet would let different zones run at
+        # different pressures, and is a later question.
+        _orders_left = max(0, len(self.goal_pool) - len(self.claimed_goals))
+        _steps_left = max(1, self._max_steps_hint - self.step_count)
+        _urgency = _orders_left / _steps_left
+        self._throughput_t = 1.0 / (1.0 + _urgency)
+
+        if self.waiting_enabled and self.waiting_nodes:
+            for _wid in list(self.waiting_nodes):
+                if _wid in self.immobile_nodes:
+                    self.waiting_nodes.discard(_wid)
+                    self._wait_steps.pop(_wid, None)
         if self._prox_all is not None:
             self._prox_all.refresh(self.nodes, excluded_ids=set())
 
@@ -2069,6 +2174,88 @@ class FLOWRRA:
             self._fleet_speed[node.id] = self._fleet_speed.get(node.id, 0.0) + float(node.speed)
             if _moved < 1e-6:
                 self._fleet_idle[node.id] = self._fleet_idle.get(node.id, 0) + 1
+
+            # ---- WAITING vs IDLING ------------------------------------------
+            # The distinction is WHY the fleet did not move, and it is decided
+            # here rather than by a separate action, deliberately.
+            #
+            # An eighth HOLD action was the obvious alternative and is worse:
+            # it grows the network's output layer, and since HOLD would be
+            # reward-exempt while IDLE is not, HOLD strictly dominates and IDLE
+            # becomes a dead action the policy never selects. Same behaviour,
+            # one more dimension, one less usable action.
+            #
+            # So: held still AND a mobile peer is within block_threshold graph
+            # cells -> WAITING. Held still in open space -> idling, penalised as
+            # before. Persistence is not forced; it emerges for as long as the
+            # blocking condition persists, and the policy keeps its per-step say.
+            if self.waiting_enabled:
+                _peers = self.proximity.peers_within(
+                    node.id, self.wait_block_threshold)
+                if _moved < 1e-6 and _peers:
+                    if node.id not in self.waiting_nodes:
+                        self.waiting_nodes.add(node.id)
+                        self.waits_started += 1
+                    n_wait = self._wait_steps.get(node.id, 0) + 1
+                    self._wait_steps[node.id] = n_wait
+                    self.wait_steps_total += 1
+                    # ---- THE CAP DEPENDS ON WHY YOU ARE BLOCKED -------------
+                    # A fixed timer gets two opposite cases wrong: a fleet
+                    # queueing behind a MOVING peer is penalised at step 13 for
+                    # correct behaviour, while a fleet in a mutual standoff is
+                    # exempt for 12 steps of futility.
+                    #
+                    # Three cases, and one never reaches this branch:
+                    #
+                    #   blocker DEAD or PARKED -- never reaches here, and the
+                    #     reason is that THEY ARE NOT BLOCKING ANYTHING. Neither
+                    #     is a hard obstacle: check_integrity exempts all of
+                    #     immobile_nodes, so passing through a dead or parked
+                    #     fleet costs no collision, and the density field only
+                    #     expresses a soft preference. Better still, the
+                    #     near-goal discount makes a dead fleet COMPLETELY
+                    #     TRANSPARENT to its own rescuer -- whose goal_pos IS
+                    #     that cell, so the discount goes to zero -- while every
+                    #     other fleet still sees full severity. So nobody should
+                    #     ever wait on one: a rescuer drives straight through,
+                    #     and anyone else goes around or pushes past.
+                    #
+                    #   blocker MOVING -- productive queueing. Long cap.
+                    #
+                    #   blocker ALSO WAITING -- mutual standoff. Waiting longer
+                    #     is strictly worse, so the exemption lapses fast.
+                    _blocker = _peers[0][0]
+                    _mutual = _blocker in self.waiting_nodes
+                    _cap = self.mutual_wait_steps if _mutual else self.max_wait_steps
+
+                    # SYMMETRY BREAKING. Two fleets sharing a cap lapse on the
+                    # same step, both move, and re-collide -- the
+                    # [19,49]-colliding-314-times pattern in a different costume.
+                    # The fleet FURTHER from its goal keeps the long cap and
+                    # holds; the one closer is pushed to move first. Ties break
+                    # on id, deterministically.
+                    if _mutual:
+                        self.mutual_waits += 1
+                        _peer_node = next((p for p in self.nodes
+                                           if p.id == _blocker), None)
+                        _mine = node.get_graph_distance_to_goal()
+                        _theirs = (_peer_node.get_graph_distance_to_goal()
+                                   if _peer_node is not None else _mine)
+                        if _mine > _theirs or (_mine == _theirs and node.id > _blocker):
+                            _cap = self.max_wait_steps
+
+                    if n_wait == _cap + 1:
+                        self.waits_capped += 1
+
+                    self._wait_cap[node.id] = _cap
+                    node.sf_is_waiting = 1.0
+                    node.sf_wait_steps = min(1.0, n_wait / max(1, _cap))
+                else:
+                    self.waiting_nodes.discard(node.id)
+                    self._wait_steps.pop(node.id, None)
+                    self._wait_cap.pop(node.id, None)
+                    node.sf_is_waiting = 0.0
+                    node.sf_wait_steps = 0.0
             
             # Restore base speed for next calculation
             node.speed = base_speed
@@ -2218,7 +2405,23 @@ class FLOWRRA:
                     # imposed. Penalising it would teach the policy to leave the
                     # cell before the transfer completes, which is the one thing
                     # the dwell exists to prevent.
-                    if self._pickup_dwell.get(node.id, 0) == 0:
+                    # SECOND EXCEPTION: a fleet holding still because it is
+                    # BLOCKED is doing the right thing. Penalising that is what
+                    # taught the policy to push into jams.
+                    #
+                    # Bounded on purpose. The exemption lapses after
+                    # max_wait_steps so the penalty resumes and the policy is
+                    # pushed to try something else -- otherwise a fleet could
+                    # park beside a peer and farm a free ride forever, which is
+                    # what makes a POSITIVE reward for inaction unsafe. An
+                    # exemption can only ever be worth zero.
+                    _waiting_exempt = (
+                        self.waiting_enabled
+                        and node.id in self.waiting_nodes
+                        and self._wait_steps.get(node.id, 0)
+                            <= self._wait_cap.get(node.id, self.max_wait_steps)
+                    )
+                    if self._pickup_dwell.get(node.id, 0) == 0 and not _waiting_exempt:
                         rvec[H["time"]] += self.idle_penalty
                 else:
                     rvec[H["goal"]] += (old_dist - new_dist) * self.movement_reward_multiplier

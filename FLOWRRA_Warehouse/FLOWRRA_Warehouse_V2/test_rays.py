@@ -131,7 +131,7 @@ def test_agrees_with_original_on_open_map():
                    for f in fleets if f.id != me.id):
                 continue
             cases += 1
-            new_d, new_pv, _ = me.sense_6_axis_rays(fleets)
+            new_d, new_pv = me.sense_6_axis_rays(fleets)[:2]
             old_d, old_hits = original_rays(me, fleets)
             for r in range(6):
                 gap = abs(new_d[r] * 25.0 - old_d[r] * 25.0)
@@ -157,7 +157,7 @@ def test_does_not_tunnel_through_a_gap():
     G.remove_edge("n_8_0", "n_9_0")
     aisle, _ = build_spatial_indices(grid)
     me = mk(G, grid, aisle, "me", (5.0, 0.0, 0.0))
-    d, _, _ = me.sense_6_axis_rays([me])
+    d = me.sense_6_axis_rays([me])[0]
     check("stops_at_missing_edge", round(float(d[0]) * 25.0), 3)   # 5 -> 8
     # And the node on the far side still exists, so this is a genuine edge test.
     check("far_node_exists", (9, 0, 0) in grid, True)
@@ -167,7 +167,7 @@ def test_rays_are_independent():
     G, grid = racked(width=20, aisles=3)
     aisle, _ = build_spatial_indices(grid)
     me = mk(G, grid, aisle, "me", (5.0, 0.0, 0.0))
-    d, _, _ = me.sense_6_axis_rays([me])
+    d = me.sense_6_axis_rays([me])[0]
     # +X clear, -X clear to x=0, +Y blocked (rack at y=1), -Y blocked, Z blocked.
     check("plus_x_sees_far", float(d[0]) * 25.0 > 5, True)
     check("minus_x_sees_5", round(float(d[1]) * 25.0), 5)
@@ -183,10 +183,10 @@ def test_cap_loses_no_information():
     G, grid = racked(width=60, aisles=3)
     aisle, _ = build_spatial_indices(grid)
     a = mk(G, grid, aisle, "a", (2.0, 0.0, 0.0))    # 57 cells of clear +X
-    d, _, _ = a.sense_6_axis_rays([a])
+    d = a.sense_6_axis_rays([a])[0]
     check("saturates_at_one", float(d[0]), 1.0)
     a.ray_range = 50
-    d50, _, _ = a.sense_6_axis_rays([a])
+    d50 = a.sense_6_axis_rays([a])[0]
     check("cap_25_matches_cap_50", float(d50[0]), float(d[0]))
 
 

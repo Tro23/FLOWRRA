@@ -109,8 +109,19 @@ class GatedConv3d(nn.Module):
         # binary mask the numerator there is exactly 0 so it never fires -- which
         # is precisely the problem, because a guard that only holds for
         # well-formed input is not a guard. Caught by feeding a non-binary mask.
-        out = torch.where(live, out / valid.clamp(min=1.0),
-                          torch.zeros_like(out))
+        # MULTIPLY BY THE VALIDITY MASK, do not torch.where against a zeros
+        # tensor. Both give the same values; the second allocates ANOTHER
+        # full-size (B*N, C, 11, 11, 11) tensor to hold the zeros.
+        #
+        # The where was belt-and-braces added while chasing an earlier NaN, and
+        # it is redundant: valid.clamp(min=1.0) already guarantees a divisor of
+        # at least 1, so the division cannot produce inf or NaN whatever the
+        # mask contains. The guard that actually matters is the clamp.
+        #
+        # This cost a real run. At batch 64 with 80 fleets that is 5,120
+        # volumes, and one 32-channel tensor is 872 MB -- the zeros_like doubled
+        # it, and a 3.6 GB card ran out inside learn().
+        out = out / valid.clamp(min=1.0) * live
         out = out + self.bias.view(1, -1, 1, 1, 1)
         # Gate the output as well as the input: a cell with no track produces
         # nothing, so it can never act as a bridge for the next layer.
@@ -132,15 +143,30 @@ class DensityEncoder(nn.Module):
     """
 
     def __init__(self, diamond_mask: np.ndarray, out_dim: int = 32,
-                 widths: Sequence[int] = (8, 16, 32), kernel: int = 3):
+                 widths: Sequence[int] = (8, 16), kernel: int = 3,
+                 n_channels: int = 2):
         super().__init__()
         self.grid_shape = tuple(diamond_mask.shape)
         self.n_cells = int(diamond_mask.sum())
         flat_idx = np.flatnonzero(diamond_mask.ravel())
         self.register_buffer("flat_idx", torch.from_numpy(flat_idx).long())
 
+        # WIDTHS ARE A MEMORY DECISION, not just a capacity one. Activations
+        # are (B*N, C, S, S, S), so at batch 64, 80 fleets and S=11 each channel
+        # costs 5120 * 1331 * 4 = 27 MB. A third layer at 32 channels adds
+        # 872 MB on its own, and the same again for its backward.
+        #
+        # Two layers of 3x3x3 reach 5 cells, which is exactly the diamond radius
+        # -- a third layer mostly convolves padding, since ~97% of the cube is
+        # not track anyway. Cheaper AND better matched to the geometry.
+        # Channel 0 is ALWAYS the structure mask -- it gates every layer.
+        # Channel 1 is repulsion. Channel 2, when present, is the slow
+        # congestion memory (density_warehouse slow_channel).
+        if n_channels < 2:
+            raise ValueError("need at least mask + repulsion (2 channels)")
+        self.n_channels = int(n_channels)
         convs = []
-        in_ch = 2
+        in_ch = self.n_channels
         for w in widths:
             convs.append(GatedConv3d(in_ch, w, kernel))
             in_ch = w
@@ -149,13 +175,23 @@ class DensityEncoder(nn.Module):
         self.out_dim = out_dim
 
     def forward(self, packed: torch.Tensor) -> torch.Tensor:
-        """packed : (B, 2 * n_cells) -- mask channel then repulsion channel."""
+        """packed : (B, n_channels * n_cells) -- mask, repulsion, [slow], each
+        over the live cells of the diamond."""
         B = packed.shape[0]
         n = self.n_cells
-        cube = packed.new_zeros(B, 2, int(np.prod(self.grid_shape)))
-        cube[:, 0].index_copy_(1, self.flat_idx, packed[:, :n])
-        cube[:, 1].index_copy_(1, self.flat_idx, packed[:, n:])
-        cube = cube.view(B, 2, *self.grid_shape)
+        C = self.n_channels
+        if packed.shape[1] != C * n:
+            raise ValueError(
+                f"packed density has {packed.shape[1]} values, expected "
+                f"{C} channels x {n} cells = {C * n}")
+        cube = packed.new_zeros(B, C, int(np.prod(self.grid_shape)))
+        # One EXPLICIT slice per channel. The two-channel version took
+        # packed[:, n:] for channel 1 -- "everything after the mask" -- which,
+        # with a third channel present, would silently read 2n values into n
+        # slots. The shape check above makes any mismatch loud instead.
+        for c in range(C):
+            cube[:, c].index_copy_(1, self.flat_idx, packed[:, c * n:(c + 1) * n])
+        cube = cube.view(B, C, *self.grid_shape)
 
         mask = cube[:, :1]
         x = cube
@@ -189,10 +225,14 @@ class FusedEncoder(nn.Module):
 
     def __init__(self, base_dim: int, diamond_mask: np.ndarray,
                  hidden_dim: int = 128, base_hidden: int = 96,
-                 density_dim: int = 32, dropout: float = 0.1):
+                 density_dim: int = 32, dropout: float = 0.1,
+                 density_widths: Sequence[int] = (8, 16),
+                 density_channels: int = 2):
         super().__init__()
         self.base_dim = base_dim
-        self.density_encoder = DensityEncoder(diamond_mask, out_dim=density_dim)
+        self.density_encoder = DensityEncoder(diamond_mask, out_dim=density_dim,
+                                              widths=density_widths,
+                                              n_channels=density_channels)
         self.base_encoder = nn.Sequential(
             nn.Linear(base_dim, base_hidden),
             nn.ReLU(),
@@ -207,7 +247,7 @@ class FusedEncoder(nn.Module):
 
     def forward(self, node_features: torch.Tensor) -> torch.Tensor:
         """
-        node_features : (..., base_dim + 2 * n_cells)
+        node_features : (..., base_dim + n_channels * n_cells)
 
         Accepts any leading dimensions -- the GAT passes (batch, nodes, features)
         -- and flattens them for the convolution, which needs a real batch axis.

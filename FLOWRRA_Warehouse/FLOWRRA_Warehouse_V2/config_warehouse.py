@@ -6,6 +6,30 @@ Manages hyper-parameters for the discrete warehouse GNN, density fields, and tra
 """
 
 CONFIG = {
+    # ------------------------------------------------------------------
+    # THE STEP ITSELF
+    # ------------------------------------------------------------------
+    "step": {
+        # Every fleet takes ONE step together. Distinct conflicts resolve
+        # independently; entangled ones jointly. See SIMULTANEOUS_STEP.md.
+        #
+        # The movement loop is always split into two phases -- decide-and-move,
+        # then judge -- which on its own changes nothing. This flag decides what
+        # the judge phase reads:
+        #   False: live shared state, exactly as before (order-dependent).
+        #   True:  snapshots taken between the phases. Two fleets reaching one
+        #          goal in the same step are resolved by distance, then id --
+        #          never by list position. Losers' retargets are deferred and run
+        #          in a fixed order. Splats are computed from the committed
+        #          configuration, so a collision's penalty and its splat land in
+        #          the same transition.
+        #
+        # Measured before this existed, identical actions forwards vs reversed:
+        # 2 of 40 fleets in a different place after one step, 5 of 40 after five.
+        # measure_order_dependence.py must report 0 with this on.
+        "simultaneous": True,
+    },
+
     # ==========================================
     # 1. HARDWARE & WAREHOUSE LIMITS
     # ==========================================
@@ -29,6 +53,18 @@ CONFIG = {
                                             # want for transfer: "60% of the way across this
                                             # warehouse" should mean the same thing on every
                                             # map.
+        # How close a fleet must be to its goal to count as delivered, in
+        # INTERPOLATED GRAPH HOPS. get_graph_distance_to_goal() interpolates, so
+        # a fleet mid-edge into the goal cell reads 0.5.
+        #
+        # 0.1 means "within a tenth of a cell", which is far stricter than
+        # anything else in the system -- every other consumer rounds position to
+        # a cell. At base_speed 0.5 a fleet is mid-edge half the time.
+        # 0.5 means "the fleet's cell IS the goal cell", which is the consistent
+        # definition. Measured: 2-4 active fleets per episode get inside 0.5 of
+        # their goal and are never credited.
+        "arrival_radius": 0.5,             # 0.1 (strict) | 0.5 (cell-based)
+
         "base_speed": 0.5,                 # Discrete movement speed scalar
         "max_vision_range": 10,            # Edges an AGV can see down an aisle
         "collision_threshold": 0.5,        # Manhattan distance triggering a fatal crash.
@@ -138,6 +174,40 @@ CONFIG = {
                                             # no-op instead of a ratchet.
         "warning_splat_multiplier": 0.6,   # Down from 2.0. A close pass is a hint, not a
                                             # crater.
+
+        # ONE WARNING SPLAT PER ACTUAL PAIR.
+        # The old code splatted at the midpoint of the first two elements of
+        # warning_nodes -- an unordered SET. With one warning pair that was right;
+        # with two or more anywhere on the map it usually paired two UNRELATED
+        # fleets and stamped repulsion on empty floor between them, while every
+        # real conflict but at most one got nothing. It also splatted once per
+        # step however many conflicts existed.
+        # Verified with two conflicts and a convoy on the map at once: the old
+        # code put its single splat on empty floor near no pair; per-pair put
+        # one at each conflict and, with convoys skipped, none on the convoy.
+        # True: one splat per real warning pair, local to that pair.
+        #       With recovery.preempt_skip_convoys, following pairs are skipped.
+        # False: old behaviour, exactly reproducible.
+        "warning_splat_per_pair": True,
+
+        # SLOW CONGESTION CHANNEL -- a third density input beside mask and
+        # repulsion. The fast memory (memory_decay_factor 0.7) has a half-life of
+        # 1.9 steps and is gone in 7-10, while a median route is ~54 steps and
+        # the learner looks 100 ahead: it covers 3.3% of the value horizon and
+        # can teach "not this cell right now" but never "this corridor keeps
+        # jamming". The cold_run13 stranded fleets made ~3 hops of net progress
+        # over an episode while losing only ~27 steps to waits and holds.
+        #
+        # A SEPARATE channel, not a slower memory_decay_factor: at 0.98 one
+        # warning splat would stay live ~120 steps, and every brush in a
+        # one-cell-wide shaft would leave the only route repulsive for most of
+        # an episode. A separate channel lets the network learn its weight.
+        #
+        # Requires output_mode "channels". Changes the state size (462 -> 693
+        # density values), so it needs a FRESH cold run -- no warm start.
+        "slow_channel": True,
+        "slow_decay_factor": 0.987,        # half-life ln(.5)/ln(.987) = 53 steps
+        "slow_severity_scale": 1.0,        # scale applied to each event's severity
         "memory_decay_factor": 0.7,        # MULTIPLICATIVE per step (replaces the linear
                                             # decay_rate=0.1). A 1.5 fatal marker falls
                                             # below memory_floor in 8 steps: affordance at
@@ -196,13 +266,13 @@ CONFIG = {
         #                 gnn.encoder = "conv": the encoder needs the two
         #                 channels apart to gate on the mask, and the flat path
         #                 has no idea what to do with 462 dims.
-        "output_mode": "affordance",       # "affordance" | "channels"
+        "output_mode": "channels",       # "affordance" | "channels"
 
         "kernel_metric": "graph",          # "graph" | "manhattan"
 
         # Passed through to FleetNode. See its ray_transform field: "clip25"
         # saturates at 25 cells, "smooth" is d/(d+softness) and never does.
-        "ray_transform": "clip25",         # "clip25" | "smooth"
+        "ray_transform": "smooth",         # "clip25" | "smooth"
         "ray_softness": 8.0,
 
         # "intended" | "dead_reckoning". Set BOTH this and kernel_metric to
@@ -246,7 +316,7 @@ CONFIG = {
     # whether the one in front of it would ever move again. ray_hit_waiting
     # reads this set; a VDA 5050 state report would carry it.
     "waiting": {
-        "enabled": False,                  # default OFF until the retrain
+        "enabled": True,                  # default OFF until the retrain
         "max_wait_steps": 12,              # the idle-penalty exemption LAPSES after
                                             # this many consecutive waiting steps, so
                                             # the penalty resumes and the policy is
@@ -272,6 +342,62 @@ CONFIG = {
     },
 
     # ==========================================
+    # 2c. EPISODE SHAPE (Phase 4 groundwork, default off)
+    # ==========================================
+    # DESPAWN ON DELIVERY. A fleet that claims its goal currently FREEZES on
+    # that cell and stays there for the rest of the episode. Frozen fleets are
+    # excluded from the proximity index, so they stop being blockers for waiting
+    # and candidates for collisions -- they leave only a static density stamp,
+    # permanently, on a cell somebody wanted.
+    #
+    # With despawn it instead drives to the nearest exit and leaves. It is FULLY
+    # ACTIVE for that drive: counted in proximity, collisions, waiting and path
+    # conflict. More real congestion for longer, then none at all.
+    #
+    # It also removes the one state Phase 4 could not express honestly:
+    # ray_hit_permanent means "this will never move again", which is true of a
+    # dead fleet and false of a parked one that could be recalled. Despawning
+    # deletes the ambiguous case instead of encoding it.
+    #
+    # DEFAULT OFF, and it must stay off for the first retrain. There is no
+    # paired control available -- ckpt_pilot3 has input_dim 291 and cannot run
+    # in a 314/545-dim environment at all -- so the comparison is already
+    # old-features-on-old-env against new-features-on-new-env. Two differences.
+    # Turning this on makes three, and a bad result could not be attributed.
+    #
+    # respawn_on_call is NOT here: it needs a CALL to respond to, and calls come
+    # from an order stream. It belongs with continuous orders in Phase 4 proper.
+    "episode": {
+        "despawn_on_delivery": False,
+        "exit_nodes": None,                # explicit node ids, or None for the
+                                            # layout boundary
+        "max_exits": 8,                    # each exit costs one stored BFS map
+    },
+
+    # ==========================================
+    # 2b. UNREGISTERED OBSTACLES
+    # ==========================================
+    # Humans and debris. Costs NO state dimensions: ray_hit_unknown (6 dims) was
+    # reserved for this in Phase 2, precisely so that adding obstacles later
+    # would be a line of code rather than another retrain.
+    #
+    # They are perceived the only way an unregistered thing can be -- by RAY
+    # CAST. Position reports cover the fleet registry, the graph covers static
+    # structure, and neither knows about anything nobody registered.
+    #
+    # One category to the policy: a human and a piece of debris are the same
+    # fact, something is there and it is not a fleet. They differ only in how
+    # they arrive and how long they last.
+    "obstacles": {
+        "enabled": False,
+        "n_humans": 0,                     # move, slowly, and wander
+        "n_debris": 0,                     # do not move
+        "human_move_period": 4,            # steps between moves; slower than a fleet
+        "fixed_cells": None,               # place by hand instead of sampling, for
+                                            # constructing a specific situation
+    },
+
+    # ==========================================
     # 2a. PERCEPTION SCHEDULING
     # ==========================================
     # Both state-build loops in core_warehouse.step() iterate self.nodes, not
@@ -294,6 +420,10 @@ CONFIG = {
     "perception": {
         "idle_mode": "full",               # "full" | "cached" | "skip"
         "idle_refresh_every": 10,          # steps between refreshes under "cached".
+        # "LOOK AT EVERYONE": every fleet's state ends with the holon's
+        # integrity (0 any collision / 0.5 any warning / 1 clear). One more
+        # base feature: 83 -> 84. False: previous width exactly.
+        "holon_integrity": True,
                                             # An idle fleet does not move, so what
                                             # goes stale is what is happening AROUND
                                             # it -- which is what its neighbours
@@ -322,7 +452,7 @@ CONFIG = {
         # layer. Default stays "manhattan" until the retrain; "graph" is correct.
         # Selecting "graph" widens the proximity index to interaction_radius,
         # which also widens the censoring point of mean_peer_gap.
-        "adjacency_metric": "manhattan",   # "graph" | "manhattan"
+        "adjacency_metric": "graph",   # "graph" | "manhattan"
         "search_radius": 4.0,              # Cells. Must be >= warning_threshold or
                                             # decisions would be truncated; core raises
                                             # it to warning_threshold if set lower.
@@ -370,7 +500,41 @@ CONFIG = {
         # over the density volume plus a SEPARATE base encoder and LayerNorm on
         # the fusion. Requires density.output_mode = "channels".
         # See encoder_warehouse.py.
-        "encoder": "flat",                 # "flat" | "conv"
+        "encoder": "conv",                 # "flat" | "conv"
+
+        # EDGE FEATURES (Phase 3). 0 = off, the adjacency stays [N, N] binary.
+        # Up to 3: closeness, path conflict, head-on. They ride inside the
+        # adjacency tensor as extra channels, so nothing else in the buffer or
+        # the padding needed a new field.
+        #
+        # Path conflict is the motivating one: "do our routes cross, and how
+        # soon" is a property of a PAIR, and the GAT previously knew only that
+        # two fleets were neighbours. It is also the release signal waiting has
+        # been missing -- "clearing" is visible when projections stop
+        # intersecting, before the blocker has physically moved.
+        # 4 = closeness, conflict, head-on, arrival order. The last is
+        # ANTISYMMETRIC and is what lets a fleet know it is the one that should
+        # hold: conflict alone is symmetric, so both fleets read the same number
+        # 4 = closeness, conflict, head-on, arrival order. The last is
+        # ANTISYMMETRIC and is what lets a fleet know IT is the one that should
+        # hold: conflict alone is symmetric, so both fleets read the same number
+        # and have no basis to behave differently.
+        "edge_feature_dim": 4,             # 0 | 1 | 2 | 3 | 4
+
+        # Channel widths of the gated 3D conv stack. THIS IS A MEMORY KNOB.
+        # Activations are (batch * fleets, C, 11, 11, 11), so at batch 64 with
+        # 80 fleets each channel costs 27 MB and the whole stack is:
+        #     (8, 16, 32)  1526 MB      (8, 16)   654 MB      (4, 8)  327 MB
+        # and roughly the same again for the backward pass.
+        #
+        # Two layers of 3x3x3 reach 5 cells, which IS the diamond radius, so the
+        # third layer mostly convolves padding -- ~97% of the cube is not track.
+        # Cheaper and better matched to the geometry.
+        #
+        # On a small card, lower this before lowering batch_size: a narrower
+        # conv costs capacity in one block, a smaller batch makes every gradient
+        # noisier.
+        "density_conv_widths": (8, 16),
 
         "action_size": 7,                  # {-1, 0, 1} across X, Y, Z + Idle (0)
         "hidden_dim": 128,                 # Neural network width
@@ -422,7 +586,10 @@ CONFIG = {
                                             # delivery reward is worth under 1.0 at the
                                             # moment it is asked to divert, so it would
                                             # never learn to divert at all.
-        "buffer_capacity": 15000,          # Replay buffer size
+        # DOUBLE DQN: the online net picks the bootstrap action, the target
+        # net scores it. False: plain DQN, exactly as before.
+        "double_dqn": True,
+        "buffer_capacity": 30000,   # cold_run18: 47000 needs ~15 GB; machine has 15 GiB total, ~8.6 available. Never-evicting buffer test deferred to AWS.
         "batch_size": 64,                  # <--- Bumped for smoother gradient averaging  (# Experiences sampled per learn step)
         "total_episodes": 11,             # Total benchmark runs
         "max_steps_per_episode": 780,      # Timeout limit for a single run
@@ -486,6 +653,76 @@ CONFIG = {
                                             # was not failing; it separates a pair by one cell
                                             # and they steer straight back. The missing
                                             # ingredient was TIME, not space.
+        # HARD CEILING on any single yield. The escalation below is linear and
+        # was previously UNBOUNDED: on 2026-09-17 a 50-fleet cold run reached
+        # repeat #169, which is a hold of 5 + 5*168 = 845 steps inside a 780-step
+        # episode. Eleven of twelve fleets froze at step 163 and never moved
+        # again, and the remaining ~600 steps produced transitions in which
+        # nothing could happen.
+        #
+        # 30 is long enough to break a stubborn standoff and short enough that a
+        # fleet always gets another go inside the episode.
+        # HOW FAR A TIER-1 ESCAPE MUST GET FROM THE FLEET IT CONFLICTED WITH,
+        # on top of the hard rule that it never lands on ANY fleet.
+        #
+        # THE GEOMETRIC CEILING: a conflicting peer is within
+        # collision_threshold (0.5) and one hop moves at most 1.0 cell, so the
+        # best separation a Tier-1 escape can reach is about 1.5. Asking for
+        # warning_threshold (2.0) is UNSATISFIABLE -- measured, Tier 1 dropped
+        # from 50 successes in 500 steps to 2. That is not selectivity, that is
+        # switching Tier 1 off.
+        #
+        # 0.0 = off (default, old behaviour). Useful values: 1.0 to 1.4.
+        # Above ~1.4 nothing can satisfy it.
+        #
+        # WHY ANY OF THIS: 41% of two-fleet recovery events on cold_run10
+        # involved a pair already seen 5+ times, one pair 45 times, with mean
+        # escape displacement 1.02 cells. 968 of 2,732 relocations sat at x=29
+        # and x=5 -- the shaft columns -- with 701 moves along z. A shaft is one
+        # cell wide, so a one-hop escape cannot separate anyone inside it: they
+        # slide along and re-converge. The point of a clearance rule is to make
+        # Tier 1 FAIL there and escalate, rather than report success.
+        "escape_clearance": 0.0,
+
+        # CONVOYS ARE NOT CONFLICTS. Preemptive recovery fires whenever fleets
+        # sit in the warning band with no collision. On cold_run12 that was 742
+        # of 769 invocations (96%), only 148 of them (20%) separated anyone --
+        # mostly two fleets following the same route about a cell apart, which
+        # is a permanent warning under collision 0.5 / warning 2.0.
+        #
+        # True: a warning pair is left alone when both fleets moved last step
+        #       along the same axis and direction (dot >= convoy_alignment) and
+        #       their gap did not shrink. Head-on, crossing, a leader idling with
+        #       a follower closing, and every real collision still go to
+        #       recovery. Also exempts such pairs from the warning splat when
+        #       density.warning_splat_per_pair is on.
+        # False: old behaviour, exactly reproducible.
+        #
+        # RISK: recovery was accidentally teleporting convoys forward about one
+        # cell per step, twice base_speed. Without it they travel under their
+        # own policy, which may be slower.
+        "preempt_skip_convoys": True,
+        # HELD PAIRS ARE NOT NEW CONFLICTS. A pair with one fleet already held
+        # is dropped from PREEMPTIVE recovery -- the winner passing its held
+        # loser is what the hold is for. Stops right-of-way flipping mid-pass
+        # (cold_run16: 54 ping-pong runs, one pair flipping 26 times in a row).
+        # Real collisions are always recovered. False: old behaviour.
+        "preempt_skip_held_pairs": False,   # OFF after cold_run17: raised collisions +4.2/ep (t=+3.40), did not stop ping-pong
+        "convoy_alignment": 0.7,           # min dot of the two directions
+
+        # ESCALATE ON RECURRENCE -- the same pair recovered again near where it
+        # last met. The repeat-offence counter only counts pairs that actually
+        # touch, so preemptive recoveries never escalated: cold_run15's 119/56
+        # were separated to identical positions 22 times, never given
+        # right-of-way, and neither delivered. Escalation becomes
+        # max(fatal count, recurrence count), so fatal escalation never weakens.
+        "escalate_on_recurrence": True,
+        # None -> warning_threshold (2.0): contains the drift between
+        # back-to-back recoveries, one step at base_speed (0.5) + one hop (1.0).
+        "recurrence_radius": None,
+
+        "max_yield_steps": 30,
+
         "yield_escalation_per_repeat": 5,  # Added per repeat: 1st offence holds for
                                             # base_yield_steps, 2nd for +5, 3rd for +10...
                                             # NOW ACTUALLY READ -- this was accepted by
@@ -697,15 +934,24 @@ CONFIG = {
     # make collisions matter also made that head's TD targets larger and noisier.
     # Start every weight at 1.0 so the first run is attributable, then tune.
     "reward_decomposition": {
-        "heads": ["goal", "safety", "integrity", "rescue", "time"],
-        "weights": [1.0, 1.0, 1.0, 1.0, 1.0],
-        # Which scalar terms land in which head. Purely documentation -- the
-        # mapping is implemented in core_warehouse.py's _reward_vector().
-        #   goal      : movement progress, baseline, final approach, arrival
-        #   safety    : fatal collision, graded warning-zone proximity
-        #   integrity : loop integrity level, recovery invocation cost
-        #   rescue    : pickup bonus, handover completion
-        #   time      : idle penalty, overtime penalty
+        # PRIORITY MODE (REWARD_DESIGN.md s.9-12). "legacy" restores the five
+        # heads exactly as every run up to cold_run18:
+        #   "mode": "legacy",
+        #   "heads": ["goal", "safety", "integrity", "rescue", "time"],
+        #   "weights": [1.0, 1.0, 1.0, 1.0, 1.0],
+        "mode": "priority",
+        "heads": ["safety", "delivery", "efficiency"],
+        # Priority safety > delivery > efficiency, as weights on value-
+        # normalised heads. 3:2:1 FAILED the check that a delivery outweighs
+        # the progress of the route leading to it (2.84 vs 4.29). 6:4:1 passes
+        # all three with margin: yielding beats advancing near a conflict
+        # (closeness above ~0.4); a delivery beats a typical 25-cell route of
+        # progress; a collision outweighs a delivery.
+        "weights": [6.0, 4.0, 1.0],
+        # Fixed VALUE scales, calibrated on cold_run18: each head's mean reward
+        # per active fleet-step, divided by (1 - gamma). Fixed, not running,
+        # so replayed transitions keep a constant meaning.
+        "scales": {"safety": 34.3, "delivery": 70.4, "efficiency": 17.5},
     },
 
     # ==========================================
@@ -843,6 +1089,60 @@ CONFIG = {
                                             # NOT "moved but zero net distance progress",
                                             # which the proportional term above already
                                             # handles correctly on its own (nets to ~0).
+        # WHICH ACTION GETS CHARGED FOR A COLLISION.
+        # check_integrity() runs at the START of a step, so the set it produces
+        # describes the PREVIOUS action's geometry -- and the -50 below then
+        # lands on the CURRENT action. Measured 2026-09-20: 100% of penalties
+        # were for overlaps that existed before the penalised action ran, and
+        # 83% of those actions had just RESOLVED the overlap.
+        #
+        # True: a read-only re-check after the action loop, so the penalty
+        # follows the action that produced the geometry.
+        # False: the original behaviour, exactly reproducible.
+        # DELIVERING A RESCUED ORDER pays this into the RESCUE head, on top of
+        # the ordinary mission_complete that already goes to "goal".
+        #
+        # The rescue head currently sees ONE event per handover -- pickup_reward
+        # 25.0, about 1.36 times an episode against ~44 ordinary deliveries. It
+        # is a pure terminal signal: the rescuer's whole approach pays into
+        # "goal", because dispatch retargets its goal onto the pickup cell. A
+        # head with 1.36 events and no dense structure has almost nothing to fit,
+        # and its Q-values stay too small to influence the summed argmax that
+        # drives both action selection and the bootstrap.
+        #
+        # This adds a SECOND event -- finishing the job, not just collecting it.
+        # 25.0 makes a rescued delivery worth 125 to the summed Q against 100 for
+        # an ordinary one. 0.0 disables it and reproduces the old behaviour.
+        #
+        # Raising the WEIGHT instead would not fix this: multiplying a signal
+        # that is absent 99.997% of the time makes the rare event enormous rather
+        # than making the head learnable.
+        # WHEN active_mask IS SNAPSHOTTED. This decides whether the network ever
+        # receives a gradient from a successful delivery.
+        #
+        # active_mask zeroes a fleet's TD error in learn(). It used to be built
+        # AFTER the action loop, from immobile_nodes -- but that loop freezes a
+        # fleet the instant it delivers. So the fleet that had just earned
+        # mission_complete was marked inactive in the very transition carrying
+        # it, and the +100 was multiplied by zero.
+        #
+        # The arrival reward never reached the gradient in ANY run. Every other
+        # action near a goal was trained; the one that completes the mission was
+        # the only one systematically excluded. At the doorstep, with a peer
+        # nearby just 1.3% of the time: 38.2% step in, 29.0% idle, 32.7% move
+        # away -- no signal.
+        #
+        # True: snapshot before the action loop. A fleet already parked at the
+        #       start of the step stays masked (the original, correct intent);
+        #       one that freezes DURING the step is masked from the next
+        #       transition onward, not this one.
+        # False: the old behaviour, exactly reproducible.
+        "mask_active_before_actions": True,
+
+        "rescue_delivery_bonus": 0.0,      # 0.0 = off | 25.0 = matches pickup_reward
+
+        "attribute_collisions_post_action": True,
+
         "fatal_collision": -50.0,          # RAISED from -3.0. Charged to the two
                                             # colliding fleets, so a collision cost -6
                                             # total against a completed delivery worth

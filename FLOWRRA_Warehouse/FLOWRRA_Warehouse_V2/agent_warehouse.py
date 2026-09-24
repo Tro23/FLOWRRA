@@ -43,6 +43,7 @@ class GraphAttentionLayer(nn.Module):
         n_heads: int = 4,
         dropout: float = 0.1,
         concat: bool = True,
+        edge_feature_dim: int = 0,
     ):
         super().__init__()
         self.n_heads = n_heads
@@ -57,10 +58,37 @@ class GraphAttentionLayer(nn.Module):
         self.leakyrelu = nn.LeakyReLU(0.2)
         self.dropout_layer = nn.Dropout(dropout)
 
+        # EDGE-CONDITIONED ATTENTION (Phase 3).
+        #
+        # Without this, the only thing the GAT knows about a pair is that they
+        # are neighbours. Not how far apart, not in which direction, and not
+        # whether their planned paths cross -- so every pairwise fact has to be
+        # inferred from the two fleets' own node vectors, which do not contain
+        # each other's positions at all.
+        #
+        # Path conflict is the motivating case. "Do our routes intersect, and in
+        # how many steps" is a property of a PAIR. Encoding it twice, once in
+        # each node, is a worse representation of the same fact -- and the fleet
+        # that most needs it is the one deciding whether to hold.
+        #
+        # edge_feature_dim = 0 leaves this as a pure identity path, so the whole
+        # mechanism stays ablatable after the retrain rather than being an act of
+        # faith.
+        self.edge_feature_dim = int(edge_feature_dim)
+        self.edge_proj = (
+            nn.Linear(self.edge_feature_dim, n_heads, bias=False)
+            if self.edge_feature_dim > 0 else None)
+
         nn.init.xavier_uniform_(self.W)
         nn.init.xavier_uniform_(self.a)
+        if self.edge_proj is not None:
+            # Small init: the edge term is a CORRECTION to the node-based score,
+            # so at step 0 the layer behaves like the edge-free one and the two
+            # arms start from the same place.
+            nn.init.xavier_uniform_(self.edge_proj.weight, gain=0.1)
 
-    def forward(self, x: torch.Tensor, adj: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, adj: torch.Tensor,
+                edge_attr: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         FIXED: Corrected attention aggregation.
 
@@ -104,6 +132,16 @@ class GraphAttentionLayer(nn.Module):
 
         # [B, N, 1, H] + [B, 1, N, H] -> [B, N, N, H]
         e = e_src.unsqueeze(2) + e_dst.unsqueeze(1)
+
+        # Edge term, added BEFORE the nonlinearity so it shapes the score rather
+        # than merely offsetting it. [B, N, N, E] -> [B, N, N, n_heads].
+        #
+        # This is the one place a [B, N, N, *] tensor is materialised, and `e`
+        # already has that shape, so it costs no new order of magnitude -- which
+        # is why the decomposed formulation above had to stay.
+        if edge_attr is not None and self.edge_proj is not None:
+            e = e + self.edge_proj(edge_attr)
+
         e = self.leakyrelu(e)
 
         # Mask non-existent edges (where adj == 0)
@@ -200,11 +238,28 @@ class GNNPolicy(nn.Module):
                     "base half ends and how to scatter the packed diamond back "
                     "into a cube.")
             from encoder_warehouse import FusedEncoder
+            from config_warehouse import CONFIG as _CFG
+            # INFER the channel count rather than threading another setting
+            # through three constructors: the density block is whatever follows
+            # the base block, and it must be a whole number of diamonds. 2 is
+            # mask + repulsion; 3 adds the slow congestion channel. Anything
+            # that does not divide is a mismatch, and failing here beats
+            # silently misreading the state.
+            _cells = int(np.count_nonzero(density_diamond_mask))
+            _dens = int(node_feature_dim) - int(base_feature_dim)
+            if _cells <= 0 or _dens % _cells != 0:
+                raise ValueError(
+                    f"density block of {_dens} values is not a whole number of "
+                    f"{_cells}-cell diamonds (node_feature_dim {node_feature_dim}, "
+                    f"base_feature_dim {base_feature_dim})")
             self.node_encoder = FusedEncoder(
                 base_dim=int(base_feature_dim),
                 diamond_mask=density_diamond_mask,
                 hidden_dim=hidden_dim,
                 dropout=dropout,
+                density_widths=tuple(
+                    _CFG["gnn"].get("density_conv_widths", (8, 16))),
+                density_channels=_dens // _cells,
             )
         else:
             self.node_encoder = nn.Sequential(
@@ -232,6 +287,7 @@ class GNNPolicy(nn.Module):
                     n_heads=n_heads,
                     dropout=dropout,
                     concat=concat,
+                    edge_feature_dim=edge_feature_dim,
                 )
             )
 
@@ -318,17 +374,33 @@ class GNNPolicy(nn.Module):
         """
         Args:
             node_features: [batch, num_nodes, node_feature_dim]
-            adj_matrix: [batch, num_nodes, num_nodes] binary adjacency
+            adj_matrix: [batch, num_nodes, num_nodes] binary adjacency, OR
+                [batch, num_nodes, num_nodes, 1 + E] where channel 0 is that same
+                binary mask and channels 1.. are EDGE FEATURES.
 
         Returns:
             Q-values: [batch, num_nodes, action_size]
         """
+        # MULTI-CHANNEL ADJACENCY. Edge features ride in the adjacency tensor
+        # rather than as a separate argument, deliberately: the adjacency is
+        # already threaded through push(), _pad_transition(), sample() and both
+        # networks, so a new stored field would mean touching every one of them
+        # and would make old code paths silently drop the features. Channel 0 is
+        # the binary mask the layer has always used, so a plain [B, N, N] tensor
+        # behaves exactly as before.
+        edge_attr = None
+        if adj_matrix.dim() == 4:
+            edge_attr = adj_matrix[..., 1:]
+            adj_matrix = adj_matrix[..., 0]
+            if edge_attr.shape[-1] == 0:
+                edge_attr = None
+
         # Encode node features: [B, N, hidden_dim]
         h = self.node_encoder(node_features)
 
         # Message passing through GAT layers
         for i, gat in enumerate(self.gat_layers):
-            h = gat(h, adj_matrix)
+            h = gat(h, adj_matrix, edge_attr)
             # Apply activation (except possibly after last layer)
             if i < len(self.gat_layers) - 1:
                 h = F.elu(h)
@@ -375,6 +447,7 @@ class GraphReplayBuffer:
         integrity: float,
         active_mask: Optional[np.ndarray] = None,
         recovery_action: int = 0,
+        next_valid_mask: Optional[np.ndarray] = None,
     ):
         """
         Store a transition.
@@ -412,6 +485,12 @@ class GraphReplayBuffer:
                 integrity,
                 np.asarray(active_mask, dtype=np.float32).copy(),
                 int(recovery_action),
+                # Structural validity of each action in the NEXT state, so the
+                # bootstrap cannot max over moves the fleet could never make.
+                # None means "unknown", and learn() then falls back to the old
+                # unmasked behaviour rather than inventing a mask.
+                (np.asarray(next_valid_mask, dtype=bool).copy()
+                 if next_valid_mask is not None else None),
             )
         )
 
@@ -433,7 +512,7 @@ class GraphReplayBuffer:
         as a second line of defence, but doing it correctly here is cheaper and
         keeps the attention distribution well-formed.)
         """
-        (nf, adj, act, rew, nnf, nadj, done, integ, amask, rec) = exp
+        (nf, adj, act, rew, nnf, nadj, done, integ, amask, rec, nvm) = exp
         n = nf.shape[0]
         if n == n_max:
             return exp
@@ -443,11 +522,31 @@ class GraphReplayBuffer:
             return np.pad(a, ((0, pad),) + ((0, 0),) * (a.ndim - 1))
 
         def pad_adj(a):
+            # 3-D adjacency: [N, N, 1+E]. Edge features ride in the same
+            # tensor, so padding has to carry the channel axis through.
+            if a.ndim == 3:
+                out = np.zeros((n_max, n_max, a.shape[2]), dtype=a.dtype)
+                out[:n, :n, :] = a
+                # Padded rows are self-attending on the BINARY channel only, so
+                # a phantom fleet still attends to itself and softmax never sees
+                # an all--inf row. Its edge features stay zero, which is the
+                # right neutral value for a fleet that does not exist.
+                idx3 = np.arange(n, n_max)
+                out[idx3, idx3, 0] = 1.0
+                return out
             out = np.zeros((n_max, n_max), dtype=a.dtype)
             out[:n, :n] = a
             # self-loops for the padding rows -- see docstring
             idx = np.arange(n, n_max)
             out[idx, idx] = 1.0
+            return out
+
+        def _pad_valid(m):
+            if m is None:
+                return None
+            out = np.zeros((n_max, m.shape[1]), dtype=bool)
+            out[:n] = m
+            out[n:, 0] = True          # idle is always structurally valid
             return out
 
         return (
@@ -461,6 +560,13 @@ class GraphReplayBuffer:
             integ,
             pad_rows(amask),  # zeros -> excluded from the loss
             rec,              # graph-level scalar, no padding needed
+            # Padded fleets get action 0 (idle) marked valid and nothing else.
+            # An ALL-FALSE row would make every entry the -1e4 sentinel, and the
+            # argmax over a constant row is arbitrary but finite -- survivable,
+            # yet it hands the target a meaningless value. One valid action
+            # keeps the row well-defined. active_mask is 0 for these fleets, so
+            # whatever comes out is multiplied away before it reaches the loss.
+            _pad_valid(nvm),
         )
 
     def sample(self, batch_size: int) -> Optional[Tuple[torch.Tensor, ...]]:
@@ -528,6 +634,7 @@ class GraphReplayBuffer:
             integrity,
             active_masks,
             recovery_actions,
+            next_valid_masks,
         ) = zip(*batch)
 
         # Convert to tensors (now all have same shape!)
@@ -553,6 +660,15 @@ class GraphReplayBuffer:
         ).to(DEVICE)
         recovery_actions_t = torch.from_numpy(
             np.array(recovery_actions, dtype=np.int64)).to(DEVICE)
+
+        # All-or-nothing: if ANY sampled transition lacks its next-state mask,
+        # pass None and let learn() bootstrap unmasked. Filling the gaps with
+        # all-True would silently re-admit exactly the impossible actions the
+        # mask exists to exclude, on precisely the transitions we know least
+        # about.
+        next_valid_masks_t = (
+            torch.from_numpy(np.array(next_valid_masks, dtype=bool)).to(DEVICE)
+            if all(m is not None for m in next_valid_masks) else None)
         integrity_target = (
             torch.FloatTensor(np.array(integrity)).unsqueeze(-1).to(DEVICE)
         )
@@ -568,6 +684,7 @@ class GraphReplayBuffer:
             integrity_target,
             active_mask_t,
             recovery_actions_t,
+            next_valid_masks_t,
         )
 
     def __len__(self) -> int:
@@ -599,6 +716,7 @@ class GNNAgent:
         n_heads: int = 4,
         reward_heads: Optional[List[str]] = None,
         head_weights: Optional[List[float]] = None,
+        double_dqn: bool = False,
         lr: float = 0.0003,
         gamma: float = 0.95,
         buffer_capacity: int = 15000,
@@ -619,6 +737,9 @@ class GNNAgent:
 
         self.action_size = action_size
         self.gamma = gamma
+        # DOUBLE DQN: see the bootstrap in learn(). False = plain DQN, exactly
+        # as before.
+        self.double_dqn = bool(double_dqn)
         self.stability_coef = stability_coef
         self.steps_done = 0
 
@@ -754,7 +875,7 @@ class GNNAgent:
         self,
         t: int,
         total_episodes: int,
-        eps_min: float = 0.00,
+        eps_min: float = 0.01,
         eps_peak: float = 0.95,
         mu: Optional[float] = None,
         sigma: Optional[float] = None,
@@ -1052,6 +1173,7 @@ class GNNAgent:
             integrity_target,
             active_mask,
             recovery_actions,
+            next_valid_masks,
         ) = batch
 
         B, N, _ = node_feats.shape
@@ -1069,7 +1191,7 @@ class GNNAgent:
         # "size of tensor a (5) must match tensor b (2) at dimension 2", which
         # says nothing about the cause and sends you looking at the GAT. Naming
         # the mismatch turns a half-hour of confusion into a one-line fix.
-        if rewards.shape[-1] != K:
+        if rewards.shape[-1] not in (K, K + 1):
             raise ValueError(
                 f"Reward decomposition mismatch: the replay buffer holds "
                 f"{rewards.shape[-1]} reward columns but this agent was built with "
@@ -1077,6 +1199,14 @@ class GNNAgent:
                 f"count from CONFIG['reward_decomposition']['heads'] -- pass that same "
                 f"list as reward_heads= when constructing GNNAgent."
             )
+        # PRIORITY MODE pushes ONE extra column after the K reward heads: the
+        # holon's integrity signal -- the holon's coherence plus every recovery
+        # event at full size, the same on every fleet. It is read only by the
+        # recovery head: recovery is a holon-level decision, so it is judged at
+        # holon level ("look at everyone"). The K reward heads never see it.
+        # Legacy pushes exactly K columns, and nothing below changes for it.
+        rec_col = rewards[..., K] if rewards.shape[-1] == K + 1 else None
+        rewards = rewards[..., :K]
 
         # Current Q, per head: q_per_head is [B, N, K, A]
         q_values, curr_stability, q_per_head = self.policy_net(node_feats, adjs)
@@ -1095,6 +1225,60 @@ class GNNAgent:
         # (Hybrid Reward Architecture, van Seijen et al. 2017.)
         with torch.no_grad():
             next_q_sum, _, next_q_per_head = self.target_net(next_node_feats, next_adjs)
+
+            # DOUBLE DQN. Plain DQN lets ONE network (the target) both pick the
+            # next action -- argmax -- and score it. Taking the max over noisy
+            # estimates and then trusting that same max biases values upward,
+            # and bootstrapping compounds it: values creep, run away, snap back.
+            # cold_run16 (goal loss 3 -> 26.7 -> 1.4) and cold_run18 (1.4 -> 6.0,
+            # still climbing at the end) both showed it. Double DQN decouples
+            # the two: the ONLINE net picks, the TARGET net scores. Only the
+            # choice changes source; masking, argmax and gather are untouched.
+            # The online net picks in EVAL mode: it has dropout (0.1 on
+            # attention), which would otherwise randomise the choice.
+            #
+            # The forward pass CACHES last_recovery_q on the network, and learn()
+            # reads it back below for the recovery loss -- from the CURRENT
+            # states, with gradient. An extra pass on the NEXT states would
+            # overwrite it with the wrong states AND no gradient, silently
+            # stopping the recovery head from learning. It is the only thing a
+            # forward pass stores on the network; save it and put it back.
+            # (Caught by the check that Double DQN with identical online and
+            # target nets must give exactly the plain-DQN loss.)
+            if self.double_dqn:
+                _was_training = self.policy_net.training
+                _saved_rec_q = getattr(self.policy_net, "last_recovery_q", None)
+                self.policy_net.eval()
+                next_q_sum, _, _ = self.policy_net(next_node_feats, next_adjs)
+                self.policy_net.train(_was_training)
+                self.policy_net.last_recovery_q = _saved_rec_q
+
+            # MASK THE BOOTSTRAP TO STRUCTURALLY VALID ACTIONS.
+            #
+            # Without this the target takes a max over ALL actions, including
+            # the ~70% that are impossible on a degree-2.27 graph. Those
+            # Q-values are NEVER corrected by experience -- the action mask
+            # vetoes them at execution, so no transition ever carries their
+            # consequence -- so they drift freely, and argmax systematically
+            # selects the most-drifted one. Inflated target raises Q, which
+            # raises the target again.
+            #
+            # MEASURED TWICE. cold_run5: loss_goal 0.39 -> 384.5, divergence
+            # beginning at episode 40-45 as epsilon fell below 0.5 and the
+            # policy began following its own inflated values. warm_run7:
+            # loss_goal 0.56 -> 1.23 over 40 episodes, r(episode) = +0.97,
+            # almost perfectly linear. Completion stayed FLAT in both because
+            # the action mask kept the rot out of the behaviour -- the
+            # scaffolding hid the damage rather than preventing it.
+            #
+            # A FINITE SENTINEL, not -inf. A padded or fully-masked row would
+            # give -inf, and -inf multiplied by an active_mask of 0 is NaN,
+            # which propagates through the whole loss silently. Any value well
+            # below the reachable Q range does the job.
+            if next_valid_masks is not None:
+                _NEG = -1e4
+                next_q_sum = torch.where(next_valid_masks, next_q_sum,
+                                         torch.full_like(next_q_sum, _NEG))
             next_a = next_q_sum.argmax(dim=2)                         # [B, N]
             gather_idx = next_a.unsqueeze(-1).unsqueeze(-1).expand(B, N, K, 1)
             next_q_taken = next_q_per_head.gather(3, gather_idx).squeeze(-1)  # [B,N,K]
@@ -1155,8 +1339,16 @@ class GNNAgent:
         # It is a graph-level decision, so its reward is the mean INTEGRITY
         # component across active fleets -- that is where the invocation cost and
         # the resolution bonus land. Standard DQN target on a 3-action space.
-        rec_idx = self.reward_heads.index("integrity") if "integrity" in self.reward_heads else 0
-        integ_r = rewards[:, :, rec_idx]                       # [B, N]
+        # Without the priority column, this used to FALL BACK to reward column 0
+        # whenever no head was named "integrity" -- in priority mode that is the
+        # scaled safety head, where invoking recovery costs about a thousandth of
+        # what it did. cold_run19_1: policy-invoked recoveries 2.4x, wasted
+        # invocations nearly doubled. Priority mode now supplies the real signal.
+        if rec_col is not None:
+            integ_r = rec_col                                   # [B, N]
+        else:
+            rec_idx = self.reward_heads.index("integrity") if "integrity" in self.reward_heads else 0
+            integ_r = rewards[:, :, rec_idx]                   # [B, N]
         denom = active_mask.sum(dim=1).clamp(min=1.0)
         graph_r = (integ_r * active_mask).sum(dim=1) / denom    # [B]
 

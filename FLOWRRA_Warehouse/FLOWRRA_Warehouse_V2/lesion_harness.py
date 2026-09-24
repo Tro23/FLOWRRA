@@ -256,7 +256,8 @@ def main():
         # during a run and learn() is never called, but a fresh agent removes any
         # doubt about that.
         agent = GNNAgent(
-            node_feature_dim=input_dim, edge_feature_dim=0,
+            node_feature_dim=input_dim,
+        edge_feature_dim=CONFIG["gnn"].get("edge_feature_dim", 0),
             action_size=CONFIG["gnn"]["action_size"],
             hidden_dim=CONFIG["gnn"]["hidden_dim"],
             num_layers=CONFIG["gnn"]["num_layers"],

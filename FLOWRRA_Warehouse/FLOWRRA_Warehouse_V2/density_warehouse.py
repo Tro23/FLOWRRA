@@ -79,6 +79,9 @@ class WarehouseDensityField:
         projection_mode: str = "intended",
         kernel_metric: str = "graph",
         output_mode: str = "affordance",
+        slow_channel: bool = False,
+        slow_decay_factor: float = 0.987,
+        slow_severity_scale: float = 1.0,
         grid_pos_dict: Optional[Dict[Tuple[int, int, int], str]] = None,
         graph: Any = None,
         # --- accepted for drop-in compatibility with the Poisson constructor ---
@@ -146,6 +149,37 @@ class WarehouseDensityField:
                 f"got {output_mode!r}")
         self.output_mode = output_mode
 
+        # SLOW CONGESTION MEMORY -- a third channel, alongside mask and repulsion.
+        #
+        # The fast memory decays x0.7 per step: half-life 1.9 steps, gone in 7
+        # (warning) to 9.5 (fatal) steps. A median route here is ~54 steps and
+        # the learner's horizon (gamma 0.99) is 100. So the fast memory can teach
+        # "don't step into that cell right now" but cannot carry "that corridor
+        # keeps jamming" across a route -- its intensity, weighted by how much
+        # the value function cares about each future step, covers 3.3% of the
+        # horizon. The stranded fleets in cold_run13 started 11.5 hops out and
+        # made ~3 hops of net progress over an episode while losing only ~27
+        # steps to waits and holds: they moved, and remembered nothing.
+        #
+        # WHY A SEPARATE CHANNEL rather than a slower memory_decay_factor: one
+        # number cannot be both. At 0.98 a single warning splat stays above the
+        # floor for ~120 steps, so every brush in a one-cell-wide shaft would
+        # leave the only route repulsive for most of an episode. A separate
+        # channel lets the network learn how much the slow memory matters,
+        # instead of it being forced into the repulsion the convolution treats
+        # as "avoid".
+        #
+        # slow_decay_factor 0.987 gives a half-life of ln(0.5)/ln(0.987) = 53
+        # steps, close to route length. Requires output_mode "channels".
+        self.slow_channel = bool(slow_channel)
+        if self.slow_channel and output_mode != "channels":
+            raise ValueError(
+                "slow_channel needs output_mode='channels': it is a third input "
+                "channel. Folding it into the single affordance number is exactly "
+                "the conflation it exists to avoid.")
+        self.slow_decay_factor = float(slow_decay_factor)
+        self.slow_severity_scale = float(slow_severity_scale)
+
         # Per-step drivers for the cost curve. Without these, a flat ms/step is
         # ambiguous: on the 2026-09-13 run active fleets fell 196 -> 137 (about
         # 22% fewer stamps) while cost ROSE 4%, so two effects were moving in
@@ -171,6 +205,8 @@ class WarehouseDensityField:
         self.kernel_metric = kernel_metric
         self._kernel_nbhd_cache: Dict[Tuple[int, int, int], Optional[List[Tuple[Tuple[int, int, int], int]]]] = {}
         self._kernel_manhattan_fallbacks = 0
+        self._kernel_fallback_cells: List[Tuple[int, int, int]] = []
+        self._memory_offgrid_rejected = 0
         self._kernel_cache_cap = 200000
 
         # lambda_severity / decay_rate belonged to the Poisson kernel and have no
@@ -181,6 +217,9 @@ class WarehouseDensityField:
 
         # Spatial-Temporal Memory: (X, Y, Z) -> severity. Short-lived by design.
         self.collapse_memory: Dict[Tuple[int, int, int], float] = {}
+        # Same events, decaying on the route timescale. Only used with
+        # slow_channel; see the constructor for why it is a separate channel.
+        self.slow_memory: Dict[Tuple[int, int, int], float] = {}
 
         # ------------------------------------------------------------------
         # Precomputed local grid geometry (built once, reused every call)
@@ -209,7 +248,8 @@ class WarehouseDensityField:
         # Consumers size input_dim from output_dim, so it must reflect the mode.
         self.diamond_cells = self.output_dim
         if output_mode == "channels":
-            self.output_dim *= 2
+            # mask + repulsion, plus the slow congestion channel when enabled
+            self.output_dim *= (3 if self.slow_channel else 2)
 
         # Index of the centre cell WITHIN the flattened diamond output. Callers
         # that probe a single cell (recovery's Tier-1 check, braking) index
@@ -624,7 +664,22 @@ class WarehouseDensityField:
         """
         if not self._neighbour_flat_idx:
             return 0.0
-        vals = affordance[self._neighbour_flat_idx]
+
+        # MODE-AWARE. The neighbour indices point into the 231-cell diamond, so
+        # in "channels" mode -- where the array is [mask(231), repulsion(231)] --
+        # indexing it directly reads the MASK channel, which is 1.0 for every
+        # live cell. Uniform. Entropy exactly 1.0, for every fleet, forever.
+        #
+        # Caught by test_smoke_integration: entropy min=1.000 max=1.000 across a
+        # whole episode at ~15% occupancy, which is not a plausible reading. The
+        # unit tests all ran in "affordance" mode and so never saw it -- the same
+        # shape of miss as the lesion hook that sat unexecuted behind a flag.
+        if len(affordance) == 2 * self.diamond_cells:
+            mask = affordance[:self.diamond_cells]
+            rep = affordance[self.diamond_cells:]
+            vals = (mask / (1.0 + rep))[self._neighbour_flat_idx]
+        else:
+            vals = affordance[self._neighbour_flat_idx]
         total = float(vals.sum())
         if total <= 1e-9:
             return 0.0
@@ -706,11 +761,37 @@ class WarehouseDensityField:
         of the episode. max() means standing next to someone for 40 steps costs
         exactly the same as standing next to them for 1.
         """
-        pos_tuple = tuple(np.round(position).astype(int))
+        pos_tuple = tuple(int(v) for v in np.round(position))
+
+        # REFUSE CELLS THAT ARE NOT ON THE GRAPH.
+        #
+        # core_warehouse splats a warning event at the MIDPOINT between two
+        # fleets. Two fleets in adjacent aisles put that midpoint inside a rack,
+        # which is not a graph node -- so the graph kernel cannot place it, and
+        # every observer within range falls back to a Manhattan blob for the ~8
+        # steps the memory survives. Measured: 158 fallbacks from a single cell
+        # at (1, 3, 0), on a map whose aisles are all at even y.
+        #
+        # Recording it would also be wrong on its own terms: it marks a cell
+        # nothing can ever occupy, so the repulsion warns fleets away from a
+        # hazard that is not in a place they could go.
+        #
+        # Found by making the counter record its offending cells rather than
+        # reasoning about it -- after two confident wrong explanations
+        # (PYTHONHASHSEED, torch thread count), both of which the evidence then
+        # refuted.
+        if self.grid_pos_dict and pos_tuple not in self.grid_pos_dict:
+            self._memory_offgrid_rejected += 1
+            return
+
         severity = float(min(severity_multiplier, self.memory_cap))
         current = self.collapse_memory.get(pos_tuple, 0.0)
         if severity > current:
             self.collapse_memory[pos_tuple] = severity
+        if self.slow_channel:
+            slow_sev = severity * self.slow_severity_scale
+            if slow_sev > self.slow_memory.get(pos_tuple, 0.0):
+                self.slow_memory[pos_tuple] = slow_sev
 
     def step_decay(self):
         """
@@ -719,14 +800,24 @@ class WarehouseDensityField:
         neighbourhood in which an encounter is actually still relevant, versus
         the ~47 steps of full blockade the linear-0.1 version produced.
         """
-        if not self.collapse_memory:
-            return
-        decayed = {}
-        for pos, sev in self.collapse_memory.items():
-            new_sev = sev * self.memory_decay_factor
-            if new_sev > self.memory_floor:
-                decayed[pos] = new_sev
-        self.collapse_memory = decayed
+        # NOT an early return on an empty fast memory: that guard used to sit
+        # here, and with a slow memory beside it, any step on which the fast
+        # memory happened to be empty would have silently stopped the slow one
+        # decaying -- turning route-scale memory into permanent memory.
+        if self.collapse_memory:
+            decayed = {}
+            for pos, sev in self.collapse_memory.items():
+                new_sev = sev * self.memory_decay_factor
+                if new_sev > self.memory_floor:
+                    decayed[pos] = new_sev
+            self.collapse_memory = decayed
+        if self.slow_channel and self.slow_memory:
+            slow = {}
+            for pos, sev in self.slow_memory.items():
+                new_sev = sev * self.slow_decay_factor
+                if new_sev > self.memory_floor:
+                    slow[pos] = new_sev
+            self.slow_memory = slow
 
     # ----------------------------------------------------------------------
     # The field
@@ -817,7 +908,7 @@ class WarehouseDensityField:
             sz = int(round(float(source_pos[2])))
             stamp_cell(sx, sy, sz, severity)
 
-        def stamp_cell(sx: int, sy: int, sz: int, severity: float):
+        def stamp_cell(sx: int, sy: int, sz: int, severity: float, target=None):
             """
             The integer-cell core of stamp().
 
@@ -855,13 +946,21 @@ class WarehouseDensityField:
                 # the intended path, so it must not inflate the counter.
                 if self.kernel_metric == "graph":
                     self._kernel_manhattan_fallbacks += 1
+                    # Record the first few offending cells. This counter has
+                    # fired intermittently -- roughly one run in three -- and
+                    # two attempts to explain it from first principles were both
+                    # wrong (PYTHONHASHSEED, then torch thread count). Rather
+                    # than guess a third time, keep the evidence: the next time
+                    # it fires the cells are already in get_error_statistics().
+                    if len(self._kernel_fallback_cells) < 8:
+                        self._kernel_fallback_cells.append((sx, sy, sz))
                 dist = (
                     np.abs(self._rel_x - rx)
                     + np.abs(self._rel_y - ry)
                     + np.abs(self._rel_z - rz)
                 )
                 idx = np.minimum(dist, self._max_kernel_idx).astype(np.int64)
-                repulsion[...] += self._kernel[idx] * severity
+                (repulsion if target is None else target)[...] += self._kernel[idx] * severity
                 return
 
             for coords, hops in nbhd:
@@ -872,7 +971,7 @@ class WarehouseDensityField:
                 iy = coords[1] - _cy + L
                 iz = coords[2] - _cz + L
                 if 0 <= ix < S and 0 <= iy < S and 0 <= iz < S:
-                    repulsion[ix, iy, iz] += w * severity
+                    (repulsion if target is None else target)[ix, iy, iz] += w * severity
 
         # --- 0. Unregistered obstacles -------------------------------------
         # Humans, debris, a dropped pallet. Stamped HARDER than any fleet: a
@@ -887,10 +986,23 @@ class WarehouseDensityField:
         # Repulsion alone is a preference, and a large enough reward can outbid
         # a preference. The hard veto lives in
         # FleetNode.get_valid_action_mask(), which refuses the move outright.
+        _obstacle_rel = []
         if static_obstacles:
             for _cell in static_obstacles:
                 stamp_cell(int(_cell[0]), int(_cell[1]), int(_cell[2]),
                            static_obstacle_severity)
+                # Remember where it landed so the MASK can be zeroed after the
+                # mask is fetched, below. An obstacle is not traversable, so it
+                # is not an option -- and get_valid_action_mask() already vetoes
+                # moving into one. Leaving mask=1 would mean the affordance says
+                # "possible but unattractive" while the action mask says
+                # "impossible", and the entropy would count an option the fleet
+                # cannot take.
+                _ix = int(_cell[0]) - _cx + L
+                _iy = int(_cell[1]) - _cy + L
+                _iz = int(_cell[2]) - _cz + L
+                if 0 <= _ix < S and 0 <= _iy < S and 0 <= _iz < S:
+                    _obstacle_rel.append((_ix, _iy, _iz))
 
         # --- 1. Fleets -----------------------------------------------------
         # Own goal hoisted to plain floats. The near-goal discount below runs
@@ -1043,12 +1155,44 @@ class WarehouseDensityField:
                 severity = self.peer_severity
                 for k in range(1, self.projection_steps + 1):
                     severity *= self.projection_falloff
-                    stamp(fleet.current_pos + fleet.direction * k, severity)
+                    _p = fleet.current_pos + fleet.direction * k
+                    # SKIP CELLS THAT ARE NOT ON THE GRAPH.
+                    #
+                    # Dead reckoning extrapolates a straight line from the last
+                    # executed move, so a fleet at x=0 still carrying direction
+                    # -X projects to (-1, y, 0), (-2, y, 0), (-3, y, 0) -- off
+                    # the map entirely. Those are not graph cells, so the graph
+                    # kernel cannot place them and stamp() falls back to laying a
+                    # Manhattan blob centred OUTSIDE the warehouse.
+                    #
+                    # Found by test_smoke_integration: 813 kernel fallbacks in a
+                    # 60-step episode, all from three consecutive negative-x
+                    # cells -- exactly projection_steps of them. Every unit test
+                    # missed it because none put a fleet at a map edge still
+                    # carrying momentum into the wall.
+                    #
+                    # This is the defect intended-path projection exists to fix,
+                    # reachable through its own fallback.
+                    if self.grid_pos_dict:
+                        _c = (int(round(float(_p[0]))), int(round(float(_p[1]))),
+                              int(round(float(_p[2]))))
+                        if _c not in self.grid_pos_dict:
+                            continue
+                    stamp(_p, severity)
 
         # --- 2. Spatial-temporal collapse memory ---------------------------
         for crash_pos_tuple, severity in self.collapse_memory.items():
             stamp_cell(crash_pos_tuple[0], crash_pos_tuple[1],
                        crash_pos_tuple[2], severity)
+
+        # --- 2b. Slow congestion memory, into its OWN volume -----------------
+        # Through the same kernel as the fast memory, so the two are spatially
+        # comparable, but never added to repulsion.
+        slow = None
+        if self.slow_channel:
+            slow = np.zeros(self.grid_shape, dtype=np.float32)
+            for _sp, _ss in self.slow_memory.items():
+                stamp_cell(_sp[0], _sp[1], _sp[2], _ss, target=slow)
 
         # --- 3. Transform + structural mask --------------------------------
         # 1/(1+R) instead of clip(1-R): monotone, bounded in (0, 1], and it never
@@ -1056,8 +1200,30 @@ class WarehouseDensityField:
         # policy which direction is LESS bad.
         mask = self._structure_mask(center_idx).astype(np.float32)
 
+        # ZERO THE MASK AT OBSTACLE CELLS.
+        #
+        # This gives four states in two channels, all distinguishable:
+        #     free      mask 1, R 0
+        #     congested mask 1, R > 0
+        #     wall      mask 0, R 0
+        #     obstacle  mask 0, R > 0
+        #
+        # So the convolution gates an obstacle exactly like a wall -- correct,
+        # since neither can be traversed -- while the repulsion channel still
+        # says which of the two it is, and ray_hit_unknown carries the same fact
+        # to the base vector. A copy is taken because _structure_mask returns a
+        # CACHED array keyed by centre cell: writing through it would poison
+        # every later fleet standing on the same cell with one fleet's transient
+        # view of where a human happened to be.
+        if _obstacle_rel:
+            mask = mask.copy()
+            for _r in _obstacle_rel:
+                mask[_r] = 0.0
+
         if self._return_volume:
             # TWO CHANNELS, NOT MULTIPLIED. See get_local_volume().
+            if slow is not None:
+                return np.stack([mask, repulsion.astype(np.float32), slow], axis=0)
             return np.stack([mask, repulsion.astype(np.float32)], axis=0)
 
         if self.output_mode == "channels":
@@ -1070,10 +1236,13 @@ class WarehouseDensityField:
             # the scatter is a fixed index assignment, so undoing the packing is
             # free. Crucially this leaves the PIPELINE UNCHANGED: still one flat
             # vector per fleet, so memory.push and _pad_transition need no edits.
-            return np.concatenate([
+            parts = [
                 mask[self._diamond_mask],
                 repulsion.astype(np.float32)[self._diamond_mask],
-            ])
+            ]
+            if slow is not None:
+                parts.append(slow[self._diamond_mask])
+            return np.concatenate(parts)
 
         affordance = 1.0 / (1.0 + repulsion)
         affordance = affordance * mask

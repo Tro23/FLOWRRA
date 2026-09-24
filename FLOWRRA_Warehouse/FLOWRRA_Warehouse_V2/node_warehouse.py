@@ -160,6 +160,14 @@ def assign_goals_optimally(
     return assignment
 
 
+
+# "LOOK AT EVERYONE" (REWARD_DESIGN.md s.9): when True, every fleet's state ends
+# with the holon's integrity -- 0 if any collision anywhere, 0.5 if any warning,
+# 1 if clear. Set by FLOWRRA at construction, module-wide, so every fleet --
+# including ones created mid-run, and the probe that measures the state width --
+# carries the same width. Appended LAST so no existing feature moves.
+HOLON_PERCEPTION = False
+
 class ArrayDistanceMap:
     """
     A BFS distance map backed by an int32 array instead of a dict.
@@ -336,6 +344,8 @@ class FleetNode:
     #                   state-dependent is the same change at a different
     #                   altitude, and it is what the 13,041 collapse events look
     #                   like when the constant is wrong.
+    # Reserved for Phase 4. 1.0 = full. Nothing writes it yet.
+    sf_battery: float = 1.0
     sf_local_entropy: float = 1.0
     sf_throughput_t: float = 1.0
     ray_origin_recovered: int = 0
@@ -1106,6 +1116,19 @@ class FleetNode:
             # 314 separate times, 25.7% of Tier-1 escapes moving nowhere.
             float(getattr(self, "sf_is_waiting", 0.0)),
             float(getattr(self, "sf_wait_steps", 0.0)),
+            # ---- RESERVED: BATTERY (Phase 4) ---------------------------
+            # Always 1.0 until batteries exist. Reserved NOW because adding a
+            # dimension later forces a full cold retrain, and this one is
+            # certain to be needed: a fleet at 3% charge is neither active nor
+            # permanently immobile -- it is about to become an obstacle, on a
+            # timescale only it can see. ray_hit_permanent cannot express that,
+            # and neither can anything else currently in the vector.
+            #
+            # Same move as ray_hit_unknown in Phase 2: the channel went in
+            # empty, so adding real obstacles later cost a line of code instead
+            # of a retrain. A constant costs one input weight that learns to
+            # ignore it; a missing dimension costs hours of training.
+            float(getattr(self, "sf_battery", 1.0)),
         ], dtype=np.float32)
 
     def get_gibbs_state(self) -> np.ndarray:
@@ -1170,6 +1193,10 @@ class FleetNode:
             heading = np.arctan2(self.direction[1], self.direction[0]) / np.pi
             state_components.append(np.array([heading], dtype=np.float32))
 
+        if HOLON_PERCEPTION:
+            state_components.append(np.array(
+                [float(getattr(self, "sf_holon_integrity", 1.0))], dtype=np.float32))
+
         return np.concatenate(state_components).astype(np.float32)
 
     def state_layout(self) -> Dict[str, Tuple[int, int]]:
@@ -1199,7 +1226,7 @@ class FleetNode:
             ("ray_hit_permanent", 6),
             ("ray_hit_unknown", 6),
             ("goal_gradient", 6),
-            ("situation_features", 8),
+            ("situation_features", 9),
             ("gibbs_state", 2),
         ]
         if self.use_orientation:

@@ -330,21 +330,57 @@ def main():
                    goal_distance_maps=probe["gdm"], shared_pool_mode=True,
                    goal_pool=probe["goal_pool"])
     n0 = penv.nodes[0]
-    input_dim = (len(n0.get_state_vector(penv.nodes))
-                 + len(penv.density.get_local_affordance(n0.current_pos, penv.nodes, set())))
+    base_dim = len(n0.get_state_vector(penv.nodes))
+    input_dim = base_dim + penv.density.output_dim
+
+    # ---- FLAG CONSISTENCY, CHECKED BEFORE A LONG RUN STARTS -----------------
+    # density.output_mode and gnn.encoder MUST move together. With
+    # output_mode="channels" the density half is a packed 2-channel diamond --
+    # 462 numbers that only mean anything once scattered back into a cube and
+    # convolved. Feed that to the flat encoder and it builds Linear(545, 128)
+    # over an unstructured blob: no error, no warning, and WORSE than the
+    # 231-dim affordance it replaced, because the mask and the repulsion are now
+    # interleaved instead of combined.
+    #
+    # This would have been silent. It is a hard stop instead: an hour into a
+    # 100-episode run is a bad time to discover the encoder was never on.
+    _enc = CONFIG["gnn"].get("encoder", "flat")
+    _omode = CONFIG["density"].get("output_mode", "affordance")
+    if (_enc == "conv") != (_omode == "channels"):
+        raise SystemExit(
+            f"CONFIG mismatch: gnn.encoder={_enc!r} with "
+            f"density.output_mode={_omode!r}. Set them together -- "
+            f"('conv','channels') or ('flat','affordance').")
+
+    _edim = int(CONFIG["gnn"].get("edge_feature_dim", 0))
+    logger.info(
+        f"flags | encoder={_enc} output_mode={_omode} edge_dim={_edim} "
+        f"adjacency={CONFIG['proximity'].get('adjacency_metric')} "
+        f"rays={CONFIG['density'].get('ray_transform')} "
+        f"waiting={CONFIG['waiting'].get('enabled')} "
+        f"obstacles={CONFIG.get('obstacles', {}).get('enabled')} "
+        f"despawn={CONFIG.get('episode', {}).get('despawn_on_delivery')}")
 
     agent = GNNAgent(
-        node_feature_dim=input_dim, edge_feature_dim=0,
+        node_feature_dim=input_dim, edge_feature_dim=_edim,
         action_size=CONFIG["gnn"]["action_size"],
         hidden_dim=CONFIG["gnn"]["hidden_dim"],
         num_layers=CONFIG["gnn"]["num_layers"],
         n_heads=CONFIG["gnn"]["num_heads"],
         reward_heads=heads, head_weights=weights,
+        double_dqn=bool(CONFIG["training"].get("double_dqn", False)),
         dropout=CONFIG["gnn"]["dropout"], lr=CONFIG["gnn"]["learning_rate"],
         gamma=CONFIG["training"]["gamma"],
         buffer_capacity=CONFIG["training"]["buffer_capacity"],
         batch_size=CONFIG["training"]["batch_size"],
         stability_coef=CONFIG["gnn"]["stability_coef"],
+        # Without these three the conv encoder silently is not built, whatever
+        # the config says: encoder_mode defaults to "flat", and the network has
+        # no way to know where the base half ends or how to scatter the packed
+        # diamond back into a cube.
+        encoder_mode=_enc,
+        base_feature_dim=base_dim,
+        density_diamond_mask=penv.density._diamond_mask,
     )
     agent.cold_start = bool(args.cold_start)
     if args.cold_start and args.resume:
@@ -431,10 +467,21 @@ def main():
                "action_override_rate": est["action_override_rate"],
                "gradient_agreement": env.get_gradient_agreement(),
                "mean_hops_remaining": left}
+
+        # Why each undelivered fleet failed, and how far apart fleets ended up.
+        # These are the only columns that say anything about the ~8 fleets per
+        # episode that quietly do not arrive -- every other metric has been
+        # improving while completion sat flat, which means the cause was never
+        # in the instrumentation.
+        row.update({k: v for k, v in est.items()
+                    if k.startswith(("incomplete_", "hops_", "sep_", "orders_",
+                                     "tier1_", "tier2_", "recurrence_", "doorstep_", "start_hops_",
+                                     "steps_held_", "steps_waiting_",
+                                     "convoy_", "held_pair_", "rwd_"))})
         row.update({f"loss_{h}": mean_hl[h] for h in heads})
         logs.append(row)
 
-        if ep % 50 == 0:
+        if ep % 6 == 0:
             os.makedirs(args.out, exist_ok=True)
             agent.save(os.path.join(args.out, "flowrra_curriculum.pth"))
             pd.DataFrame(logs).to_csv(os.path.join(args.out, "curriculum_metrics.csv"), index=False)

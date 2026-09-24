@@ -38,7 +38,7 @@ COMPATIBILITY
   exactly as before and published numbers can be reproduced.
 """
 
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 import numpy as np
 
 
@@ -124,6 +124,40 @@ class WarehouseLoop:
 
         self.integrity_history.append(self.current_integrity)
         return self.current_integrity
+
+    def peek_conflicts(self, proximity: Any) -> Tuple[Set[str], Set[str]]:
+        """
+        Who is colliding or in a warning zone RIGHT NOW -- without recording it.
+
+        WHY THIS EXISTS. check_integrity() runs at the START of a step, so it
+        sees positions produced by the PREVIOUS step's actions, and the -50
+        collision penalty it drives then lands on the CURRENT action. Measured
+        2026-09-20: 100% of penalties were for overlaps that existed before the
+        penalised action ran, and in 83% of cases that action had just RESOLVED
+        the overlap -- the fleets were no longer touching afterwards and were
+        penalised anyway.
+
+        So the action that causes a collision gets nothing, and the action that
+        fixes it gets the largest penalty in the system. Not a delay -- an
+        inversion.
+
+        This is a read-only second look, taken AFTER the action loop, purely to
+        attribute the reward. It must not touch total_collisions,
+        current_integrity or integrity_history, all of which belong to the
+        start-of-step check that recovery and the metrics are built on.
+        """
+        deadlocked: Set[str] = set()
+        warning: Set[str] = set()
+        if proximity is None:
+            return deadlocked, warning
+        for a_id, b_id, dist in proximity.pairs(radius=self.warning_threshold):
+            if dist <= self.collision_threshold:
+                deadlocked.add(a_id)
+                deadlocked.add(b_id)
+            else:
+                warning.add(a_id)
+                warning.add(b_id)
+        return deadlocked, warning
 
     def _sweep_graph(self, proximity: Any, timestep: int):
         """

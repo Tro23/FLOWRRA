@@ -208,6 +208,8 @@ class FLOWRRA:
             kernel_metric=CONFIG["density"].get("kernel_metric", "graph"),
             output_mode=CONFIG["density"].get("output_mode", "affordance"),
             slow_channel=CONFIG["density"].get("slow_channel", False),
+            paths_channels=CONFIG["density"].get("paths_channels", False),
+            entropy_fix=CONFIG["density"].get("entropy_fix", False),
             slow_decay_factor=CONFIG["density"].get("slow_decay_factor", 0.987),
             slow_severity_scale=CONFIG["density"].get("slow_severity_scale", 1.0),
             projection_mode=CONFIG["density"].get("projection_mode", "intended"),
@@ -536,6 +538,42 @@ class FLOWRRA:
             raise ValueError(f"unknown reward_decomposition.mode {self.reward_mode!r}")
         _sc = rd.get("scales", {}) or {}
         self.priority_scales = {h: float(_sc.get(h, 1.0)) for h in PRIORITY_HEADS}
+        # The recovery head's column, value-scaled like the other heads
+        # (cold_run18: legacy integrity -0.703 per active fleet-step / (1-gamma)
+        # = 70.3). Unscaled, its loss was ~100x the three heads' and trained the
+        # shared layers almost alone in cold_run19. Absent -> 1.0 (cold_run19).
+        self.holon_scale = float(_sc.get("holon", 1.0))
+        # Recovery events are the HOLON's decision, so they are judged only in
+        # the holon column. In the per-fleet safety head (weight 6 when
+        # choosing) the +9 preemptive bonus rewarded fleets for ending up in a
+        # warning that recovery rescued. False keeps them out of safety.
+        # Absent -> True (cold_run19).
+        self.safety_includes_recovery = bool(rd.get("safety_includes_recovery", True))
+        # CHARGE APPROACH, NOT PRESENCE (PATH_AWARENESS.md). The warning charge
+        # today depends on how CLOSE a fleet is, whatever the reason, so two
+        # fleets following calmly in a convoy pay every step as if about to
+        # collide -- a policy trained that way learns to avoid following even
+        # where following is the best untangle. True: each fleet pays for its
+        # OWN movement toward a neighbour during this step's action, relative to
+        # full speed; convoys (no closing) pay nothing. Priority mode only.
+        # False: presence-based, exactly as before.
+        self.approach_warning = bool(rd.get("approach_warning", False))
+        # Measurement (always on, changes nothing): the approach charge the new
+        # rule WOULD make, and standoffs -- pairs inside the warning distance
+        # where neither fleet moved. Under approach-charging a standoff is not
+        # charged; only the idle penalty (after the 3-step mutual-wait cap)
+        # presses on it, ~7x weaker than the presence charge was.
+        self._approach_total = 0.0
+        self._standoff_run: Dict = {}
+        self._standoff_pairsteps = 0
+        self._standoff_longest = 0
+        self._standoff_past_cap = 0
+        # CONFLICT CHOICES (measurement only): for each fleet that STARTED a
+        # step in conflict, what its action did -- waited, followed a neighbour
+        # (moving together, gap not shrinking), rerouted (moved away from its
+        # goal), or proceeded along its route. The reflex path awareness exists
+        # to teach, made visible.
+        self._choice = {"wait": 0, "follow": 0, "reroute": 0, "proceed": 0}
         if self.reward_mode == "priority" and min(self.priority_scales.values()) <= 0:
             raise ValueError(f"priority scales must be positive: {self.priority_scales}")
         self.K = len(self.reward_heads)
@@ -1931,7 +1969,8 @@ class FLOWRRA:
             self._pending_integrity_by_fleet[fid] = (
                 self._pending_integrity_by_fleet.get(fid, 0.0) + value)
 
-    def _priority_rewards(self, T, shadow, sh_warn, include_potential: bool):
+    def _priority_rewards(self, T, shadow, sh_warn, include_potential: bool,
+                          include_recovery: bool = True, warn_override=None):
         """
         The three priority heads, per fleet, from the legacy terms T [N, terms].
         Shared by shadow mode and the live priority reward so they cannot drift.
@@ -1951,6 +1990,8 @@ class FLOWRRA:
         else:
             warn = T[:, ti[("safety", "warning")]]
             dl, wn = self._step_deadlocked, self._step_warning
+        if warn_override is not None:
+            warn = warn_override
         coh = np.array([-1.0 if n.id in dl else (-0.5 if n.id in wn else 0.0)
                         for n in self.nodes], dtype=np.float64)
         eff = (T[:, ti[("goal", "progress")]] + T[:, ti[("time", "idle")]]
@@ -1958,11 +1999,69 @@ class FLOWRRA:
         if include_potential:
             eff = eff + shadow[:, 0]
         return {
-            "safety": T[:, ti[("safety", "collision")]] + warn + coh + shadow[:, 1],
+            "safety": (T[:, ti[("safety", "collision")]] + warn + coh
+                       + (shadow[:, 1] if include_recovery else 0.0)),
             "delivery": (T[:, ti[("goal", "delivery")]] + T[:, ti[("rescue", "pickup")]]
                          + T[:, ti[("rescue", "rescue_delivery")]]),
             "efficiency": eff,
         }
+
+    def _approach_charges(self, carry, pairs, dead):
+        """
+        Per-fleet approach charge for THIS step's action, and this step's
+        standoff pairs.
+
+        For each pair inside the warning distance AFTER the action: if the gap
+        between them shrank during the action, that closing is split between
+        the two by how much each moved toward the other; a fleet's share is its
+        approach. A gap that held or grew -- a convoy, a fleet backing off --
+        costs nobody anything. Charge = warning_zone x closeness(after) x
+        min(1, approach / base_speed), so driving at a neighbour at full speed
+        costs exactly the old worst warning. A fleet keeps its worst charge over
+        all its pairs. Pre-move positions come from phase A's carry -- AFTER
+        recovery -- so a teleport is never mistaken for an approach. Fleets in a
+        post-action collision are skipped: the collision charge covers them.
+        """
+        base = float(CONFIG["warehouse"].get("base_speed", 0.5)) or 0.5
+        W = self.loop.warning_threshold
+        span = max(1e-6, W - self.loop.collision_threshold)
+        idx = {n.id: i for i, n in enumerate(self.nodes)}
+        out = np.zeros(len(self.nodes), dtype=np.float64)
+        standoff = set()
+        for a_id, b_id, dist in pairs:
+            ia, ib = idx.get(a_id), idx.get(b_id)
+            if ia is None or ib is None or ia not in carry or ib not in carry:
+                continue
+            close = float(np.clip((W - dist) / span, 0.0, 1.0))
+            pa0 = np.asarray(carry[ia][3], dtype=np.float64)
+            pb0 = np.asarray(carry[ib][3], dtype=np.float64)
+            da = np.asarray(self.nodes[ia].current_pos, dtype=np.float64) - pa0
+            db = np.asarray(self.nodes[ib].current_pos, dtype=np.float64) - pb0
+            if np.linalg.norm(da) < 1e-6 and np.linalg.norm(db) < 1e-6:
+                standoff.add(frozenset((a_id, b_id)))
+            u = pb0 - pa0
+            nu = float(np.linalg.norm(u))
+            if nu < 1e-9 or close <= 0.0:
+                continue
+            # CLOSING of the gap, not movement toward the other's old position:
+            # a convoy follower moves toward where its leader WAS, while the
+            # leader moves away by the same amount -- the gap is unchanged and
+            # nobody should pay. So: charge only if the gap actually shrank,
+            # and split that closing between the two by how much each moved
+            # toward the other.
+            closing = nu - float(np.linalg.norm((pb0 + db) - (pa0 + da)))
+            if closing <= 1e-9:
+                continue
+            u = u / nu
+            ca, cb = max(0.0, float(da @ u)), max(0.0, float(db @ -u))
+            if ca + cb <= 1e-12:
+                continue
+            for i, fid, part in ((ia, a_id, ca), (ib, b_id, cb)):
+                if fid in dead or part <= 0.0:
+                    continue
+                appr = closing * part / (ca + cb)
+                out[i] = min(out[i], self.reward_warning_zone * close * min(1.0, appr / base))
+        return out, standoff
 
     def _stamp_holon(self) -> None:
         """
@@ -2253,6 +2352,39 @@ class FLOWRRA:
         return len(self.immobile_nodes) == len(self.nodes)
         
 
+    def _path_stats_summary(self) -> Dict[str, float]:
+        """
+        What the path channels (4: my route, 5: their routes) showed fleets this
+        episode -- one count per fleet view, i.e. per fleet-step, for fleets
+        with a route ahead. Measurement only; empty when the channels are off.
+          path_views               fleet views with a route ahead
+          path_seeing_pct          % with at least one other route in view
+          path_routes_seen_mean    other routes in view, when any
+          path_shared_pct          % where another route passes through my route
+                                   at all (includes a fleet trailing behind me)
+          path_overlap_mean        their-route weight on my shared cells, when shared
+          path_contested_pct       % where another route reaches one of my cells
+                                   NO LATER than I do (head-on, crossing, or the
+                                   leader ahead of a follower)
+          path_contested_next_pct  % where that contested cell is my very NEXT one
+          path_contested_soonest   cells ahead of the nearest contested cell (1 = next)
+        """
+        d = getattr(self, "density", None)
+        ps = getattr(d, "path_stats", None)
+        if not ps or not getattr(d, "paths_channels", False):
+            return {}
+        v, se, sh, co = ps["views"], ps["seeing"], ps["shared"], ps["contested"]
+        return {
+            "path_views": v,
+            "path_seeing_pct": 100.0 * se / v if v else 0.0,
+            "path_routes_seen_mean": ps["routes_seen"] / se if se else 0.0,
+            "path_shared_pct": 100.0 * sh / v if v else 0.0,
+            "path_overlap_mean": ps["overlap_sum"] / sh if sh else 0.0,
+            "path_contested_pct": 100.0 * co / v if v else 0.0,
+            "path_contested_next_pct": 100.0 * ps["contested_next"] / v if v else 0.0,
+            "path_contested_soonest": ps["contested_soonest_sum"] / co if co else 0.0,
+        }
+
     def get_error_statistics(self) -> Dict[str, Any]:
         """Error/handover counters for the training log."""
         return {
@@ -2359,6 +2491,11 @@ class FLOWRRA:
                              ("typical", d["abs"] / max(1, d["nz"])))},
             **{f"rwd_live_{sg}_{h}": round(d[sg], 4)
                for h, d in self._live.items() for sg in ("pos", "neg")},
+            "rwd_approach_total": round(self._approach_total, 3),
+            "rwd_standoff_pairsteps": self._standoff_pairsteps,
+            "rwd_standoff_longest": self._standoff_longest,
+            "rwd_standoff_past_cap": self._standoff_past_cap,
+            **{f"rwd_choice_{k}": v for k, v in self._choice.items()},
             "rwd_warnundo_fleetsteps": self._warnundo_n,
             "rwd_warnundo_mismatched": self._warnundo_mismatched,
             "rwd_warnundo_escaped_kept": self._warnundo_escaped_kept,
@@ -2429,6 +2566,7 @@ class FLOWRRA:
                               if self._brake_eval_steps else float("nan")),
             "pickups_open": len(self.open_pickups),
             "stopped_fleets": sorted(self.stopped_nodes),
+            **self._path_stats_summary(),
         }
 
     def _perceive(self, node) -> np.ndarray:
@@ -3816,6 +3954,7 @@ class FLOWRRA:
         step_shadow_array = (np.asarray(step_shadow, dtype=np.float64) if step_shadow
                              else np.zeros((0, 2), dtype=np.float64))
         _sh_warn = None      # corrected warning, filled by the re-attribution
+        _sh_approach = None  # approach charge, filled by the re-attribution
 
         # ---- SECOND PASS: charge the collision to the action that caused it ---
         #
@@ -3842,6 +3981,39 @@ class FLOWRRA:
              self._post_action_warning) = self.loop.peek_conflicts(self.proximity)
             _sh = self.HEAD["safety"]
             _sh_warn = np.zeros(len(step_rewards_array), dtype=np.float64)
+            # APPROACH, measured across this step's action only (see helper).
+            _sh_approach, _so = self._approach_charges(
+                _carry, list(self.proximity.pairs(radius=self.loop.warning_threshold)),
+                self._post_action_deadlocked)
+            self._approach_total += float(_sh_approach.sum())
+            _runs = {k: self._standoff_run.get(k, 0) + 1 for k in _so}
+            self._standoff_run = _runs
+            self._standoff_pairsteps += len(_so)
+            if _runs:
+                self._standoff_longest = max(self._standoff_longest, max(_runs.values()))
+            self._standoff_past_cap += sum(1 for v in _runs.values() if v > self.mutual_wait_steps)
+            _ix = {n.id: i for i, n in enumerate(self.nodes)}
+            _partners: Dict = {}
+            for _pa, _pb, _pd in self.proximity.pairs(radius=self.loop.warning_threshold):
+                _partners.setdefault(_pa, []).append(_pb)
+                _partners.setdefault(_pb, []).append(_pa)
+            for _fid in self._step_warning:
+                _i = _ix.get(_fid)
+                if _i is None or _i not in _carry or _fid in self.immobile_nodes:
+                    continue
+                _mv, _bs, _od, _op = _carry[_i]
+                _nd = self.nodes[_i]
+                if _mv < 1e-6:
+                    self._choice["wait"] += 1
+                    continue
+                _ndist = _nd.get_graph_distance_to_goal()
+                if _ndist is not None and _od is not None and _ndist > _od + 1e-6:
+                    self._choice["reroute"] += 1
+                elif any(self._is_following(_nd, self.nodes[_ix[_p]])
+                         for _p in _partners.get(_fid, []) if _p in _ix):
+                    self._choice["follow"] += 1
+                else:
+                    self._choice["proceed"] += 1
             _tc = self._TI[("safety", "collision")]
             _tw = self._TI[("safety", "warning")]
             for i, node in enumerate(self.nodes):
@@ -3959,13 +4131,15 @@ class FLOWRRA:
             if self.reward_mode == "priority":
                 _pr = self._priority_rewards(step_terms_array.astype(np.float64),
                                              step_shadow_array, _sh_warn,
-                                             include_potential=False)
+                                             include_potential=False,
+                                             include_recovery=self.safety_includes_recovery,
+                                             warn_override=(_sh_approach if self.approach_warning else None))
                 # Fourth column, for the RECOVERY HEAD only: the legacy integrity head
                 # (holon coherence + every recovery event at full size, identical on
                 # every fleet), unscaled -- exactly the signal it trained on before.
                 _push_rewards = np.column_stack(
                     [_pr[h] / self.priority_scales[h] for h in PRIORITY_HEADS]
-                    + [step_rewards_array[:, self.HEAD["integrity"]]]).astype(np.float32)
+                    + [step_rewards_array[:, self.HEAD["integrity"]] / self.holon_scale]).astype(np.float32)
                 _am = np.asarray(active_mask) > 0
                 for _j, _h in enumerate(PRIORITY_HEADS):
                     _c = _push_rewards[_am, _j]
@@ -3994,6 +4168,14 @@ class FLOWRRA:
                 # BEFORE the action loop, so it describes where fleets were.
                 next_valid_mask=np.array(
                     [n.get_valid_action_mask() for n in self.nodes], dtype=bool),
+                # Who can still act in the NEXT state. A fleet that retired or
+                # stopped during this step reads 0 here, so its own bootstrap ends
+                # with this transition (GNNAgent.learn's per-fleet terminal).
+                # Stopped fleets never resume (only despawning clears the set);
+                # a recalled rescuer simply starts a fresh life.
+                next_active_mask=np.array(
+                    [n.id not in self.immobile_nodes for n in self.nodes],
+                    dtype=np.float32),
             )
         
         # ---- REWARD COMPOSITION (measurement only) -------------------------

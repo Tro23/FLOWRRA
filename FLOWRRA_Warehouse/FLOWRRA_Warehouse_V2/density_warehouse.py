@@ -80,6 +80,8 @@ class WarehouseDensityField:
         kernel_metric: str = "graph",
         output_mode: str = "affordance",
         slow_channel: bool = False,
+        paths_channels: bool = False,
+        entropy_fix: bool = False,
         slow_decay_factor: float = 0.987,
         slow_severity_scale: float = 1.0,
         grid_pos_dict: Optional[Dict[Tuple[int, int, int], str]] = None,
@@ -171,6 +173,31 @@ class WarehouseDensityField:
         #
         # slow_decay_factor 0.987 gives a half-life of ln(0.5)/ln(0.987) = 53
         # steps, close to route length. Requires output_mode "channels".
+        # PATHS AHEAD (PATH_AWARENESS.md): two more channels -- the perceiving
+        # fleet's OWN route and the cumulative routes of every moving neighbour,
+        # each the next `local_radius` cells along the route by greedy descent
+        # on the goal BFS map, stamped at exact cells with a linear fade. Purely
+        # additive: the 3-step trail inside repulsion is untouched, because
+        # recovery's escape scoring reads repulsion.
+        self.paths_channels = bool(paths_channels)
+        # PATH STATS -- measurement only. What the path channels showed fleets
+        # this episode, one count per fleet view (the view is memoised, so once
+        # per fleet-step). This module is rebuilt every episode, so they reset
+        # by themselves. Read by FLOWRRA._path_stats_summary().
+        self.path_stats = {"views": 0, "seeing": 0, "routes_seen": 0,
+                           "shared": 0, "overlap_sum": 0.0,
+                           "contested": 0, "contested_next": 0,
+                           "contested_soonest_sum": 0}
+        if self.paths_channels and output_mode != "channels":
+            raise ValueError("paths_channels needs output_mode='channels': they are "
+                             "the fourth and fifth input channels")
+        # ENTROPY FIX. action_entropy reads mask and repulsion from a two-channel
+        # array; with three or more channels it fell through to the branch that
+        # reads the MASK channel -- the very bug its own comment describes
+        # ("exactly 1.0 for every fleet, forever"). Live since the slow channel
+        # arrived (cold_run14). True: read the first two channels whatever
+        # follows. False: as before.
+        self.entropy_fix = bool(entropy_fix)
         self.slow_channel = bool(slow_channel)
         if self.slow_channel and output_mode != "channels":
             raise ValueError(
@@ -249,7 +276,7 @@ class WarehouseDensityField:
         self.diamond_cells = self.output_dim
         if output_mode == "channels":
             # mask + repulsion, plus the slow congestion channel when enabled
-            self.output_dim *= (3 if self.slow_channel else 2)
+            self.output_dim *= (2 + (1 if self.slow_channel else 0) + (2 if self.paths_channels else 0))
 
         # Index of the centre cell WITHIN the flattened diamond output. Callers
         # that probe a single cell (recovery's Tier-1 check, braking) index
@@ -473,7 +500,7 @@ class WarehouseDensityField:
 
         return self.grid_pos_dict.get(tuple(int(v) for v in np.round(probe)))
 
-    def _intended_path(self, fleet: Any) -> Optional[List[List[Tuple[Tuple[int, int, int], float]]]]:
+    def _intended_path(self, fleet: Any, horizon: Optional[int] = None) -> Optional[List[List[Tuple[Tuple[int, int, int], float]]]]:
         """
         The cells this fleet INTENDS to occupy over the next projection_steps
         moves, by greedy descent on its own precomputed goal BFS distance map.
@@ -517,10 +544,11 @@ class WarehouseDensityField:
         # 60% for every stationary peer. For a MID-EDGE fleet, `start` is the
         # cell it is crossing into and has not been stamped, so it is kept.
         # The trail therefore always means "cells this peer will occupy NEXT".
+        _h = self.projection_steps if horizon is None else int(horizon)
         steps: List[List[Tuple[Tuple[int, int, int], float]]] = []
         frontier: Dict[str, float] = {start: 1.0}
 
-        for k in range(self.projection_steps + 1):
+        for k in range(_h + 1):
             cells = []
             for nid, w in frontier.items():
                 coords = self._coords_by_id.get(nid)
@@ -557,7 +585,7 @@ class WarehouseDensityField:
 
         # NOT `steps or None`. An empty list means "computed, nothing ahead" and
         # must stay distinguishable from None ("could not compute").
-        return steps[: self.projection_steps]
+        return steps[: _h]
 
     def _fleet_cell(self, fleet: Any) -> Tuple[int, int, int]:
         """
@@ -633,6 +661,134 @@ class WarehouseDensityField:
     # ----------------------------------------------------------------------
     # Spatial-temporal memory
     # ----------------------------------------------------------------------
+    def _cached_path_reach(self, fleet: Any):
+        """
+        The route over the PATHS horizon (local_radius steps), memoised on the
+        fleet exactly like _cached_intended_path but in its own slot, so the
+        3-step repulsion trail's memo is never displaced or mixed with it.
+        """
+        pos = fleet.current_pos
+        direction = getattr(fleet, "direction", None)
+        token = (
+            self._field_token,
+            float(pos[0]), float(pos[1]), float(pos[2]),
+            0.0 if direction is None else float(direction[0]),
+            0.0 if direction is None else float(direction[1]),
+            0.0 if direction is None else float(direction[2]),
+            getattr(fleet, "current_goal_id", None),
+            self.local_radius,
+        )
+        memo = getattr(fleet, "_ip_memo_reach", None)
+        if memo is not None and memo[0] == token:
+            return memo[1]
+        val = self._intended_path(fleet, horizon=self.local_radius)
+        fleet._ip_memo_reach = (token, val)
+        return val
+
+    def _paths_volumes(self, center_idx, all_fleets, frozen_node_ids, own_id, center_pos):
+        """
+        Channel 4, the fleet's OWN route; channel 5, the cumulative routes of
+        every moving neighbour. Each route: the next local_radius cells by
+        greedy descent on the goal BFS map, ties split into a probability cloud;
+        step k stamped at its exact cell with weight x (H - k) / H. Exact cells,
+        no kernel: "this fleet will be HERE" should stay sharp. Crossing routes
+        add up, so contention shows as brightness. Parked fleets have no intent
+        and are skipped; so is any fleet too far away for its route to enter
+        the diamond.
+        """
+        L = self.local_radius
+        S = 2 * L + 1
+        H = max(1, L)
+        own = np.zeros(self.grid_shape, dtype=np.float32)
+        their = np.zeros(self.grid_shape, dtype=np.float32)
+        c = np.asarray(center_idx, dtype=np.int64)
+
+        def put(vol, path, kmap=None):
+            # Returns whether anything landed in view, and records in kmap the
+            # earliest step each cell is reached (both for the path stats); the
+            # stamping itself is unchanged.
+            stamped = False
+            if not path:
+                return stamped
+            for k, cells in enumerate(path):
+                fade = (H - k) / H
+                for coords, w in cells:
+                    i = np.asarray(coords, dtype=np.int64) - c + L
+                    if (i >= 0).all() and (i < S).all():
+                        vol[i[0], i[1], i[2]] += np.float32(w * fade)
+                        if kmap is not None:
+                            key = (int(i[0]), int(i[1]), int(i[2]))
+                            kmap[key] = min(kmap.get(key, k), k)
+                        # "In view" means inside the diamond the state keeps,
+                        # not merely inside the cube around it.
+                        if self._diamond_mask[i[0], i[1], i[2]]:
+                            stamped = True
+            return stamped
+
+        own_route, routes_seen, their_k = None, 0, {}
+
+        for fleet in all_fleets:
+            if own_id is not None:
+                is_self = fleet.id == own_id
+            else:
+                is_self = bool(np.array_equal(fleet.current_pos, center_pos))
+            if not is_self:
+                if fleet.id in frozen_node_ids:
+                    continue
+                far = np.abs(np.round(np.asarray(fleet.current_pos, dtype=np.float64)) - c).max()
+                if far > L + H:
+                    continue
+            _route = self._cached_path_reach(fleet)
+            if is_self:
+                put(own, _route)
+                own_route = _route
+            elif put(their, _route, their_k):
+                routes_seen += 1
+        self._record_path_stats(own_route, their, their_k, routes_seen, c, L, S)
+        return own, their
+
+    def _record_path_stats(self, own_route, their, their_k, routes_seen, c, L, S):
+        """
+        Measurement only. Walks this fleet's own route step by step (step 0 =
+        its NEXT cell) and reads the other routes there.
+          SHARED     another route passes through one of my cells at all --
+                     including a fleet trailing behind me in a convoy.
+          CONTESTED  another route reaches one of my cells NO LATER than I do:
+                     head-on and crossing traffic, and a follower's view of the
+                     leader ahead of it. A fleet that only trails me does not
+                     contest my route -- it reaches each cell after I do.
+        A fleet with no route ahead (parked, arrived) is not counted.
+        """
+        if not own_route:
+            return
+        st = self.path_stats
+        st["views"] += 1
+        if routes_seen:
+            st["seeing"] += 1
+            st["routes_seen"] += routes_seen
+        shared, contested_at, overlap, counted = False, None, 0.0, set()
+        for k, cells in enumerate(own_route):
+            for coords, _w in cells:
+                i = np.asarray(coords, dtype=np.int64) - c + L
+                if (i >= 0).all() and (i < S).all():
+                    key = (int(i[0]), int(i[1]), int(i[2]))
+                    v = float(their[key])
+                    if v > 0.0:
+                        shared = True
+                        if key not in counted:
+                            overlap += v
+                            counted.add(key)
+                        if contested_at is None and their_k.get(key, k + 1) <= k:
+                            contested_at = k
+        if shared:
+            st["shared"] += 1
+            st["overlap_sum"] += overlap
+        if contested_at is not None:
+            st["contested"] += 1
+            st["contested_soonest_sum"] += contested_at + 1
+            if contested_at == 0:
+                st["contested_next"] += 1
+
     def action_entropy(self, affordance: np.ndarray) -> float:
         """
         How DECISIVE this fleet's immediate options are, in [0, 1].
@@ -674,9 +830,11 @@ class WarehouseDensityField:
         # whole episode at ~15% occupancy, which is not a plausible reading. The
         # unit tests all ran in "affordance" mode and so never saw it -- the same
         # shape of miss as the lesion hook that sat unexecuted behind a flag.
-        if len(affordance) == 2 * self.diamond_cells:
-            mask = affordance[:self.diamond_cells]
-            rep = affordance[self.diamond_cells:]
+        _D = self.diamond_cells
+        if len(affordance) == 2 * _D or (
+                self.entropy_fix and len(affordance) > 2 * _D and len(affordance) % _D == 0):
+            mask = affordance[:_D]
+            rep = affordance[_D:2 * _D]   # identical to [_D:] when there are two channels
             vals = (mask / (1.0 + rep))[self._neighbour_flat_idx]
         else:
             vals = affordance[self._neighbour_flat_idx]
@@ -1220,11 +1378,18 @@ class WarehouseDensityField:
             for _r in _obstacle_rel:
                 mask[_r] = 0.0
 
+        own_path = their_paths = None
+        if self.paths_channels:
+            own_path, their_paths = self._paths_volumes(
+                center_idx, all_fleets, frozen_node_ids, own_id, center_pos)
         if self._return_volume:
             # TWO CHANNELS, NOT MULTIPLIED. See get_local_volume().
+            _vols = [mask, repulsion.astype(np.float32)]
             if slow is not None:
-                return np.stack([mask, repulsion.astype(np.float32), slow], axis=0)
-            return np.stack([mask, repulsion.astype(np.float32)], axis=0)
+                _vols.append(slow)
+            if own_path is not None:
+                _vols += [own_path, their_paths]
+            return np.stack(_vols, axis=0)
 
         if self.output_mode == "channels":
             # PACKED DIAMOND: mask then repulsion, each over the 231 live cells.
@@ -1242,6 +1407,8 @@ class WarehouseDensityField:
             ]
             if slow is not None:
                 parts.append(slow[self._diamond_mask])
+            if own_path is not None:
+                parts += [own_path[self._diamond_mask], their_paths[self._diamond_mask]]
             return np.concatenate(parts)
 
         affordance = 1.0 / (1.0 + repulsion)

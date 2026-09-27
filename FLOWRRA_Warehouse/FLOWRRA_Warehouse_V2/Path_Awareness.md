@@ -1,7 +1,7 @@
 # Path awareness: the holistic FLOWRRA design
 
-Status: **approach charging built** (switch off). **Path awareness designed**, to
-be built next. The two go into one joint run, each behind its own switch.
+Status: **both halves built**, each behind its own switch, all off by default.
+They go into one joint run together (see "Joint-run configuration" below).
 
 ## Why
 
@@ -151,21 +151,62 @@ presence charge, so roughly 7x weaker. Standoffs already exist under the old
 rule (fixture: 427 pair-steps, longest 116 steps). A stalemate charge is ready to
 add if the joint run shows them growing.
 
+## What was built for half one
+
+A first version of paths-ahead already existed: the density module computes each
+fleet's intended path by greedy descent on its goal BFS map, splitting weight on
+ties into a probability cloud, and stamps a 3-step trail of every neighbour into
+the repulsion channel -- mixed with presence and event splats. The new channels
+give intent its **own** representation, at the diamond's full reach.
+
+- **Channel 4 -- my route; channel 5 -- their routes.** The next `local_radius`
+  (5) cells along each route, stamped at exact cells, fading linearly: 1.0, 0.8,
+  0.6, 0.4, 0.2. Crossing routes add up. Parked fleets have no intent and are
+  skipped. Where my route and theirs light the same cell is where a fleet must
+  choose.
+- **Purely additive.** The repulsion trail is untouched, because recovery's
+  escape scoring reads repulsion.
+- **State:** 777 -> **1,239** inputs (84 base + 5 x 231). A cold start. The
+  encoder takes any number of channels; the agent infers five from the width.
+- **Verified:** channels 4-5 match an independent recomputation to 1e-7 across 11
+  fleets; eight learning steps through the 5-channel encoder are finite; with
+  every switch off the code reproduces earlier runs exactly.
+
+**Found on the way: the Gibbs entropy feature was dead.** `action_entropy` read
+mask and repulsion correctly only when there were exactly two channels; with the
+slow channel's three it fell through to reading the mask channel -- the very bug
+its own comment described. Measured over 2,952 fleet-steps: **exactly 1.0, one
+single value**, in every run since cold_run14. With `entropy_fix` on: 0.80-1.00,
+428 distinct values. With paths channels (five channels) it would stay dead
+without the fix.
+
 ## Switches
 
-| switch | status | joint run |
+| switch | default | joint run |
 |---|---|---|
-| `reward_decomposition.approach_warning` | built, default False | True |
-| path awareness | to build | on |
+| `reward_decomposition.approach_warning` | False | **True** |
+| `density.paths_channels` | False | **True** |
+| `density.entropy_fix` | False | **True** |
+
+## Joint-run configuration
+
+All three switches on; `training.buffer_capacity` **20,000** (at 1,239 inputs and
+46 fleets that is roughly the RAM 30,000 needed at 777); no `--resume` (the state
+width changed). Plus the two recovery-head fixes from cold_run21
+(`recovery_double_dqn`, `recovery_value_bound`; see TARGET_NETWORK.md), with
+soft target updates (tau 0.002) kept. The staged config is ready as it stands.
 
 With both off, the code reproduces every earlier run exactly.
 
 ## Instruments
 
 Built: `rwd_approach_total`, `rwd_standoff_pairsteps`, `rwd_standoff_longest`,
-`rwd_standoff_past_cap`, alongside the old presence warning. To add with path
-awareness: how often fleets follow, wait or reroute when in conflict, and the
-override and recovery rates.
+`rwd_standoff_past_cap`, alongside the old presence warning; and
+`rwd_choice_{wait,follow,reroute,proceed}` -- for every fleet that started a step
+in conflict, what its action did. On the crowded, untrained test fixture: wait
+5,136, reroute 134, proceed 134, follow 10 -- gridlock, with following almost
+absent. That is the baseline the reflex should move. Override and recovery rates
+are already in the CSV.
 
 ## Predictions (these can fail)
 

@@ -6,6 +6,7 @@ Handles data ingestion (Nodes, Edges, Missions), GNN training loops, and metric 
 """
 import time
 import logging
+import sys
 import os
 import pandas as pd
 import networkx as nx
@@ -17,8 +18,16 @@ from agent_warehouse import GNNAgent
 from node_warehouse import precompute_goal_distances
 from config_warehouse import CONFIG
 
+# stream=sys.stdout: the log goes through the SAME stream as every print().
+# Before, the logger wrote to stderr while prints went to stdout, which Python
+# buffers in ~8 KB blocks when piped (2>&1 | tee). Episode lines then landed
+# wherever the last block ended -- glued mid-line onto a print (cold_run22's
+# Ep 0001 and Ep 0002), with the episode's last prints appearing after it. The
+# handler flushes stdout on every record, so pending prints go first and each
+# log line starts on its own line, in order.
 logging.basicConfig(
     level=logging.INFO,
+    stream=sys.stdout,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("Warehouse_Runner")
@@ -226,7 +235,7 @@ class MapCache:
         logger.info(f"{name}: {G.number_of_nodes()} nodes, {len(scen_files)} scenarios, "
                     f"goal bank {len(bank)} -- precomputing BFS maps...")
         gdm, node_index = precompute_goal_distances_compact(G, bank)
-        entry = {"G": G, "pos_dict": pos_dict, "scen_dir": scen_dir,
+        entry = {"G": G, "pos_dict": pos_dict, "scen_dir": scen_dir, "bank": bank,
                  "scen_files": scen_files, "goal_distance_maps": gdm,
                  "node_index": node_index}
         self._cache[name] = entry
@@ -267,6 +276,30 @@ def sample_instance(cache, map_name, k, rng):
         e["goal_distance_maps"].update(extra)
     return {"map": map_name, "scen": scen, "G": e["G"], "pos_dict": pos,
             "missions": missions, "goal_pool": goal_pool, "gdm": gdm}
+
+
+def _recovery_value_bound() -> float:
+    """
+    The largest value the recovery head could ever legitimately hold, from the
+    rewards it can actually receive: per step, the holon's coherence (-1..0)
+    plus recovery events -- an invocation costs |invocation_cost|, a resolution
+    pays resolution_bonus, a preemptive success pays preemptive_bonus. Allowing
+    up to TWO of each per step (generous; the fixture once showed two costs in
+    one step), scaled by the holon column's value scale in priority mode, then
+    divided by (1 - gamma) for an infinite horizon. With today's config:
+    (1 + 2*(4 + 6 + 9)) / 70.3 / 0.01 = 55.5. cold_run21 reached 32,554.
+    0.0 when the switch is off.
+    """
+    if not CONFIG["training"].get("recovery_value_bound", False):
+        return 0.0
+    rp = CONFIG.get("recovery_policy", {})
+    rd = CONFIG.get("reward_decomposition", {})
+    hs = (float((rd.get("scales") or {}).get("holon", 1.0))
+          if rd.get("mode") == "priority" else 1.0)
+    per_step = (1.0 + 2.0 * (abs(float(rp.get("invocation_cost", -4.0)))
+                             + float(rp.get("resolution_bonus", 6.0))
+                             + float(rp.get("preemptive_bonus", 9.0)))) / hs
+    return per_step / (1.0 - float(CONFIG["training"]["gamma"]))
 
 
 def main():
@@ -369,6 +402,10 @@ def main():
         n_heads=CONFIG["gnn"]["num_heads"],
         reward_heads=heads, head_weights=weights,
         double_dqn=bool(CONFIG["training"].get("double_dqn", False)),
+        target_tau=float(CONFIG["training"].get("target_tau", 0.0)),
+        recovery_double_dqn=bool(CONFIG["training"].get("recovery_double_dqn", False)),
+        recovery_value_bound=_recovery_value_bound(),
+        per_fleet_terminal=bool(CONFIG["training"].get("per_fleet_terminal", False)),
         dropout=CONFIG["gnn"]["dropout"], lr=CONFIG["gnn"]["learning_rate"],
         gamma=CONFIG["training"]["gamma"],
         buffer_capacity=CONFIG["training"]["buffer_capacity"],
@@ -394,6 +431,22 @@ def main():
                 f"cold_start={args.cold_start}")
     logger.info(f"input_dim={input_dim} gamma={CONFIG['training']['gamma']} "
                 f"heads={heads} weights={weights}")
+    logger.info(f"recovery head: double_dqn={agent.recovery_double_dqn} "
+                f"value_bound={agent.recovery_value_bound:.2f} | target_tau={agent.target_tau} "
+                f"| paths_channels={CONFIG['density'].get('paths_channels', False)} "
+                f"approach_warning={CONFIG['reward_decomposition'].get('approach_warning', False)} "
+                f"entropy_fix={CONFIG['density'].get('entropy_fix', False)}")
+    _eps = [agent.epsilon_gaussian(t, args.episodes) for t in range(1, args.episodes + 1)]
+    logger.info(f"learning: per_fleet_terminal={agent.per_fleet_terminal} | exploration "
+                f"ep1={_eps[0]:.3f} peak={max(_eps):.3f} at ep {1 + _eps.index(max(_eps))} "
+                f"last={_eps[-1]:.3f} | below 0.05 from ep "
+                f"{next((t for t in range(1 + _eps.index(max(_eps)), args.episodes + 1) if _eps[t - 1] < 0.05), None)} "
+                f"| config {agent.explore_cfg or 'historical defaults'}")
+    _sc = CONFIG.get("stream") or {}
+    logger.info(f"stream: enabled={bool(_sc.get('enabled', False))} "
+                f"exit_floors={_sc.get('exit_floors', 'all')} docks/floor={_sc.get('exits_per_floor', 6)} "
+                f"respawn_delay={_sc.get('respawn_delay', 0)} | errors={CONFIG['errors'].get('enabled')} "
+                f"| frozen_obstacle_severity={CONFIG['density'].get('frozen_obstacle_severity')}")
 
     logs, learn_steps, t0 = [], 0, time.time()
     for ep in range(1, args.episodes + 1):
@@ -404,27 +457,47 @@ def main():
         if inst is None:
             continue
 
+        # ORDER STREAM (STREAM_DESIGN.md): the whole goal bank's maps, so every
+        # future order has one, and an order seed fixed by (seed, episode) --
+        # independent of rng, so the instance draws are unchanged.
+        _stream = bool((CONFIG.get("stream") or {}).get("enabled", False))
+        _e = cache.get(inst["map"]) if _stream else None
         env = FLOWRRA(inst["G"], inst["pos_dict"], inst["missions"], mode="training",
-                      goal_distance_maps=inst["gdm"], shared_pool_mode=True,
-                      goal_pool=inst["goal_pool"])
+                      goal_distance_maps=(_e["goal_distance_maps"] if _stream else inst["gdm"]),
+                      shared_pool_mode=True,
+                      goal_pool=inst["goal_pool"],
+                      order_bank=(_e["bank"] if _stream else None),
+                      order_seed=(args.seed * 1000003 + ep if _stream else None))
         env.gnn = agent
         agent.reset_episode_state()
 
-        ep_reward, hl = 0.0, []
+        ep_reward, hl, dg = 0.0, [], []
         for _ in range(args.max_steps):
             ep_reward += env.step(episode_step=ep, total_episodes=args.episodes)
             if len(agent.memory) >= agent.batch_size:
                 agent.learn(node_ids=[n.id for n in env.nodes])
                 learn_steps += 1
-                if learn_steps % args.target_sync == 0:
+                # tau > 0: blend every learning step. 0: hard copy, as before.
+                if agent.target_tau > 0:
+                    agent.soft_update_target()
+                elif learn_steps % args.target_sync == 0:
                     agent.update_target_network()
                 hl.append(dict(agent.last_head_losses))
+                dg.append({**{f"qval_{h}": v for h, v in agent.last_head_values.items()},
+                           "loss_recovery": agent.last_recovery_loss,
+                           "qval_recovery": agent.last_recovery_q})
             if env.is_episode_over():
                 break
 
         est = env.get_error_statistics()
-        done = len(env.claimed_goals)
-        total = max(1, len(env.goal_pool))
+        if getattr(env, "stream", False):
+            # A stream retires delivered orders, so claimed_goals and the pool
+            # no longer count work: deliveries of orders issued do.
+            _ss = env._stream_stats()
+            done, total = _ss["stream_deliveries"], max(1, _ss["stream_orders_issued"])
+        else:
+            done = len(env.claimed_goals)
+            total = max(1, len(env.goal_pool))
         unfinished = [n for n in env.nodes if n.id not in env.immobile_nodes]
         left = float(np.mean([n.get_graph_distance_to_goal() for n in unfinished])) if unfinished else 0.0
         mean_hl = {h: float(np.mean([d[h] for d in hl])) if hl else 0.0 for h in heads}
@@ -441,6 +514,19 @@ def main():
             f"grad {env.get_gradient_agreement():.3f} | left {left:.1f}h | "
             + " ".join(f"{h}:{mean_hl[h]:.3f}" for h in heads)
         )
+        if "stream_deliveries" in est:
+            logger.info(
+                f"        stream | delivered {est['stream_deliveries']} of {est['stream_orders_issued']} orders "
+                f"| exits {est['stream_exits']} re-entries {est['stream_reentries']} "
+                f"| on floor {est['stream_on_floor_mean']:.1f} | life {est['stream_life_steps_mean']:.0f} steps "
+                f"(exit leg {est['stream_exit_leg_steps_mean']:.0f}) | coll/100 deliveries "
+                f"{100.0 * env.loop.total_collisions / max(1, est['stream_deliveries']):.1f}")
+        if "path_views" in est:
+            logger.info(
+                f"         paths | contested {est['path_contested_pct']:.1f}% of views "
+                f"(next cell {est['path_contested_next_pct']:.1f}%) | nearest "
+                f"{est['path_contested_soonest']:.2f} cells ahead | shared "
+                f"{est['path_shared_pct']:.1f}% | routes in view {est['path_routes_seen_mean']:.2f}")
 
         row = {"episode": ep, "map": map_name, "scen": inst["scen"],
                "agents": len(env.nodes), "reward": ep_reward,
@@ -477,11 +563,15 @@ def main():
                     if k.startswith(("incomplete_", "hops_", "sep_", "orders_",
                                      "tier1_", "tier2_", "recurrence_", "doorstep_", "start_hops_",
                                      "steps_held_", "steps_waiting_",
-                                     "convoy_", "held_pair_", "rwd_"))})
+                                     "convoy_", "held_pair_", "rwd_", "path_", "stream_"))})
         row.update({f"loss_{h}": mean_hl[h] for h in heads})
+        # Value level per head, and the recovery head's loss and value --
+        # episode means over learning steps (0.0 before learning starts).
+        row.update({k: (float(np.mean([d[k] for d in dg])) if dg else 0.0)
+                    for k in ([f"qval_{h}" for h in heads] + ["loss_recovery", "qval_recovery"])})
         logs.append(row)
 
-        if ep % 6 == 0:
+        if ep % 50 == 0:
             os.makedirs(args.out, exist_ok=True)
             agent.save(os.path.join(args.out, "flowrra_curriculum.pth"))
             pd.DataFrame(logs).to_csv(os.path.join(args.out, "curriculum_metrics.csv"), index=False)

@@ -168,6 +168,24 @@ def assign_goals_optimally(
 # carries the same width. Appended LAST so no existing feature moves.
 HOLON_PERCEPTION = False
 
+# NODE-ALIGNED MOVES (CONFLICT_DESIGN.md; set by core from
+# conflict.node_aligned_moves). Braking makes step sizes uneven, which leaves
+# fleets out of phase with the grid, and two things then go wrong:
+#   * OVERSHOOT. At full speed a fleet half a step out of phase jumps OVER every
+#     node and never lands within the 0.1 needed to turn there -- it oscillates
+#     across the junction forever, the gradient sending it back each time.
+#   * STRANDING. A fleet may turn while up to 0.1 off the node on the old axis;
+#     carrying that residual can leave it exactly at the boundary, where every
+#     move fails validation and its mask is idle-only.
+# Stranding was never seen in version_unrefined's 50_ traffic (0 of 18,000
+# fleet-steps); the corridor rules' pull-overs provoke both failures, since they
+# reverse fleets and turn them back in under braking. The overshoot, though,
+# is everywhere: aligning moves alone changes 50_ traffic a lot (60 fleets, no
+# preemption: +22% deliveries, +42% collisions). True: a step that would cross the next node on its axis
+# stops ON it, and a turn snaps the old axes onto the node the tolerance already
+# treats the fleet as standing on. Vehicles stop and turn at nodes.
+NODE_ALIGNED = False
+
 class ArrayDistanceMap:
     """
     A BFS distance map backed by an int32 array instead of a dict.
@@ -706,6 +724,24 @@ class FleetNode:
 
         proposed_delta = ACTION_DELTAS.get(action, np.zeros(3, dtype=np.float32))
         proposed_pos = self.current_pos + (proposed_delta * self.speed)
+        if NODE_ALIGNED and action != 0:
+            _ax = int(np.argmax(np.abs(proposed_delta)))
+            _p = np.array(self.current_pos, dtype=np.float64, copy=True)
+            for _k in range(3):                      # turn: snap the old axes
+                if _k != _ax:
+                    _r = np.round(_p[_k])
+                    if abs(float(_p[_k] - _r)) <= 0.1 + 1e-6:
+                        _p[_k] = _r
+            _d = float(proposed_delta[_ax])
+            _t = _p[_ax] + _d * float(self.speed)
+            _c = float(_p[_ax])                      # next node along the move
+            _nxt = (np.floor(_c + 1e-9) + 1.0) if _d > 0 else (np.ceil(_c - 1e-9) - 1.0)
+            if (_d > 0 and _t > _nxt + 1e-9) or (_d < 0 and _t < _nxt - 1e-9):
+                _t = _nxt                            # would overshoot: stop on it
+            _p[_ax] = _t
+            _prop = _p.astype(np.asarray(self.current_pos).dtype)
+            if self.is_structurally_valid(_prop, action):
+                proposed_pos = _prop
         
         if not self.is_structurally_valid(proposed_pos, action):
             # Hit a wall! Kill momentum.

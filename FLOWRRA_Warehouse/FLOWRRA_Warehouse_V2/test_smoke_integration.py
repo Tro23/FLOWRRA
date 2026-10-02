@@ -128,6 +128,8 @@ def build_instance(n_fleets=24, seed=0):
 _CONFIGURED_SLOW = CONFIG["density"].get("slow_channel", False)
 # Likewise the holon-integrity feature (one extra base feature, 83 -> 84).
 _CONFIGURED_HOLON = CONFIG.get("perception", {}).get("holon_integrity", False)
+# Paths-ahead channels (two more density channels) and the entropy fix.
+_CONFIGURED_PATHS = CONFIG["density"].get("paths_channels", False)
 
 
 def set_flags(on: bool):
@@ -142,6 +144,8 @@ def set_flags(on: bool):
     CONFIG["density"]["slow_channel"] = _CONFIGURED_SLOW if on else False
     # "Flags off" means the OLD widths, so the holon feature is off too.
     CONFIG.setdefault("perception", {})["holon_integrity"] = _CONFIGURED_HOLON if on else False
+    # Paths channels need 'channels' mode, so "flags off" (old widths) turns them off.
+    CONFIG["density"]["paths_channels"] = _CONFIGURED_PATHS if on else False
     CONFIG["proximity"]["adjacency_metric"] = "graph" if on else "manhattan"
     CONFIG["density"]["ray_transform"] = "smooth" if on else "clip25"
     CONFIG["density"]["output_mode"] = "channels" if on else "affordance"
@@ -235,7 +239,8 @@ def test_flags_on_runs_end_to_end():
     # features. Two channels (mask, repulsion) -> 462 / 545; the slow channel
     # adds a third -> 693 / 776. The channel count comes from the config, so
     # this holds for whichever configuration the suite is run against.
-    _ch = 3 if CONFIG["density"].get("slow_channel", False) else 2
+    _ch = (2 + (1 if CONFIG["density"].get("slow_channel", False) else 0)
+           + (2 if CONFIG["density"].get("paths_channels", False) else 0))
     check("on_density_dim", dens, _ch * 231)
     _base = 83 + (1 if CONFIG.get("perception", {}).get("holon_integrity", False) else 0)
     check("on_total_width", base + dens, _base + _ch * 231)

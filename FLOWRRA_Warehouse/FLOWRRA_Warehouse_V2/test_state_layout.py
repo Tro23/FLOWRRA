@@ -85,7 +85,8 @@ def test_layout_total_matches_vector():
     # sf_wait_steps). Asserted against the DERIVED layout rather than a constant
     # so this test fails loudly when the vector changes, instead of silently
     # indexing the wrong dimensions.
-    check("situation_moved", layout["situation_features"], (72, 80))
+    check("situation_moved", layout["situation_features"], (72, 81))
+    check("gibbs_state_at_81", layout["gibbs_state"], (81, 83))
 
 
 def test_blocks_are_contiguous_and_complete():
@@ -223,7 +224,7 @@ def test_lesion_resolution_against_shipped_code():
     base_len = a.state_layout()["_base_len"][1]
     for block, width in (("rays_all", 60), ("goal_gradient", 6),
                          ("density", dens.output_dim),
-                         ("situation_features", 8)):
+                         ("situation_features", 9)):
         env = _Stub()
         env.nodes = [a]
         env.density = dens

@@ -27,6 +27,10 @@ import numpy as np
 import networkx as nx
 
 from config_warehouse import CONFIG
+# These tests exercise obstacles and the ORIGINAL per-exit despawn. The order
+# stream (STREAM_DESIGN.md) replaces that despawn with one nearest-dock map, so
+# it is held off here whatever the staged config says.
+CONFIG.setdefault("stream", {})["enabled"] = False
 from density_warehouse import WarehouseDensityField
 from node_warehouse import FleetNode, build_spatial_indices
 from obstacles_warehouse import ObstacleField, from_config
@@ -295,6 +299,102 @@ def test_feature_ranges_over_a_real_episode():
     finally:
         CONFIG["obstacles"].update({"enabled": False, "n_humans": 0,
                                     "n_debris": 0})
+        smoke.set_flags(False)
+
+
+# ====================================================== despawn on delivery
+def test_despawn_sends_fleets_out_instead_of_freezing():
+    """
+    A frozen fleet is excluded from the proximity index, so it stops being a
+    blocker for waiting and a candidate for collisions -- it leaves only a
+    static density stamp, permanently, on a cell somebody wanted. A despawning
+    fleet stays FULLY ACTIVE for the drive out, then is gone.
+    """
+    import test_smoke_integration as smoke
+
+    CONFIG["episode"]["despawn_on_delivery"] = True
+    try:
+        env, agent, base, dens, nf, mem, steps = smoke.run_episode(True, steps=90)
+        est = env.get_error_statistics()
+        print(f"      exits={len(env.exit_nodes)}  claimed={len(env.claimed_goals)}"
+              f"  despawning={est['despawning']}  despawned={est['despawned']}"
+              f"  still on floor={len(env.nodes)}")
+        check("exits_were_found", bool(env.exit_nodes), True)
+        check("fleets_did_leave", bool(est["despawned"] > 0), True)
+        check("roster_shrank", bool(len(env.nodes) < 24), True)
+
+        # frozen_nodes is NOT expected to be empty. There is a second freeze
+        # path at core_warehouse.py:636 -- fleets with no goal at all, when
+        # there are more fleets than reachable goals. Those never delivered, so
+        # despawn-on-delivery does not touch them.
+        #
+        # Whether they SHOULD despawn is an open design question: an unassigned
+        # fleet parked forever is exactly the "parked but recallable" state
+        # despawning was meant to delete, but despawning it puts it beyond
+        # recall_retired, which rescue depends on. Left alone deliberately.
+        # SETTLED. Fleets that still freeze are the goalless ones from the
+        # no-goal path -- more fleets than reachable goals, nothing to do, never
+        # delivered. Those are legitimately parked and despawn-on-delivery does
+        # not touch them.
+        #
+        # The ones that used to freeze WITH a goal were a bug: a despawning
+        # fleet targets an EXIT node, exits are boundary cells, goals can be
+        # boundary cells, so `current_goal_id in claimed_goals` fired on a goal
+        # that was never its goal and froze it mid-drive. Fixed by exempting
+        # despawning fleets from the staleness check, as rescuers already were.
+        with_goal = [n.id for n in env.nodes
+                     if n.id in env.frozen_nodes and n.current_goal_id is not None]
+        print(f"      still frozen: {len(env.frozen_nodes)}  "
+              f"of which WITH a goal: {len(with_goal)}")
+        check("no_fleet_frozen_with_a_goal", with_goal, [])
+
+        # A despawning fleet must not have taken the FREEZE path -- that is the
+        # whole point. It CAN still become immobile for an unrelated reason: a
+        # VDA error stop can hit a fleet mid-drive to its exit, and that has
+        # nothing to do with despawning. Asserting on immobile_nodes conflated
+        # the two and failed the moment a trajectory happened to include one.
+        for nid in env._despawning:
+            check("despawning_fleet_did_not_freeze",
+                  nid in env.frozen_nodes, False)
+            break
+    finally:
+        CONFIG["episode"]["despawn_on_delivery"] = False
+        smoke.set_flags(False)
+
+
+def test_despawn_off_still_freezes():
+    """The default path must be untouched."""
+    import test_smoke_integration as smoke
+    env, agent, base, dens, nf, mem, steps = smoke.run_episode(True, steps=90)
+    est = env.get_error_statistics()
+    print(f"      claimed={len(env.claimed_goals)} frozen={len(env.frozen_nodes)}"
+          f" despawned={est['despawned']}")
+    check("no_despawning_when_off", est["despawned"], 0)
+    check("roster_unchanged", len(env.nodes), 24)
+    smoke.set_flags(False)
+
+
+def test_nearest_exit_uses_graph_distance():
+    """An exit on the far side of a rack is not near."""
+    from core_warehouse import FLOWRRA
+    import test_smoke_integration as smoke
+    CONFIG["episode"]["despawn_on_delivery"] = True
+    try:
+        smoke.set_flags(True)
+        G, grid, miss, gdm, gp = smoke.build_instance(6)
+        env = FLOWRRA(G, grid, miss, mode="init", goal_distance_maps=gdm,
+                      shared_pool_mode=True, goal_pool=gp)
+        node = env.nodes[0]
+        ex = env._nearest_exit(node)
+        check("an_exit_was_chosen", ex is not None, True)
+        if ex is not None:
+            here = env.grid_pos_dict[env.density._fleet_cell(node)]
+            d_chosen = env._exit_distance_maps[ex][here]
+            d_all = [env._exit_distance_maps[e].get(here, 1e9)
+                     for e in env.exit_nodes]
+            check("chose_the_graph_nearest", d_chosen, min(d_all))
+    finally:
+        CONFIG["episode"]["despawn_on_delivery"] = False
         smoke.set_flags(False)
 
 

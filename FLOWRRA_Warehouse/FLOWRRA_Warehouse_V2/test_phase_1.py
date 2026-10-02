@@ -206,11 +206,11 @@ def test_situation_features_now_eight():
     a = mk(G, grid, aisle, "a", (5.0, 0.0, 0.0))
     b = mk(G, grid, aisle, "b", (7.0, 0.0, 0.0))
     sit = a.get_situation_features()
-    check("situation_width", sit.shape, (8,))
+    check("situation_width", sit.shape, (9,))
 
     layout = a.state_layout()
     check("layout_situation_width",
-          layout["situation_features"][1] - layout["situation_features"][0], 8)
+          layout["situation_features"][1] - layout["situation_features"][0], 9)
     check("layout_total_matches_vector",
           layout["_base_len"][1], int(len(a.get_state_vector([a, b]))))
 
@@ -308,7 +308,7 @@ def test_rays_all_and_ray_semantics_slices():
     check("rays_all_now_60", L["rays_all"][1] - L["rays_all"][0], 60)
     check("ray_semantics_is_18",
           L["ray_semantics"][1] - L["ray_semantics"][0], 18)
-    check("base_len_82", L["_base_len"][1], 82)
+    check("base_len_83", L["_base_len"][1], 83)
 
 
 # ====================================================================== 6
@@ -379,7 +379,7 @@ def test_gibbs_block_in_layout():
     b = mk(G, grid, aisle, "b", (7.0, 0.0, 0.0))
     L = a.state_layout()
     check("gibbs_is_two_dims", L["gibbs_state"][1] - L["gibbs_state"][0], 2)
-    check("base_len_82", L["_base_len"][1], 82)
+    check("base_len_83", L["_base_len"][1], 83)
     check("layout_matches_vector", L["_base_len"][1],
           int(len(a.get_state_vector([a, b]))))
 

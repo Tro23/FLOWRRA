@@ -159,6 +159,14 @@ class WarehouseRecovery:
         # can see that.
         self.pair_collision_counts: Dict[frozenset, int] = {}
 
+        # REPEAT OFFENCES, counted (CONFLICT_DESIGN.md success criteria). A
+        # collapse is a repeat offence when it escalates -- exactly the
+        # collapses that print "REPEAT OFFENCE #n" below, which is where the
+        # cold_run24 figures (74% repeats, worst pair 59) were read from.
+        # Measurement only.
+        self.repeat_offences = 0
+        self.max_pair_repeat = 0
+
         # Which fleet LOST right-of-way the last time this pair conflicted.
         # Used to alternate the winner on the next offence -- see _assign_yields().
         self.pair_last_loser: Dict[frozenset, str] = {}
@@ -396,6 +404,8 @@ class WarehouseRecovery:
               f"{len(conflicted_nodes)} fleet(s) [{_ids}] "
               f"({uninvolved_warning_count} nearby warning-zone fleets left undisturbed)...")
         if escalate:
+            self.repeat_offences += 1
+            self.max_pair_repeat = max(self.max_pair_repeat, int(pair_repeats))
             print(f"[Recovery] REPEAT OFFENCE #{pair_repeats} for this pair -- "
                   f"separation will be enforced in TIME as well as space.")
 
@@ -818,6 +828,8 @@ class WarehouseRecovery:
             "recurrence_pairs_tracked": len(self.pair_recurrence_counts),
             "temporal_recoveries": self.temporal_recoveries,
             "yield_recoveries": self.yield_recoveries,
+            "repeat_offences": self.repeat_offences,
+            "max_pair_repeat": self.max_pair_repeat,
             "repeat_offenders": {k: v for k, v in self.node_collision_counts.items() if v > 1},
             "repeat_pairs": {
                 tuple(sorted(k)): v

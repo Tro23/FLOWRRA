@@ -1,0 +1,7 @@
+Metric,Pure Planner (RHCR-PIBT),RHCR + naive (Small / Large),FLOWRRA Policy (Small / Large),RULES Orchestrator (Small / Large),Integrated FLOWRRA + RULES (Train)
+Orphaned Recovery Rate,0.0%,70.4% / 70.8%,70.0% / 66.8%,87.4% / 85.2%,95.0% - 96.8%
+Cascading Rescuer Deaths,0.00 (No Rescues),2.67 / 2.62,1.50 / 1.71,0.25 / 1.08,0.37 (Forced Interv)
+Mean Recovery Hops,N/A,23.1 / 78.5,84.0 / 103.3,22.6 / 49.1,Matched Clock
+Replan Downtime (s),0.1s - 9.8s,2.2s / 47.2s,0.0s / 0.0s,0.0s / 0.0s,0.0s (Real-Time)
+Distance Traversed (cells),298 - 963,426 / 1363,1627 / 2114,419 / 1298,Active Dispersion
+Overall Completion Rate,75.5%,92.3% / 92.5%,93.0% / 93.0%,95.0% / 97.0%,99.2%

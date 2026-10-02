@@ -278,14 +278,31 @@ def sample_instance(cache, map_name, k, rng):
             "missions": missions, "goal_pool": goal_pool, "gdm": gdm}
 
 
+def _order_window(ep: int, episodes: int):
+    """
+    How many floors from its dock a new order may lie (STREAM_DESIGN.md). Grows
+    linearly from `start` to `end`, reaching `end` at `reach_frac` of the run, so
+    the task stops changing before the near-greedy episodes the run is judged on.
+    None (no limit) when the config has no order_floor_window.
+    """
+    w = (CONFIG.get("stream") or {}).get("order_floor_window")
+    if not w:
+        return None
+    s, e = int(w.get("start", 1)), int(w.get("end", 3))
+    frac = min(1.0, (ep - 1) / max(1.0, float(w.get("reach_frac", 0.5)) * (episodes - 1)))
+    return int(round(s + (e - s) * frac))
+
+
 def _recovery_value_bound() -> float:
     """
     The largest value the recovery head could ever legitimately hold, from the
     rewards it can actually receive: per step, the holon's coherence (-1..0)
     plus recovery events -- an invocation costs |invocation_cost|, a resolution
     pays resolution_bonus, a preemptive success pays preemptive_bonus. Allowing
-    up to TWO of each per step (generous; the fixture once showed two costs in
-    one step), scaled by the holon column's value scale in priority mode, then
+    up to TWO of each per step (generous: the "two costs in one step" the
+    fixture once showed was a duplicated charge, removed 2026-09-29, so one of
+    each is now the real maximum), scaled by the holon column's value scale in
+    priority mode, then
     divided by (1 - gamma) for an infinite horizon. With today's config:
     (1 + 2*(4 + 6 + 9)) / 70.3 / 0.01 = 55.5. cold_run21 reached 32,554.
     0.0 when the switch is off.
@@ -296,9 +313,16 @@ def _recovery_value_bound() -> float:
     rd = CONFIG.get("reward_decomposition", {})
     hs = (float((rd.get("scales") or {}).get("holon", 1.0))
           if rd.get("mode") == "priority" else 1.0)
+    # collision_cost mode: no preemptive bonus, but up to collision_charge_cap
+    # new colliding pairs charged per step -- the cap keeps this bound exact.
+    if rp.get("reward_mode", "strict_bonus") == "collision_cost":
+        event = (abs(float(rp.get("collision_cost", -8.0)))
+                 * int(rp.get("collision_charge_cap", 3)))
+    else:
+        event = float(rp.get("preemptive_bonus", 9.0))
     per_step = (1.0 + 2.0 * (abs(float(rp.get("invocation_cost", -4.0)))
                              + float(rp.get("resolution_bonus", 6.0))
-                             + float(rp.get("preemptive_bonus", 9.0)))) / hs
+                             + event)) / hs
     return per_step / (1.0 - float(CONFIG["training"]["gamma"]))
 
 
@@ -445,8 +469,14 @@ def main():
     _sc = CONFIG.get("stream") or {}
     logger.info(f"stream: enabled={bool(_sc.get('enabled', False))} "
                 f"exit_floors={_sc.get('exit_floors', 'all')} docks/floor={_sc.get('exits_per_floor', 6)} "
-                f"respawn_delay={_sc.get('respawn_delay', 0)} | errors={CONFIG['errors'].get('enabled')} "
+                f"respawn_delay={_sc.get('respawn_delay', 0)} "
+                f"| order window by episode: {[_order_window(t, args.episodes) for t in (1, args.episodes // 4 or 1, args.episodes // 2 or 1, args.episodes)]} "
+                f"| errors={CONFIG['errors'].get('enabled')} "
                 f"| frozen_obstacle_severity={CONFIG['density'].get('frozen_obstacle_severity')}")
+    # Every log records its own conflict configuration (CONFLICT_DESIGN.md), so
+    # a run can be read later without guessing which switches were on.
+    _cc = CONFIG.get("conflict") or {}
+    logger.info("conflict | " + " ".join(f"{k}={v}" for k, v in _cc.items()))
 
     logs, learn_steps, t0 = [], 0, time.time()
     for ep in range(1, args.episodes + 1):
@@ -467,7 +497,8 @@ def main():
                       shared_pool_mode=True,
                       goal_pool=inst["goal_pool"],
                       order_bank=(_e["bank"] if _stream else None),
-                      order_seed=(args.seed * 1000003 + ep if _stream else None))
+                      order_seed=(args.seed * 1000003 + ep if _stream else None),
+                      order_floor_window=(_order_window(ep, args.episodes) if _stream else None))
         env.gnn = agent
         agent.reset_episode_state()
 
@@ -502,10 +533,25 @@ def main():
         left = float(np.mean([n.get_graph_distance_to_goal() for n in unfinished])) if unfinished else 0.0
         mean_hl = {h: float(np.mean([d[h] for d in hl])) if hl else 0.0 for h in heads}
 
+        # EFFICIENCY (measurement fix 4): stream completion cannot reach 1 --
+        # orders are always in flight -- so the line reports deliveries against
+        # the conflict-free ideal as well. PREVENTION (fix 2): of the preemptive
+        # recoveries that resolved, how many saw no collision among the moved
+        # fleets within the window, next to the strict one-step success.
+        _eff = est.get("stream_efficiency", float("nan"))
+        _eff_txt = (f" eff {_eff * 100:.0f}% of {est['stream_ideal_deliveries']:.0f}"
+                    if "stream_efficiency" in est and np.isfinite(_eff) else "")
+        _prev_res = est["preempt_clear_k"] + est["preempt_collided_k"]
+        # WAIT SHARE among fleets at risk: what the network PROPOSED against
+        # what was DONE (rules and holds impose waits the policy never chose).
+        _wp, _we = est.get("choice_policy_wait_share"), est.get("choice_exec_wait_share")
+        _wait_txt = (f" | wait policy {_wp * 100:.0f}% / done {_we * 100:.0f}%"
+                     if _wp is not None and np.isfinite(_wp) else "")
         logger.info(
             f"Ep {ep:04d} | {map_name:<22} k={len(env.nodes):<3} | R {ep_reward:9.1f} | "
-            f"done {done}/{total} | coll {env.loop.total_collisions} | "
-            f"rec inv {est['recovery_invocations']} forced {est['recovery_forced']} wasted {est['recovery_wasted']} pre {est['recovery_preemptive']}/{est['recovery_preemptive_success']} | "
+            f"done {done}/{total}{_eff_txt} | coll {env.loop.total_collisions} | "
+            f"rec inv {est['recovery_invocations']} forced {est['recovery_forced']} wasted {est['recovery_wasted']} pre {est['recovery_preemptive']}/{est['recovery_preemptive_success']} "
+            f"clear{est['preempt_window']} {est['preempt_clear_k']}/{_prev_res}{_wait_txt} | "
             f"risk {est['risk_steps_acted']}/{est['risk_steps']} "
             f"({est['intervention_rate']*100:.0f}%) | "
             f"err {est['errors_injected']} hand {est['handovers_completed']} | "
@@ -520,7 +566,9 @@ def main():
                 f"| exits {est['stream_exits']} re-entries {est['stream_reentries']} "
                 f"| on floor {est['stream_on_floor_mean']:.1f} | life {est['stream_life_steps_mean']:.0f} steps "
                 f"(exit leg {est['stream_exit_leg_steps_mean']:.0f}) | coll/100 deliveries "
-                f"{100.0 * env.loop.total_collisions / max(1, est['stream_deliveries']):.1f}")
+                f"{100.0 * env.loop.total_collisions / max(1, est['stream_deliveries']):.1f} "
+                f"| orders within ±{est['stream_order_window']} floors (mean gap {est['stream_order_floor_gap_mean']:.2f}) "
+                f"| by quarter {est['stream_deliv_q1']}/{est['stream_deliv_q2']}/{est['stream_deliv_q3']}/{est['stream_deliv_q4']}")
         if "path_views" in est:
             logger.info(
                 f"         paths | contested {est['path_contested_pct']:.1f}% of views "
@@ -563,7 +611,8 @@ def main():
                     if k.startswith(("incomplete_", "hops_", "sep_", "orders_",
                                      "tier1_", "tier2_", "recurrence_", "doorstep_", "start_hops_",
                                      "steps_held_", "steps_waiting_",
-                                     "convoy_", "held_pair_", "rwd_", "path_", "stream_"))})
+                                     "convoy_", "held_pair_", "rwd_", "path_", "stream_", "choice_",
+                                     "preempt_", "conflict_", "watch_", "corridor_"))})
         row.update({f"loss_{h}": mean_hl[h] for h in heads})
         # Value level per head, and the recovery head's loss and value --
         # episode means over learning steps (0.0 before learning starts).
@@ -571,7 +620,7 @@ def main():
                     for k in ([f"qval_{h}" for h in heads] + ["loss_recovery", "qval_recovery"])})
         logs.append(row)
 
-        if ep % 50 == 0:
+        if ep % 5 == 0:
             os.makedirs(args.out, exist_ok=True)
             agent.save(os.path.join(args.out, "flowrra_curriculum.pth"))
             pd.DataFrame(logs).to_csv(os.path.join(args.out, "curriculum_metrics.csv"), index=False)

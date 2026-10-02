@@ -42,8 +42,23 @@ class FLOWRRA:
         goal_distance_maps: Optional[Dict[str, Dict[str, int]]] = None,
         shared_pool_mode: bool = False,
         goal_pool: Optional[Dict[str, np.ndarray]] = None,
+        order_bank: Optional[List[str]] = None,
+        order_seed: Optional[int] = None,
+        order_floor_window: Optional[int] = None,
+        lifelong_goals: Optional[Dict[str, List[str]]] = None,
     ):
         self.G = G
+        # LIFELONG MODE (BENCHMARK.md, the kiva comparison). Each fleet's whole
+        # goal sequence, keyed by fleet id; its mission's goal is the first. On
+        # arrival a fleet is rewarded exactly as before and takes its next goal
+        # at once -- "next goal on arrival", as in POGEMA / RHCR lifelong MAPF --
+        # instead of freezing. No docks, no pool. None: the modes as before.
+        self.lifelong = lifelong_goals is not None
+        self._ll_goals: Dict[str, List[str]] = {
+            str(k): [str(g) for g in v] for k, v in (lifelong_goals or {}).items()}
+        self._ll_idx: Dict[str, int] = {k: 0 for k in self._ll_goals}
+        self.lifelong_reached = 0
+        self.lifelong_cycled = 0
         # --- THE DICTIONARY FIX ---
         # Convert the Pandas string-keyed dictionary into the Tuple-keyed format 
         # that the physics engine, ray-casters, and WFC recoveries actually expect!
@@ -267,12 +282,33 @@ class FLOWRRA:
         )
         if self.adjacency_metric == "graph":
             _radius = max(_radius, self.interaction_radius)
+        # CONFLICT RULES (CONFLICT_DESIGN.md). Read here because component 1
+        # needs the index to reach its classification radius.
+        _ccfg = CONFIG.get("conflict", {}) or {}
+        self.path_warnings = bool(_ccfg.get("path_warnings", False))
+        self.braking_enabled = bool(CONFIG["warehouse"].get("braking", True))
+        self.directional_braking = bool(_ccfg.get("directional_braking", False))
+        if self.path_warnings:
+            _radius = max(_radius, float(_ccfg.get("radius", 3.0)))
         self.proximity = GraphProximity(
             graph=self.G,
             grid_pos_dict=self.grid_pos_dict,
             search_radius=_radius,
             metric=_pcfg.get("metric", "graph"),
         )
+        from conflict_warehouse import ConflictSettings, PathConflicts
+        self.conflict_settings = ConflictSettings.from_config(
+            _ccfg, CONFIG["warehouse"]["warning_threshold"])
+        # Component 1's classifier. None when the switch is off, so nothing
+        # below can consult it by accident.
+        self.conflicts = (PathConflicts(self.density, self.proximity, self.conflict_settings)
+                          if self.path_warnings else None)
+        self._verdicts: list = []          # this moment's classified pairs
+        self._verdicts_start: list = []    # start of step (warning set, preemption)
+        # Component 2: fleet-steps whose nearest peer was a steady convoy
+        # partner at follow_gap or more and so did not throttle them.
+        self.brake_convoy_exempt = 0
+        self._brake_snap: Dict[str, tuple] = {}
         # Sampled phantom-pair measurement: every Nth step, count how many pairs
         # Manhattan would have flagged that the graph metric rejects. 0 disables.
         self.phantom_audit_every = int(_pcfg.get("phantom_audit_every", 0))
@@ -452,7 +488,17 @@ class FLOWRRA:
         self.exit_nodes: List[str] = []
         self._exit_distance_maps: Dict[str, Dict[str, int]] = {}
         self._coords_by_id = {v: k for k, v in self.grid_pos_dict.items()}
-        if self.despawn_on_delivery:
+        # ---- ORDER STREAM (STREAM_DESIGN.md; default off) --------------------
+        # Fleets drive out to the nearest dock after delivering, leave the floor,
+        # and re-enter at that dock with a new order from a seeded queue.
+        _scfg = CONFIG.get("stream", {}) or {}
+        self.stream = bool(_scfg.get("enabled", False))
+        self._stream_cfg = dict(_scfg)
+        if self.stream:
+            self.despawn_on_delivery = True
+            self._order_window = order_floor_window
+            self._stream_init(order_bank, order_seed)
+        elif self.despawn_on_delivery:
             self._init_exits(_ecfg)
 
         self.static_obstacles: Set[Tuple[int, int, int]] = set()
@@ -574,6 +620,18 @@ class FLOWRRA:
         # goal), or proceeded along its route. The reflex path awareness exists
         # to teach, made visible.
         self._choice = {"wait": 0, "follow": 0, "reroute": 0, "proceed": 0}
+        # PROPOSED vs EXECUTED (measurement only, 2026-09-29). _choice above
+        # counts what fleets DID, so once the conflict rules are on, every wait
+        # they impose reads as the policy choosing to wait. For each fleet at
+        # risk at the start of a step (the warning set), this records what the
+        # NETWORK proposed and what was EXECUTED, each classed by the goal
+        # gradient at decision time -- wait / toward goal / away / sideways --
+        # and, when they differ, who overrode it: a conflict rule, a recovery
+        # hold, or the older mechanisms (livelock escape, tabu, dwell).
+        self._decided = {k: 0 for k in (
+            "n", "policy_wait", "policy_toward", "policy_away", "policy_side",
+            "exec_wait", "exec_toward", "exec_away", "exec_side",
+            "over_rule", "over_hold", "over_other")}
         if self.reward_mode == "priority" and min(self.priority_scales.values()) <= 0:
             raise ValueError(f"priority scales must be positive: {self.priority_scales}")
         self.K = len(self.reward_heads)
@@ -587,6 +645,8 @@ class FLOWRRA:
         self.holon_perception = bool(
             CONFIG.get("perception", {}).get("holon_integrity", False))
         _node_module.HOLON_PERCEPTION = self.holon_perception
+        _node_module.NODE_ALIGNED = bool(
+            (CONFIG.get("conflict", {}) or {}).get("node_aligned_moves", False))
 
         # REWARD COMPOSITION, per head, positives and negatives kept apart.
         # Measurement only. The runner logs just the episode total, which
@@ -645,10 +705,44 @@ class FLOWRRA:
         self.recovery_forced_after = int(rp.get("forced_fallback_steps", 6))
         self.recovery_resolution_bonus = float(rp.get("resolution_bonus", 6.0))
         self.recovery_preemptive_bonus = float(rp.get("preemptive_bonus", 9.0))
+        self.recovery_reward_mode = str(rp.get("reward_mode", "strict_bonus"))
+        self.recovery_collision_cost = float(rp.get("collision_cost", -8.0))
+        self.recovery_collision_cap = int(rp.get("collision_charge_cap", 3))
+        self._prev_collision_pairs: set = set()
+        self.recovery_collisions_charged = 0
         # Fleets a preemptive separation just moved, pending verification
         # on the NEXT step that they actually came clear.
         self._preemptive_watch = set()
         self.recovery_preemptive_success = 0
+        # PREVENTION WINDOW (CONFLICT_DESIGN.md, measurement fix 2). The strict
+        # success above asks for every moved fleet to be clear of the WARNING
+        # band one step later -- almost impossible in a single-lane corridor, so
+        # it fired ~2% of the time and preemption looked like pure cost. The
+        # question preemption actually answers is weaker and more useful: did
+        # any of the fleets it moved COLLIDE within the next k steps?
+        #
+        # Each event is judged at the start-of-step checks at ages 1..k and
+        # resolves at age k: "collided" if any of its fleets was in the
+        # deadlocked set at any of them, "clear" otherwise, "pending" if the
+        # episode ends first. How many of its fleets collided is kept too.
+        # Collisions with ANY fleet count, not only among the watched set.
+        # Measurement only: no reward or decision reads it. Labels other than
+        # "preempt" are opened by test drivers (drive_shortest_path.py's coin
+        # arms) through _watch_open(), so both are resolved by the same code.
+        self.prevention_window = max(1, int(rp.get("prevention_window", 5)))
+        self._watch_events: List[list] = []   # [label, fleets, opened_step, hit]
+        self._watch: Dict[str, Dict[str, int]] = {
+            "preempt": {"opened": 0, "collided": 0, "clear": 0,
+                        "fleets_watched": 0, "fleets_hit": 0}}
+        # One row per RESOLVED event: (label, opened_step, n_watched, n_hit).
+        # For drivers that need per-event outcomes (block bootstrap); at most
+        # one per step per label, so it stays small.
+        self._watch_log: List[Tuple[str, int, int, int]] = []
+        # HOLDS, counted where core applies them (both application sites). The
+        # pre-registered criteria in CONFLICT_DESIGN.md are stated in holds.
+        self.holds_assigned = 0
+        self.hold_steps_assigned = 0
+        self.holds_at_cap = 0
         # OPPORTUNITY DENOMINATOR. An invocation is only useful when
         # something is actually at risk, so the raw count is
         # uninterpretable on its own: 'rec inv 2' is excellent if there
@@ -701,6 +795,18 @@ class FLOWRRA:
         
         # Spawn the discrete fleets
         self.nodes = self._initialize_fleets(fleet_missions)
+        # Fleet count the stream keeps in circulation (efficiency's numerator
+        # of the ideal). Fixed at spawn: lives come and go, bases do not.
+        self._stream_fleets = len(self.nodes)
+        # COMPONENTS 3 AND 4 (corridor_warehouse.py). Built here, not beside
+        # components 1 and 2, because the corridor index needs _coords_by_id.
+        _ccfg = CONFIG.get("conflict", {}) or {}
+        self.rules = None
+        self._rule_actions: Dict[str, int] = {}
+        if (_ccfg.get("corridor_entry", False) or _ccfg.get("priority", False)
+                or _ccfg.get("yield_to_stopped", False)):
+            from corridor_warehouse import ConflictRules
+            self.rules = ConflictRules(self, _ccfg, CONFIG["warehouse"]["max_vision_range"])
         
         # Calculate GNN input dimension based on node state vector shape
         input_dim = len(self.nodes[0].get_state_vector(self.nodes)) + len(self.density.get_local_affordance(self.nodes[0].current_pos, self.nodes, self.frozen_nodes))
@@ -989,6 +1095,339 @@ class FLOWRRA:
         else:
             print(f"[Core] {len(self.exit_nodes)} exit node(s) for despawn.")
 
+    # ======================================================================
+    # ORDER STREAM (STREAM_DESIGN.md). Everything below runs only when
+    # CONFIG["stream"]["enabled"]; with it off, nothing here is reached.
+    # ======================================================================
+    def _stream_init(self, order_bank, order_seed) -> None:
+        import random as _random
+        self._order_bank = [g for g in (order_bank or [])
+                            if g in self.goal_distance_maps and g in self._coords_by_id]
+        self._order_rng = _random.Random(0 if order_seed is None else int(order_seed))
+        self._order_queue: List[str] = []
+        self._stream_fulfilled: List[str] = []
+        self._offfloor: List[Dict[str, Any]] = []
+        self._life: Dict[str, int] = {}
+        self._spawned_at: Dict[str, int] = {}
+        self._leg_started: Dict[str, int] = {}
+        self._sstats = {"deliveries": 0, "orders": len(self.goal_pool), "exits": 0,
+                        "reentries": 0, "floor_sum": 0, "floor_steps": 0,
+                        "life_sum": 0, "leg_sum": 0, "wait_sum": 0,
+                        "gap_sum": 0, "gap_n": 0,
+                        "reentry_blocked": 0, "reentry_moved": 0, "reentry_deferred": 0,
+                        "cycle_sum": 0, "cycle_n": 0}
+        self._deliv_steps: List[int] = []     # step of every delivery (jam detector)
+        self._init_stream_exits(self._stream_cfg)
+        # Floor of every bank goal (goals inside a shaft count as the nearest floor).
+        self._goal_floor = {g: self._floor_of(g) for g in self._order_bank}
+
+    def _init_stream_exits(self, scfg: Dict[str, Any]) -> None:
+        """
+        Docks on the perimeter of each full floor (or the ground floor only),
+        `exits_per_floor` per floor spread evenly around the perimeter, plus ONE
+        multi-source distance map to the nearest dock and which dock that is.
+        The vertical axis is the one with the fewest edges (lifts), unless set.
+        """
+        import math
+        from collections import deque
+        cells = list(self.grid_pos_dict)
+        va = scfg.get("vertical_axis", "auto")
+        if va == "auto":
+            counts = [0, 0, 0]
+            for u, v in self.G.edges():
+                cu, cv = self._coords_by_id.get(u), self._coords_by_id.get(v)
+                if cu is None or cv is None:
+                    continue
+                d = [cu[i] != cv[i] for i in range(3)]
+                if sum(d) == 1:
+                    counts[d.index(True)] += 1
+            va = int(np.argmin(counts))
+        else:
+            va = {"X": 0, "Y": 1, "Z": 2}.get(va, va)
+        h = [a for a in range(3) if a != va]
+        levels: Dict[int, list] = {}
+        for c in cells:
+            levels.setdefault(c[va], []).append(c)
+        biggest = max(len(v) for v in levels.values())
+        frac = float(scfg.get("full_floor_fraction", 0.5))
+        floors = sorted(z for z, v in levels.items() if len(v) >= frac * biggest)
+        self._stream_va = va
+        self._floor_z = list(floors)          # every floor, before any "ground" cut
+        if scfg.get("exit_floors", "all") == "ground":
+            floors = floors[:1]
+        k = int(scfg.get("exits_per_floor", 6))
+        exits: List[str] = []
+        for z in floors:
+            fl = levels[z]
+            lo = [min(c[a] for c in fl) for a in h]
+            hi = [max(c[a] for c in fl) for a in h]
+            per = [c for c in fl
+                   if any(c[a] == lo[i] or c[a] == hi[i] for i, a in enumerate(h))]
+            cx = sum(c[h[0]] for c in per) / len(per)
+            cy = sum(c[h[1]] for c in per) / len(per)
+            per.sort(key=lambda c: (math.atan2(c[h[1]] - cy, c[h[0]] - cx), c))
+            if len(per) > k:
+                per = [per[int(i * len(per) / k)] for i in range(k)]
+            exits += [self.grid_pos_dict[c] for c in per]
+        self.exit_nodes = exits
+        self._exit_set = set(exits)
+        self._docks_by_floor: Dict[int, List[str]] = {}
+        for d in exits:
+            self._docks_by_floor.setdefault(self._floor_of(d), []).append(d)
+        dist: Dict[str, int] = {}
+        owner: Dict[str, str] = {}
+        q = deque()
+        for e in exits:
+            dist[e] = 0
+            owner[e] = e
+            q.append(e)
+        while q:
+            u = q.popleft()
+            for v in self.G.neighbors(u):
+                if v not in dist:
+                    dist[v] = dist[u] + 1
+                    owner[v] = owner[u]
+                    q.append(v)
+        self._exit_dist = dist
+        self._exit_owner = owner
+        self._stream_layout = {"vertical_axis": "XYZ"[va], "floors": len(floors),
+                               "docks": len(exits)}
+        print(f"[Core] Stream: {len(floors)} floor(s) on axis {'XYZ'[va]}, "
+              f"{len(exits)} dock(s) ({k} per floor), "
+              f"{len(dist)}/{self.G.number_of_nodes()} cells reach a dock.")
+
+    def _floor_of(self, node_id: str) -> int:
+        """Index of the floor nearest this node along the vertical axis."""
+        z = self._coords_by_id[node_id][self._stream_va]
+        return min(range(len(self._floor_z)), key=lambda i: abs(self._floor_z[i] - z))
+
+    def _issue_order(self, dock: Optional[str] = None) -> Optional[str]:
+        """Next order from the seeded queue that is not already outstanding and,
+        when a floor window is set, lies within that many floors of the dock's
+        floor. A goal skipped (outstanding, or outside this dock's window) stays
+        in the queue for a later request, so every run sees the same work in
+        the same order as closely as the dynamics allow."""
+        if not self._order_bank:
+            return None
+        w = getattr(self, "_order_window", None)
+        df = self._floor_of(dock) if (w is not None and dock is not None) else None
+        for _ in range(64):
+            for i, g in enumerate(self._order_queue):
+                if g in self.goal_pool:
+                    continue
+                if df is not None and abs(self._goal_floor[g] - df) > w:
+                    continue
+                self._order_queue.pop(i)
+                self.goal_pool[g] = np.array(self._coords_by_id[g], dtype=np.float32)
+                self._sstats["orders"] += 1
+                if dock is not None:
+                    self._sstats["gap_sum"] += abs(self._goal_floor[g] - self._floor_of(dock))
+                    self._sstats["gap_n"] += 1
+                    # CONFLICT-FREE CYCLE of this order (measurement fix 4):
+                    # dock -> goal -> nearest dock, in hops. The fleet that
+                    # takes it may differ (shared pool); the work does not.
+                    _dm = self.goal_distance_maps.get(g)
+                    _to = _dm.get(dock) if _dm is not None else None
+                    _back = self._exit_dist.get(g)
+                    if _to is not None and _to >= 0 and _back is not None:
+                        self._sstats["cycle_sum"] += int(_to) + int(_back)
+                        self._sstats["cycle_n"] += 1
+                return g
+            self._order_queue.extend(self._order_rng.choice(self._order_bank)
+                                     for _ in range(64))
+        return None
+
+    def _new_fleet(self, fid: str, pos: np.ndarray) -> FleetNode:
+        """A fleet built exactly as _initialize_fleets builds one in pool mode
+        (keep the two in sync)."""
+        return FleetNode(
+            id=fid,
+            current_pos=pos,
+            goal_pos=pos,
+            G=self.G,
+            grid_pos_dict=self.grid_pos_dict,
+            warehouse_bounds=self.warehouse_bounds,
+            speed=CONFIG["warehouse"]["base_speed"],
+            max_vision_range=CONFIG["warehouse"]["max_vision_range"],
+            aisle_index=self.aisle_index,
+            ray_origin_fallback=CONFIG.get("ablation", {}).get("ray_origin_fallback", True),
+            ray_transform=CONFIG["density"].get("ray_transform", "clip25"),
+            ray_softness=float(CONFIG["density"].get("ray_softness", 8.0)),
+            coords_by_id=self.coords_by_id,
+        )
+
+    def _stream_left(self, node: FleetNode) -> None:
+        """Book-keeping for a fleet leaving the floor at a dock."""
+        nid = self.grid_pos_dict.get(self.density._fleet_cell(node))
+        self._offfloor.append({"base": node.id.split("#")[0], "dock": nid,
+                               "left": self.step_count})
+        self._sstats["exits"] += 1
+        self._sstats["life_sum"] += self.step_count - self._spawned_at.get(node.id, 0)
+        self._sstats["leg_sum"] += self.step_count - self._leg_started.pop(node.id, self.step_count)
+
+    def _stream_maintenance(self) -> None:
+        """Start of step, right after departures: retire delivered orders, then
+        bring fleets back onto the floor at the dock they left from."""
+        if not getattr(self, "stream", False):
+            return
+        for g in self._stream_fulfilled:
+            self.claimed_goals.discard(g)
+            self.goal_pool.pop(g, None)
+            self.targeted_goals.pop(g, None)
+        if self._stream_fulfilled:
+            gone = set(self._stream_fulfilled)
+            for n in self.nodes:
+                if n.id not in self._despawning and n.current_goal_id in gone:
+                    self._retarget(n)
+        self._stream_fulfilled = []
+        delay = int(self._stream_cfg.get("respawn_delay", 0))
+        occupied = {self.density._fleet_cell(n) for n in self.nodes}
+        # DOCK GATE (STREAM_DESIGN.md). Every dock sits inside a two-way
+        # corridor, so a fleet re-entering onto a dock beside other traffic
+        # starts a head-on standoff there. With the gate, a fleet re-enters
+        # only where the dock AND every neighbouring cell are free and no fleet
+        # driving out is within `reentry_clear_hops` of that dock -- at the
+        # least-busy qualifying dock on its floor, its own dock first.
+        gate = bool(self._stream_cfg.get("reentry_gate", False))
+        clear = int(self._stream_cfg.get("reentry_clear_hops", 3))
+        any_dock = bool(self._stream_cfg.get("reentry_any_dock_on_floor", False))
+        approach: Dict[str, int] = {}
+        near: Set[str] = set()
+        for n in self.nodes:
+            if n.id in self._despawning:
+                _nid = self.grid_pos_dict.get(self.density._fleet_cell(n))
+                _own = self._exit_owner.get(_nid)
+                if _own is not None:
+                    approach[_own] = approach.get(_own, 0) + 1
+                    if self._exit_dist.get(_nid, 10 ** 9) <= clear:
+                        near.add(_own)
+
+        def _neighbour_busy(d: str) -> bool:
+            return any(tuple(self._coords_by_id[v]) in occupied
+                       for v in self.G.neighbors(d) if v in self._coords_by_id)
+
+        waiting = []
+        for rec in self._offfloor:
+            if self.step_count - rec["left"] < delay:
+                waiting.append(rec)
+                continue
+            cands = [rec["dock"]]
+            if any_dock:
+                cands += [d for d in self._docks_by_floor.get(self._floor_of(rec["dock"]), [])
+                          if d != rec["dock"]]
+            chosen = None
+            for d in sorted(cands, key=lambda d: (approach.get(d, 0), d != rec["dock"], d)):
+                c = self._coords_by_id.get(d)
+                if c is None or tuple(c) in occupied:
+                    continue
+                if gate and (d in near or _neighbour_busy(d)):
+                    continue
+                chosen = d
+                break
+            if chosen is None:
+                self._sstats["reentry_deferred"] += 1
+                waiting.append(rec)
+                continue
+            cell = self._coords_by_id[chosen]
+            if _neighbour_busy(chosen):
+                self._sstats["reentry_blocked"] += 1
+            if chosen != rec["dock"]:
+                self._sstats["reentry_moved"] += 1
+            rec = dict(rec, dock=chosen)
+            base = rec["base"]
+            self._life[base] = self._life.get(base, 1) + 1
+            node = self._new_fleet(f"{base}#{self._life[base]}",
+                                   np.array(cell, dtype=np.float32))
+            self._issue_order(rec["dock"])
+            self.nodes.append(node)
+            if not self._retarget(node):
+                self.nodes.remove(node)
+                self._life[base] -= 1
+                waiting.append(rec)
+                continue
+            node.initial_graph_distance = node.get_graph_distance_to_goal()
+            occupied.add(tuple(cell))
+            self._spawned_at[node.id] = self.step_count
+            self._sstats["reentries"] += 1
+            self._sstats["wait_sum"] += self.step_count - rec["left"]
+            print(f"[Stream] Fleet {node.id} entered at dock {rec['dock']}, "
+                  f"heading for {node.current_goal_id} "
+                  f"({self._sstats['orders']} orders issued so far).")
+        self._offfloor = waiting
+        self._sstats["floor_sum"] += len(self.nodes)
+        self._sstats["floor_steps"] += 1
+
+    def _stream_leaving_ids(self) -> Set[str]:
+        """Fleets standing on a dock while driving out: they leave at the start
+        of the next step, so their life ends with this step's transition."""
+        out = set()
+        for n in self.nodes:
+            if n.id in self._despawning and self._exit_dist.get(
+                    self.grid_pos_dict.get(self.density._fleet_cell(n))) == 0:
+                out.add(n.id)
+        return out
+
+    def _stream_stats(self) -> Dict[str, float]:
+        if not getattr(self, "stream", False):
+            return {}
+        s = self._sstats
+        return {
+            "stream_deliveries": s["deliveries"],
+            "stream_orders_issued": s["orders"],
+            "stream_exits": s["exits"],
+            "stream_reentries": s["reentries"],
+            "stream_on_floor_mean": s["floor_sum"] / max(1, s["floor_steps"]),
+            "stream_life_steps_mean": s["life_sum"] / max(1, s["exits"]),
+            "stream_exit_leg_steps_mean": s["leg_sum"] / max(1, s["exits"]),
+            "stream_reentry_wait_mean": s["wait_sum"] / max(1, s["reentries"]),
+            "stream_offfloor_at_end": len(self._offfloor),
+            "stream_docks": self._stream_layout["docks"],
+            "stream_order_window": (-1 if getattr(self, "_order_window", None) is None
+                                    else self._order_window),
+            "stream_order_floor_gap_mean": s["gap_sum"] / max(1, s["gap_n"]),
+            "stream_reentry_into_crowd": s["reentry_blocked"],
+            "stream_reentry_other_dock": s["reentry_moved"],
+            "stream_reentry_deferrals": s["reentry_deferred"],
+            # Deliveries in each quarter of the steps so far. A jam that sets
+            # in mid-episode shows as late quarters collapsing toward zero.
+            **{f"stream_deliv_q{q + 1}": sum(1 for t in self._deliv_steps
+                                             if min(3, 4 * t // max(1, self.step_count)) == q)
+               for q in range(4)},
+            **self._stream_efficiency(),
+        }
+
+    def _stream_efficiency(self) -> Dict[str, float]:
+        """
+        Deliveries against the CONFLICT-FREE IDEAL (measurement fix 4).
+
+        Completion (deliveries / (deliveries + in flight)) cannot reach 1 in a
+        stream: ~49 orders are always in flight, so a perfect policy scores
+        ~0.89. The ideal instead asks what the same fleets would deliver in the
+        same steps if every order took its conflict-free cycle at full speed:
+
+            ideal = fleets x steps x base_speed / mean cycle (hops)
+
+        where an order's cycle is dock -> goal -> nearest dock, averaged over
+        the dock orders issued THIS episode -- so it follows the order window
+        as it widens. 60 fleets, 800 steps, 59.4 hops -> ~404, the figure in
+        STREAM_DESIGN.md. Approximate on purpose: the first leg of the initial
+        scenario missions is not a dock cycle and is left out. NaN until a dock
+        order has been issued.
+        """
+        s = self._sstats
+        fleets = int(getattr(self, "_stream_fleets", len(self.nodes)))
+        speed = float(CONFIG["warehouse"]["base_speed"])
+        if s["cycle_n"] == 0 or self.step_count == 0:
+            cyc, ideal, eff = float("nan"), float("nan"), float("nan")
+        else:
+            cyc = s["cycle_sum"] / s["cycle_n"]
+            ideal = fleets * self.step_count * speed / max(1e-9, cyc)
+            eff = s["deliveries"] / ideal if ideal > 0 else float("nan")
+        return {"stream_ideal_cycle_hops": cyc,
+                "stream_ideal_deliveries": ideal,
+                "stream_efficiency": eff,
+                "stream_fleets": fleets}
+
     def _nearest_exit(self, node) -> Optional[str]:
         """
         Closest exit by GRAPH distance, not straight line -- an exit on the far
@@ -999,6 +1438,8 @@ class FLOWRRA:
         nid = self.grid_pos_dict.get(cell)
         if nid is None:
             return None
+        if getattr(self, "stream", False):
+            return self._exit_owner.get(nid)
         for ex in self.exit_nodes:
             dm = self._exit_distance_maps.get(ex)
             if not dm:
@@ -1024,7 +1465,8 @@ class FLOWRRA:
             ex = self._despawning.get(node.id)
             if ex is None:
                 continue
-            if self.grid_pos_dict.get(self.density._fleet_cell(node)) == ex:
+            _here = self.grid_pos_dict.get(self.density._fleet_cell(node))
+            if (self._exit_dist.get(_here) == 0) if getattr(self, "stream", False) else (_here == ex):
                 gone.append(node)
         for node in gone:
             self._despawning.pop(node.id, None)
@@ -1033,8 +1475,18 @@ class FLOWRRA:
             self.frozen_nodes.discard(node.id)
             self.stopped_nodes.discard(node.id)
             self.waiting_nodes.discard(node.id)
-            print(f"[Core] Fleet {node.id} left the floor "
-                  f"({len(self.nodes)} still on it).")
+            if getattr(self, "stream", False):
+                self._stream_left(node)
+            if getattr(self, "stream", False):
+                _life_n = int(node.id.split("#")[1]) if "#" in node.id else 1
+                print(f"[Stream] Fleet {node.id} left the floor at dock "
+                      f"{self.grid_pos_dict.get(self.density._fleet_cell(node))} "
+                      f"(life {_life_n} ended after "
+                      f"{self.step_count - self._spawned_at.get(node.id, 0)} steps; "
+                      f"{len(self.nodes)} on the floor).")
+            else:
+                print(f"[Core] Fleet {node.id} left the floor "
+                      f"({len(self.nodes)} still on it).")
         return len(gone)
 
     def incomplete_postmortem(self) -> Dict[str, Any]:
@@ -1832,9 +2284,22 @@ class FLOWRRA:
         # one is delivered first (cheaper total travel, and it banks one delivery
         # sooner in case the rescuer itself errors before finishing).
         own_goal = node.current_goal_id
+        # ...and still in the pool: in stream mode an order also leaves the
+        # pool by other routes (delivered and retired), not only by being
+        # claimed, and a queued goal that no longer exists crashed the step
+        # (KeyError on goal_pool). Found 2026-09-29, running failures in stream.
         queue = [g for g in ([own_goal] + orphan_goals + self._pending_goals.get(node.id, []))
-                 if g is not None and g not in self.claimed_goals]
+                 if g is not None and g not in self.claimed_goals
+                 and (not self.shared_pool_mode or g in self.goal_pool)]
         queue = list(dict.fromkeys(queue))  # dedupe, preserve order
+        if not queue:
+            # Nothing left to carry: the orphaned orders were delivered while
+            # the transfer ran, and the rescuer's own goal is not an order (a
+            # dock, on its way out). Keep doing what it was doing. Without this
+            # the next line raised IndexError -- and before the pool filter
+            # above, a dock sorting first raised KeyError on goal_pool.
+            self._pending_goals.pop(node.id, None)
+            return self.pickup_reward
 
         def _hops(gid):
             gm = self.goal_distance_maps.get(gid)
@@ -1869,8 +2334,111 @@ class FLOWRRA:
               + (f", then {rest[0]}." if rest else "."))
         return self.pickup_reward
 
+    # ---- CONFLICT RULES (CONFLICT_DESIGN.md components 1 and 2) -----------
+    def _stationary_ids(self) -> Set[str]:
+        """Fleets that will not move next step as far as anyone can tell: held
+        by recovery, waiting, stopped, or idle on their last action."""
+        held = {fid for fid, until in self._yield_until.items() if until > self.step_count}
+        idle = {n.id for n in self.nodes if not np.any(np.asarray(n.direction))}
+        return held | set(self.waiting_nodes) | set(self.stopped_nodes) | idle
+
+    def _evaluate_conflicts(self) -> list:
+        """Classify every pair within the conflict radius, NOW (the proximity
+        index must already be refreshed for this moment)."""
+        self._verdicts = self.conflicts.evaluate(
+            {n.id: n for n in self.nodes}, self._stationary_ids(),
+            self.loop.collision_threshold)
+        return self._verdicts
+
+    @staticmethod
+    def _warn_set(verdicts) -> Set[frozenset]:
+        return {frozenset((v.a, v.b)) for v in verdicts if v.warn}
+
+    def _peek(self):
+        """loop.peek_conflicts with the same warning rule the step uses. Off:
+        exactly the old call."""
+        if not self.path_warnings:
+            return self.loop.peek_conflicts(self.proximity)
+        return self.loop.peek_conflicts(
+            self.proximity, warn_pairs=self._warn_set(self._evaluate_conflicts()),
+            radius=self.conflict_settings.radius)
+
+    def _warned_pairs(self, radius: float):
+        """The pairs the preemptive filters consider: with path warnings, the
+        loop's own warned pairs (which may lie beyond warning_threshold);
+        otherwise every pair within `radius`, exactly as before."""
+        if self.path_warnings:
+            return list(self.loop.warning_pairs)
+        return self.proximity.pairs(radius=radius)
+
+    def _following_snap(self, a_id: str, b_id: str) -> bool:
+        """_is_following on the positions and headings every fleet had BEFORE
+        this step's moves. Braking runs inside the move loop, where fleets that
+        already moved have a new direction and last_pos -- reading those would
+        make one fleet's brake depend on its place in the list."""
+        sa, sb = self._brake_snap.get(a_id), self._brake_snap.get(b_id)
+        if sa is None or sb is None:
+            return False
+        (da, la, pa), (db, lb, pb) = sa, sb
+        if not (np.any(da) and np.any(db)):
+            return False
+        if float(np.dot(da, db)) < self.convoy_alignment:
+            return False
+        if la is None or lb is None:
+            return False
+        gap_now = float(np.sum(np.abs(pa - pb)))
+        gap_was = float(np.sum(np.abs(la - lb)))
+        return gap_now >= gap_was - 0.05
+
+    def _brake_distance(self, node) -> float:
+        """
+        Distance braking reacts to. Off: the nearest peer, as always. On
+        (component 2): the nearest peer that is NOT a steady-gap convoy partner
+        at follow_gap or more -- a leader no longer brakes for the fleet behind
+        it, nor a follower for a leader pulling away at its own speed. A convoy
+        that closes below follow_gap, or stops being a convoy (someone slows or
+        turns), throttles again on the next step.
+        """
+        idx = self._prox_all if self._prox_all is not None else self.proximity
+        if not self.directional_braking:
+            return idx.nearest(node.id)
+        gap = self.conflict_settings.follow_gap
+        for pid, d in idx.peers_within(node.id, idx.search_radius):
+            if d >= gap and self._following_snap(node.id, pid):
+                continue
+            if d > idx.nearest(node.id):
+                self.brake_convoy_exempt += 1
+            return d
+        if np.isfinite(idx.nearest(node.id)):
+            self.brake_convoy_exempt += 1
+        return float("inf")
+
     def _splat_warnings(self) -> None:
         """Stamp mild repulsion for predictive warnings. See the notes inside."""
+        # PATH-BASED WARNINGS: the splat goes where the pair would actually
+        # meet. head_on / contested / blocked -> the soonest shared cell (or
+        # the blocker's cell); a follower warned for being too close -> none
+        # (a convoy, as below); a pair warned only by the floor -> the midpoint,
+        # as before.
+        if self.path_warnings:
+            by_id = {n.id: n for n in self.nodes}
+            for v in self._verdicts:
+                if not v.warn:
+                    continue
+                if v.kind == "following":
+                    self.convoy_splats_skipped += 1
+                    continue
+                if v.meet is not None:
+                    pos = np.array(v.meet, dtype=np.float64)
+                else:
+                    a, b = by_id.get(v.a), by_id.get(v.b)
+                    if a is None or b is None:
+                        continue
+                    pos = (a.current_pos + b.current_pos) / 2.0
+                self.density.splat_spatial_temporal_event(
+                    pos, severity_multiplier=self.warning_splat_multiplier)
+                self.warning_splats += 1
+            return
         # Predictive Warning (Safety Bubble): splat mild repulsion between
         # fleets that are close.
         #
@@ -1943,7 +2511,7 @@ class FLOWRRA:
         """
         by_id = {n.id: n for n in self.nodes}
         needs: Set[str] = set()
-        for a_id, b_id, _dist in self.proximity.pairs(radius=self.loop.warning_threshold):
+        for a_id, b_id, _dist in self._warned_pairs(self.loop.warning_threshold):
             if a_id not in at_risk and b_id not in at_risk:
                 continue
             a, b = by_id.get(a_id), by_id.get(b_id)
@@ -2073,7 +2641,7 @@ class FLOWRRA:
         """
         if not self.holon_perception:
             return
-        d, w = self.loop.peek_conflicts(self.proximity)
+        d, w = self._peek()
         v = 0.0 if d else (0.5 if w else 1.0)
         for n in self.nodes:
             n.sf_holon_integrity = v
@@ -2097,7 +2665,7 @@ class FLOWRRA:
                 if until > self.step_count}
         by_id = {n.id: n for n in self.nodes}
         needs: Set[str] = set()
-        for a_id, b_id, _dist in self.proximity.pairs(radius=self.loop.warning_threshold):
+        for a_id, b_id, _dist in self._warned_pairs(self.loop.warning_threshold):
             if a_id not in at_risk and b_id not in at_risk:
                 continue
             a, b = by_id.get(a_id), by_id.get(b_id)
@@ -2213,6 +2781,8 @@ class FLOWRRA:
             self.recovery_preemptive += 1
             # Verified next step: did these fleets actually come clear?
             self._preemptive_watch = set(dead)
+            # ...and, separately, did they collide within the window?
+            self._watch_open("preempt", dead)
         self.loop.force_repair()
         self._deadlock_streak = 0
         if forced:
@@ -2222,6 +2792,116 @@ class FLOWRRA:
         if n_dead_before > 0:
             self.recovery_resolved += 1
         return result
+
+    def _charge_new_collisions(self) -> int:
+        """collision_cost mode: charge the recovery head for each colliding pair
+        that was not colliding at the previous check (at most
+        collision_charge_cap a step). Returns how many were charged."""
+        pairs = {frozenset((a, b)) for a, b, _d in
+                 self.proximity.pairs(radius=self.loop.collision_threshold)}
+        new = sorted(pairs - self._prev_collision_pairs, key=lambda p: sorted(p))
+        self._prev_collision_pairs = pairs
+        charged = new[:self.recovery_collision_cap]
+        for p in charged:
+            self._pending_integrity_reward += self.recovery_collision_cost
+            self._attr_integrity(set(p), self.recovery_collision_cost)
+            self.recovery_collisions_charged += 1
+        return len(charged)
+
+    def _lifelong_next(self, node) -> bool:
+        """Lifelong mode: count the goal just reached and hand over the next one
+        from this fleet's sequence. False if the fleet has no sequence."""
+        seq = self._ll_goals.get(node.id)
+        if not seq:
+            return False
+        i = self._ll_idx.get(node.id, 0) + 1
+        if i >= len(seq):                   # ran out: cycle, and count it
+            i = 0
+            self.lifelong_cycled += 1
+        nxt = seq[i]
+        self._ll_idx[node.id] = i
+        self.lifelong_reached += 1
+        if self.goal_distance_maps.get(nxt) is None:
+            import networkx as nx
+            self.goal_distance_maps[nxt] = dict(nx.single_source_shortest_path_length(self.G, nxt))
+        node.current_goal_id = nxt
+        node.goal_pos = np.array(self._coords_by_id[nxt], dtype=np.float32)
+        node.goal_distance_map = self.goal_distance_maps.get(nxt)
+        node.initial_graph_distance = node.get_graph_distance_to_goal()
+        self._best_dist.pop(node.id, None)
+        self._stall_steps[node.id] = 0
+        return True
+
+    def _watch_open(self, label: str, fleets) -> None:
+        """Start a prevention-window event for `fleets` (see __init__)."""
+        fleets = frozenset(fleets)
+        if not fleets:
+            return
+        self._watch_events.append([label, fleets, self.step_count, set()])
+        self._watch.setdefault(label, {"opened": 0, "collided": 0, "clear": 0,
+                                       "fleets_watched": 0, "fleets_hit": 0})
+        self._watch[label]["opened"] += 1
+
+    def _watch_resolve(self) -> None:
+        """
+        Advance open prevention-window events against THIS step's start-of-step
+        collision set. Called once per step, right after the snapshot. An event
+        opened during step t is first judged at t+1 (age 1): that check sees the
+        positions step t's actions produced, the earliest observable outcome.
+        Every event runs its full window (ages 1..k), so besides "did any of
+        these fleets collide" it also records HOW MANY did -- with 60 fleets a
+        step's at-risk set is large and the binary alone saturates.
+        """
+        if not self._watch_events:
+            return
+        keep = []
+        for ev in self._watch_events:
+            label, fleets, opened, hit = ev
+            age = self.step_count - opened
+            if age < 1:
+                keep.append(ev)
+                continue
+            hit |= fleets & self._step_deadlocked
+            if age < self.prevention_window:
+                keep.append(ev)
+                continue
+            st = self._watch[label]
+            st["collided" if hit else "clear"] += 1
+            st["fleets_watched"] += len(fleets)
+            st["fleets_hit"] += len(hit)
+            self._watch_log.append((label, opened, len(fleets), len(hit)))
+        self._watch_events = keep
+
+    def _watch_stats(self) -> Dict[str, Any]:
+        pending: Dict[str, int] = {}
+        for ev in self._watch_events:
+            pending[ev[0]] = pending.get(ev[0], 0) + 1
+        p = self._watch["preempt"]
+        resolved = p["collided"] + p["clear"]
+        out = {
+            "preempt_window": self.prevention_window,
+            "preempt_watched": p["opened"],
+            "preempt_collided_k": p["collided"],
+            "preempt_clear_k": p["clear"],
+            "preempt_pending": pending.get("preempt", 0),
+            "preempt_prevention_rate": (p["clear"] / resolved if resolved
+                                        else float("nan")),
+            "preempt_fleets_hit_k": p["fleets_hit"],
+            "preempt_fleets_watched": p["fleets_watched"],
+        }
+        for label, st in self._watch.items():
+            if label == "preempt":
+                continue
+            for k, v in st.items():
+                out[f"watch_{label}_{k}"] = v
+            out[f"watch_{label}_pending"] = pending.get(label, 0)
+        return out
+
+    def _count_hold(self, duration: int) -> None:
+        self.holds_assigned += 1
+        self.hold_steps_assigned += int(duration)
+        if int(duration) >= int(self.recovery.max_yield_steps):
+            self.holds_at_cap += 1
 
     def _policy_recovery_step(self):
         """
@@ -2257,6 +2937,22 @@ class FLOWRRA:
             self._deadlock_streak = 0
 
         forced = (self._deadlock_streak >= self.recovery_forced_after)
+
+        # COUNT THE OPPORTUNITY BEFORE THE HEAD'S ANSWER CAN END THE STEP
+        # (CONFLICT_DESIGN.md, measurement fix 1). This block used to sit below
+        # the `mode == 0` return, so a risk step where the head declined was
+        # never counted: risk_steps only ever held the steps it ACTED on, and
+        # risk_steps_acted / risk_steps read 100% by construction in every
+        # episode of cold_run22 and cold_run24. Counters only -- nothing that
+        # feeds a reward or a decision reads them.
+        at_risk = self._step_deadlocked or self._step_warning
+        if at_risk:
+            self.risk_steps += 1
+            if self._step_warning and not self._step_deadlocked:
+                self.warning_steps += 1
+            if mode != 0:
+                self.risk_steps_acted += 1
+
         if mode == 0 and not forced:
             return
 
@@ -2273,14 +2969,6 @@ class FLOWRRA:
         # Preemptive invocation stays legitimate: warning-zone fleets count as
         # at-risk, so calling a collapse BEFORE a collision -- which is the whole
         # point of moving this out of the deadlocked branch -- still executes.
-        at_risk = self._step_deadlocked or self._step_warning
-        if at_risk:
-            self.risk_steps += 1
-            if self._step_warning and not self._step_deadlocked:
-                self.warning_steps += 1
-            if mode != 0:
-                self.risk_steps_acted += 1
-
         if not at_risk and not forced:
             self.recovery_wasted += 1
             self._pending_integrity_reward += self.recovery_invocation_cost
@@ -2295,18 +2983,12 @@ class FLOWRRA:
         if recovery_result and recovery_result.get("yield_durations"):
             for loser_id, duration in recovery_result.get("yield_durations", {}).items():
                 self._yield_until[loser_id] = self.step_count + duration
+                self._count_hold(duration)
                 
             self.recovery.currently_yielding = {
                 fid for fid, until in self._yield_until.items()
                 if until > self.step_count
             }
-
-        # Cost and outcome land on the INTEGRITY head...
-        self._pending_integrity_reward += self.recovery_invocation_cost
-        self._attr_integrity(self._step_deadlocked or self._step_warning, self.recovery_invocation_cost)
-        if n_dead_before > 0:
-            self._pending_integrity_reward += self.recovery_resolution_bonus
-            self._attr_integrity(self._step_deadlocked or self._step_warning, self.recovery_resolution_bonus)
 
         # Cost and outcome land on the INTEGRITY head, charged to every fleet
         # that was party to the deadlock. Without a cost the policy learns to
@@ -2315,6 +2997,14 @@ class FLOWRRA:
         # travel distance, so the two heads pull against each other and the
         # policy has to resolve that tension -- which is the decision we want it
         # to learn.
+        #
+        # CHARGED ONCE. Until 2026-09-29 this block appeared twice in a row, so
+        # every at-risk invocation cost -8 and every resolution paid +12, while
+        # a wasted invocation (the early return above) cost -4 and a preemptive
+        # success paid +9 once. Asking for help when fleets really were at risk
+        # cost twice what asking for nothing did, and invoking after a collision
+        # (-8 + 12 = +4) paid better than preventing one (-8 + 9 = +1). The
+        # "two invocation costs in one step (-8.5)" in CALIBRATION.md was this.
         self._pending_integrity_reward += self.recovery_invocation_cost
         self._attr_integrity(self._step_deadlocked or self._step_warning, self.recovery_invocation_cost)
         if n_dead_before > 0:
@@ -2340,6 +3030,8 @@ class FLOWRRA:
         main_runner logs completion off frozen_nodes, so success reporting is
         unaffected by this.
         """
+        if getattr(self, "stream", False) or getattr(self, "lifelong", False):
+            return False                    # a stream / lifelong run ends only at the horizon
         # If there are open pickups waiting for a rescuer, keep running.
         if len(self.open_pickups) > 0:
             return False
@@ -2496,6 +3188,11 @@ class FLOWRRA:
             "rwd_standoff_longest": self._standoff_longest,
             "rwd_standoff_past_cap": self._standoff_past_cap,
             **{f"rwd_choice_{k}": v for k, v in self._choice.items()},
+            **{f"choice_{k}": v for k, v in self._decided.items()},
+            "choice_policy_wait_share": (self._decided["policy_wait"] / self._decided["n"]
+                                         if self._decided["n"] else float("nan")),
+            "choice_exec_wait_share": (self._decided["exec_wait"] / self._decided["n"]
+                                       if self._decided["n"] else float("nan")),
             "rwd_warnundo_fleetsteps": self._warnundo_n,
             "rwd_warnundo_mismatched": self._warnundo_mismatched,
             "rwd_warnundo_escaped_kept": self._warnundo_escaped_kept,
@@ -2550,6 +3247,26 @@ class FLOWRRA:
             "warning_steps": self.warning_steps,
             "intervention_rate": (self.risk_steps_acted / self.risk_steps
                                   if self.risk_steps else 0.0),
+            "recovery_collisions_charged": self.recovery_collisions_charged,
+            **self._watch_stats(),
+            # Lifelong throughput in POGEMA's units: goals per timestep of an
+            # agent that moves one cell per step (FLOWRRA moves base_speed cells
+            # per step, so its steps x base_speed are those timesteps).
+            **({"lifelong_goals_reached": self.lifelong_reached,
+                "lifelong_timesteps": self.step_count * float(CONFIG["warehouse"]["base_speed"]),
+                "lifelong_throughput": self.lifelong_reached / max(
+                    1e-9, self.step_count * float(CONFIG["warehouse"]["base_speed"])),
+                "lifelong_cycled": self.lifelong_cycled} if self.lifelong else {}),
+            # CONFLICT_DESIGN.md's pre-registered criteria, in one place.
+            "conflict_collapses": self.recovery.total_collapses,
+            "conflict_repeat_offences": self.recovery.repeat_offences,
+            "conflict_max_pair_repeat": self.recovery.max_pair_repeat,
+            **(self.conflicts.statistics() if self.conflicts is not None else {}),
+            "conflict_brake_convoy_exempt": self.brake_convoy_exempt,
+            **(self.rules.statistics() if self.rules is not None else {}),
+            "conflict_holds": self.holds_assigned,
+            "conflict_holds_at_cap": self.holds_at_cap,
+            "conflict_hold_steps": self.hold_steps_assigned,
             # DISTANCE, COUNTED. soc_hops is sum_of_costs (a TIME) multiplied by
             # base_speed, which answers "how far could it have gone at nominal
             # speed?" -- and FLOWRRA never sustains nominal speed. Affordance
@@ -2567,6 +3284,7 @@ class FLOWRRA:
             "pickups_open": len(self.open_pickups),
             "stopped_fleets": sorted(self.stopped_nodes),
             **self._path_stats_summary(),
+            **self._stream_stats(),
         }
 
     def _perceive(self, node) -> np.ndarray:
@@ -2703,6 +3421,7 @@ class FLOWRRA:
         # Anything that changes len(self.nodes) has to happen at a step boundary,
         # where every downstream structure is rebuilt from the new roster.
         self._collect_despawned()
+        self._stream_maintenance()
 
         self._maybe_inject_error()
         self._confirm_stops_and_open_pickups()
@@ -2764,8 +3483,15 @@ class FLOWRRA:
         if self._prox_all is not None:
             self._prox_all.refresh(self.nodes, excluded_ids=set())
 
-        current_integrity = self.loop.check_integrity(
-            self.nodes, self.step_count, self.immobile_nodes, proximity=self.proximity)
+        if self.path_warnings:
+            self._verdicts_start = self._evaluate_conflicts()
+            current_integrity = self.loop.check_integrity(
+                self.nodes, self.step_count, self.immobile_nodes, proximity=self.proximity,
+                warn_pairs=self._warn_set(self._verdicts_start),
+                radius=self.conflict_settings.radius)
+        else:
+            current_integrity = self.loop.check_integrity(
+                self.nodes, self.step_count, self.immobile_nodes, proximity=self.proximity)
 
         if (self.phantom_audit_every
                 and self.step_count % self.phantom_audit_every == 0):
@@ -2859,10 +3585,19 @@ class FLOWRRA:
             still_at_risk = self._preemptive_watch & (
                 self._step_deadlocked | self._step_warning)
             if not still_at_risk:
-                self._pending_integrity_reward += self.recovery_preemptive_bonus
-                self._attr_integrity(self._preemptive_watch, self.recovery_preemptive_bonus)
+                if self.recovery_reward_mode == "strict_bonus":
+                    self._pending_integrity_reward += self.recovery_preemptive_bonus
+                    self._attr_integrity(self._preemptive_watch, self.recovery_preemptive_bonus)
                 self.recovery_preemptive_success += 1
             self._preemptive_watch = set()
+        # COLLISION COST (recovery_policy.reward_mode = "collision_cost"): the
+        # recovery head pays for each NEW colliding pair -- a pair that was not
+        # colliding at the previous check -- so declining a dangerous opportunity
+        # costs it something, and preempting pays only when it prevents.
+        if self.recovery_reward_mode == "collision_cost":
+            self._charge_new_collisions()
+        # Prevention windows (fix 2) are judged on the same snapshot.
+        self._watch_resolve()
 
         # 1a. Publish situation flags onto each fleet so the rescue and safety
         # heads have something to condition on. Without these a handover is
@@ -2964,6 +3699,7 @@ class FLOWRRA:
                 tier3_winner_id = recovery_result.get("winner")
             for loser_id, duration in recovery_result.get("yield_durations", {}).items():
                 self._yield_until[loser_id] = self.step_count + duration
+                self._count_hold(duration)
 
             # Tell recovery WHO IS CURRENTLY HELD, so it stops counting their
             # continued overlap as fresh offences. A held fleet cannot separate
@@ -3133,11 +3869,23 @@ class FLOWRRA:
         # False so the old code is reproduced exactly; see the end of phase A.
         _leftover_i = None
         _leftover_peers = None
+        # Components 3 and 4 decide their overrides here, once, from where every
+        # fleet stands before anyone moves -- so no fleet's outcome depends on
+        # its place in the list.
+        self._rule_actions = (self.rules.plan(actions, node_ids)
+                              if self.rules is not None and actions is not None else {})
+        if self.directional_braking:
+            self._brake_snap = {
+                n.id: (np.asarray(n.direction, dtype=np.float32).copy(),
+                       None if n.last_pos is None else np.asarray(n.last_pos, dtype=np.float64).copy(),
+                       np.asarray(n.current_pos, dtype=np.float64).copy())
+                for n in self.nodes}
         for i, node in enumerate(self.nodes):
             if node.id in self.immobile_nodes:
                 continue
 
             action_id = actions[i] if actions is not None else 0
+            _proposed = int(action_id)          # the network's own choice
 
             # ---- DIAGNOSTIC: is the policy actually reading the goal gradient? ----
             # Measured on the RAW GNN choice, before the Tier-3 yield override and
@@ -3358,9 +4106,7 @@ class FLOWRRA:
                 # The brake_on_immobile ablation is preserved: it asks whether
                 # parked fleets should still throttle traffic, which is a
                 # question about the EXCLUSION SET, not the metric.
-                min_dist = (self._prox_all.nearest(node.id)
-                            if self._prox_all is not None
-                            else self.proximity.nearest(node.id))
+                min_dist = self._brake_distance(node)
 
                 # BRAKE DUTY CYCLE. Occupancy (agents/nodes) is a convenient
                 # axis but not a physical one: it treats a degree-2 corridor
@@ -3415,6 +4161,11 @@ class FLOWRRA:
                     if node.get_progress_fraction() >= self.final_approach_threshold:
                         local_safety = max(local_safety, self.final_approach_speed_floor)
 
+                # BRAKING SWITCH (warehouse.braking). Off: full speed always --
+                # as in POGEMA, where an agent moves a whole cell or stays put.
+                # For comparisons on their protocol; on by default.
+                if not self.braking_enabled:
+                    local_safety = 1.0
                 node.speed = base_speed * local_safety
                 # Sampled HERE, not after step() returns.
                 #
@@ -3432,6 +4183,11 @@ class FLOWRRA:
                     self._braked_speed_min = float(node.speed)
             
             # Execute physical move
+            # CONFLICT RULES (components 3, 4): applied last, so they are what
+            # executes -- except that a fleet held by recovery stays held.
+            if (node.id in self._rule_actions
+                    and not self.step_count < self._yield_until.get(node.id, -1)):
+                action_id = self._rule_actions[node.id]
             _pos_before = node.current_pos.copy()
             # RECORD WHAT WAS EXECUTED, not what the network picked. action_id is a
             # local that four paths overwrite above (livelock escape, Tier-3 yield,
@@ -3439,6 +4195,25 @@ class FLOWRRA:
             # is what reaches the replay buffer. Every overridden step therefore
             # stored (state, action_CHOSEN, reward_from_action_TAKEN) -- mislabelled
             # data, not off-policy data. Measured at 13-24% of transitions.
+            if node.id in self._step_warning:
+                def _cls(a, _gg=_g):
+                    if a == 0:
+                        return "wait"
+                    v = float(_gg[a - 1])
+                    return "toward" if v > 0 else ("away" if v < 0 else "side")
+                _d = self._decided
+                _d["n"] += 1
+                _d["policy_" + _cls(_proposed)] += 1
+                _d["exec_" + _cls(int(action_id))] += 1
+                if _proposed != int(action_id):
+                    if (node.id in self._rule_actions
+                            and int(action_id) == self._rule_actions[node.id]
+                            and not self.step_count < self._yield_until.get(node.id, -1)):
+                        _d["over_rule"] += 1
+                    elif self.step_count < self._yield_until.get(node.id, -1):
+                        _d["over_hold"] += 1
+                    else:
+                        _d["over_other"] += 1
             self.actions_total += 1
             if int(actions[i]) != int(action_id):
                 self.actions_overridden += 1
@@ -3471,7 +4246,7 @@ class FLOWRRA:
                         node.id, self.wait_block_threshold)
                 self.proximity.refresh(self.nodes, excluded_ids=self.immobile_nodes)
                 (self._post_action_deadlocked,
-                 self._post_action_warning) = self.loop.peek_conflicts(self.proximity)
+                 self._post_action_warning) = self._peek()
                 _leftover_i = i
 
         # ---- BETWEEN THE PHASES: snapshot, and resolve simultaneous arrivals ---
@@ -3657,7 +4432,13 @@ class FLOWRRA:
             # then drift back out to 5.0, and 2-4 active fleets per episode get
             # inside 0.5 of their goal without ever being credited. 0.5 is the
             # consistent definition -- is the fleet's CELL the goal cell.
-            if new_dist < self.arrival_radius and not _on_pickup_mission:
+            # A fleet DRIVING OUT (despawning) carries no order: its goal is a
+            # dock, and reaching it is a departure (collected at the start of
+            # the next step), never a delivery. Without this guard every exit
+            # was claimed as a second delivery -- a latent bug in the original
+            # despawn too, which had never run with despawn switched on.
+            if (new_dist < self.arrival_radius and not _on_pickup_mission
+                    and node.id not in self._despawning):
                 if self.shared_pool_mode:
                     if node.current_goal_id is not None and _may_claim(node.current_goal_id, node.id):
                         # First arrival -- claim it, and retire immediately.
@@ -3713,8 +4494,10 @@ class FLOWRRA:
 
                         # A rescuer carrying two loads still owes the second
                         # destination -- it must not retire after the first.
+                        # Only orders that still exist (see _service_pickups).
                         pending = [g for g in self._pending_goals.get(node.id, [])
-                                   if g not in self.claimed_goals]
+                                   if g not in self.claimed_goals
+                                   and (not self.shared_pool_mode or g in self.goal_pool)]
                         if pending:
                             nxt = pending[0]
                             self._pending_goals[node.id] = pending[1:]
@@ -3763,21 +4546,40 @@ class FLOWRRA:
                                 # recalled. Despawning deletes the ambiguous case
                                 # rather than encoding it.
                                 self._despawning[node.id] = exit_node
+                                if self.stream:
+                                    # The order is fulfilled; it is retired at
+                                    # the start of the next step, outside the
+                                    # claim loop.
+                                    self._stream_fulfilled.append(node.current_goal_id)
+                                    self._sstats["deliveries"] += 1
+                                    self._deliv_steps.append(self.step_count)
+                                    self._leg_started[node.id] = self.step_count
                                 node.current_goal_id = exit_node
                                 node.goal_pos = np.array(
                                     self._coords_by_id[exit_node], dtype=np.float32)
-                                node.goal_distance_map = self._exit_distance_maps.get(exit_node)
+                                node.goal_distance_map = (
+                                    self._exit_dist if self.stream
+                                    else self._exit_distance_maps.get(exit_node))
                                 node.initial_graph_distance = node.get_graph_distance_to_goal()
                                 self._best_dist.pop(node.id, None)
                                 self._stall_steps[node.id] = 0
-                                print(f"[Core] Fleet {node.id} claimed goal {delivered} "
-                                      f"({len(self.claimed_goals)}/{len(self.goal_pool)} claimed); "
-                                      f"heading out via {exit_node}.")
+                                if self.stream:
+                                    # claimed_goals / goal_pool count nothing in a
+                                    # stream (delivered orders are retired each
+                                    # step), so report the stream's own tallies.
+                                    print(f"[Stream] Delivery #{self._sstats['deliveries']} "
+                                          f"(of {self._sstats['orders']} orders so far): fleet {node.id} "
+                                          f"at {delivered}, {self.step_count - self._spawned_at.get(node.id, 0)} "
+                                          f"steps into its life; heading to dock {exit_node}. 🔥")
+                                else:
+                                    print(f"[Core] Fleet {node.id} claimed goal {delivered} "
+                                          f"({len(self.claimed_goals)}/{len(self.goal_pool)} claimed); "
+                                          f"heading out via {exit_node}. 🔥")
                             else:
                                 self.frozen_nodes.add(node.id)
                                 self.gnn.freeze_node(node.id, node.current_pos)
                                 print(f"[Core] Fleet {node.id} claimed goal {delivered} and retired! "
-                                      f"({len(self.claimed_goals)}/{len(self.goal_pool)} claimed)")
+                                      f"({len(self.claimed_goals)}/{len(self.goal_pool)} claimed) 🔥")
                     else:
                         # Arrived at a goal a peer claimed first (this same
                         # step, or while this fleet was still en route) --
@@ -3800,9 +4602,10 @@ class FLOWRRA:
                     _rterm = self.reward_mission_complete
                     rvec[H["goal"]] += _rterm
                     tvec[self._TI[("goal", "delivery")]] += _rterm
-                    self.frozen_nodes.add(node.id)
-                    self.gnn.freeze_node(node.id, node.current_pos)
-                    print(f"[Core] Fleet {node.id} reached goal and crystallized!")
+                    if not (self.lifelong and self._lifelong_next(node)):
+                        self.frozen_nodes.add(node.id)
+                        self.gnn.freeze_node(node.id, node.current_pos)
+                        print(f"[Core] Fleet {node.id} reached goal and crystallized!")
             else:
                 # B. Movement: proportional to actual progress, not a flat
                 # bonus/penalty regardless of magnitude. A full-speed step
@@ -3978,7 +4781,7 @@ class FLOWRRA:
         if self.attribute_collisions_post_action and len(step_rewards_array):
             self.proximity.refresh(self.nodes, excluded_ids=self.immobile_nodes)
             (self._post_action_deadlocked,
-             self._post_action_warning) = self.loop.peek_conflicts(self.proximity)
+             self._post_action_warning) = self._peek()
             _sh = self.HEAD["safety"]
             _sh_warn = np.zeros(len(step_rewards_array), dtype=np.float64)
             # APPROACH, measured across this step's action only (see helper).
@@ -4074,7 +4877,7 @@ class FLOWRRA:
             if not self.attribute_collisions_post_action:
                 self.proximity.refresh(self.nodes, excluded_ids=self.immobile_nodes)
                 (self._post_action_deadlocked,
-                 self._post_action_warning) = self.loop.peek_conflicts(self.proximity)
+                 self._post_action_warning) = self._peek()
             _by_id = {n.id: n for n in self.nodes}
             for _fid in self._post_action_deadlocked:
                 _n = _by_id.get(_fid)
@@ -4147,6 +4950,8 @@ class FLOWRRA:
                     self._live[_h]["neg"] += float(_c[_c < 0].sum())
             else:
                 _push_rewards = step_rewards_array
+            _leaving = (self._stream_leaving_ids()
+                        if getattr(self, "stream", False) else set())
             self.gnn.memory.push(
                 node_features_array,
                 adj_mat,
@@ -4174,7 +4979,8 @@ class FLOWRRA:
                 # Stopped fleets never resume (only despawning clears the set);
                 # a recalled rescuer simply starts a fresh life.
                 next_active_mask=np.array(
-                    [n.id not in self.immobile_nodes for n in self.nodes],
+                    [n.id not in self.immobile_nodes and n.id not in _leaving
+                     for n in self.nodes],
                     dtype=np.float32),
             )
         

@@ -63,6 +63,8 @@ class WarehouseLoop:
         # Track nodes currently in a deadlock/collision or warning state
         self.deadlocked_nodes: Set[str] = set()
         self.warning_nodes: Set[str] = set()
+        # The warned PAIRS behind warning_nodes (graph sweep only).
+        self.warning_pairs: List[Tuple[str, str, float]] = []
 
         # Diagnostic: how many pairs the graph metric rejects that Manhattan
         # would have flagged. This is the phantom-pair rate, measured live
@@ -88,6 +90,8 @@ class WarehouseLoop:
         timestep: int,
         frozen_node_ids: Set[str],
         proximity: Optional[Any] = None,
+        warn_pairs: Optional[Set[frozenset]] = None,
+        radius: Optional[float] = None,
     ) -> float:
         """
         Evaluates the grid for fatal collisions (<= collision_threshold) and
@@ -100,6 +104,11 @@ class WarehouseLoop:
             frozen_node_ids: Set of IDs for fleets that have parked at their goal.
             proximity: a GraphProximity ALREADY REFRESHED this step with the same
                 exclusion set. None falls back to the original Manhattan sweep.
+            warn_pairs: PATH-BASED WARNINGS (CONFLICT_DESIGN.md component 1).
+                When given, a non-colliding pair warns only if it is in this set
+                -- the classifier's decision -- and pairs are swept out to
+                `radius` instead of warning_threshold. None: today's rule,
+                every pair within warning_threshold warns.
 
         Returns:
             float: 1.0, 0.5, or 0.0.
@@ -108,10 +117,11 @@ class WarehouseLoop:
         self.deadlocked_nodes.clear()
         self.warning_nodes.clear()
 
+        self.warning_pairs = []
         if proximity is None:
             self._sweep_manhattan(nodes, timestep, frozen_node_ids)
         else:
-            self._sweep_graph(proximity, timestep)
+            self._sweep_graph(proximity, timestep, warn_pairs, radius)
 
         # Integrity Escalation Logic -- UNCHANGED.
         if len(self.deadlocked_nodes) > 0:
@@ -125,7 +135,9 @@ class WarehouseLoop:
         self.integrity_history.append(self.current_integrity)
         return self.current_integrity
 
-    def peek_conflicts(self, proximity: Any) -> Tuple[Set[str], Set[str]]:
+    def peek_conflicts(self, proximity: Any,
+                       warn_pairs: Optional[Set[frozenset]] = None,
+                       radius: Optional[float] = None) -> Tuple[Set[str], Set[str]]:
         """
         Who is colliding or in a warning zone RIGHT NOW -- without recording it.
 
@@ -150,30 +162,41 @@ class WarehouseLoop:
         warning: Set[str] = set()
         if proximity is None:
             return deadlocked, warning
-        for a_id, b_id, dist in proximity.pairs(radius=self.warning_threshold):
+        r = self.warning_threshold if warn_pairs is None else max(
+            self.warning_threshold, float(radius or 0.0))
+        for a_id, b_id, dist in proximity.pairs(radius=r):
             if dist <= self.collision_threshold:
                 deadlocked.add(a_id)
                 deadlocked.add(b_id)
-            else:
+            elif warn_pairs is None or frozenset((a_id, b_id)) in warn_pairs:
                 warning.add(a_id)
                 warning.add(b_id)
         return deadlocked, warning
 
-    def _sweep_graph(self, proximity: Any, timestep: int):
+    def _sweep_graph(self, proximity: Any, timestep: int,
+                     warn_pairs: Optional[Set[frozenset]] = None,
+                     radius: Optional[float] = None):
         """
         Graph-distance sweep. proximity.pairs() already excludes parked and
         stopped fleets on BOTH sides and truncates at the radius, so this only
-        classifies.
+        classifies. With warn_pairs (path-based warnings) the sweep reaches out
+        to `radius` and a pair warns only if the classifier said so; collisions
+        are unchanged either way. The warned pairs are kept in warning_pairs so
+        every later reader -- splats, the preemptive filters -- uses exactly
+        the same set rather than re-deriving it from distance.
         """
-        for a_id, b_id, dist in proximity.pairs(radius=self.warning_threshold):
+        r = self.warning_threshold if warn_pairs is None else max(
+            self.warning_threshold, float(radius or 0.0))
+        for a_id, b_id, dist in proximity.pairs(radius=r):
             self.pairs_evaluated += 1
             if dist <= self.collision_threshold:
                 self.deadlocked_nodes.add(a_id)
                 self.deadlocked_nodes.add(b_id)
                 print(f"[Loop] CRITICAL: Fatal collision between Fleet {a_id} and Fleet {b_id} at step {timestep}.")
-            else:
+            elif warn_pairs is None or frozenset((a_id, b_id)) in warn_pairs:
                 self.warning_nodes.add(a_id)
                 self.warning_nodes.add(b_id)
+                self.warning_pairs.append((a_id, b_id, dist))
 
     def _sweep_manhattan(self, nodes: List[Any], timestep: int, frozen_node_ids: Set[str]):
         """

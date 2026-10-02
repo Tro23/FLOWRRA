@@ -1,4 +1,27 @@
 """
+config_benchmark_cold_run23_conflict.py -- cold_run23's benchmark plus the
+CONFLICT_DESIGN.md package, and nothing else.
+
+Copy over config_warehouse.py on the machine that runs it; run with cold_run23's
+command and --seed 0 (map 25_5_2_5_2_1, 46 fleets, 60 episodes), so the 60
+instances are identical and every episode pairs against cold_run23.
+
+Against config_benchmark_cold_run23.py this differs ONLY by:
+  * density.frozen_obstacle_severity 1.0 -> 0.0 (parked fleets no longer read
+    as a false alarm -- cold_run23's own top suspect for its stuck fleets) and
+    density.slow_decay_factor 0.987 -> 0.9786 (the improved value);
+  * the "conflict" section, all six switches on (path warnings, direction-aware
+    braking, corridor entry, priority, yield to stopped fleets, node-aligned
+    moves) -- the change that lifted cold_run25 over cold_run24;
+  * a "stream" section, off (cold_run23 had none: off by default);
+  * keys added since, at defaults that reproduce cold_run25's behaviour:
+    warehouse.braking True, recovery_policy.prevention_window (measurement),
+    recovery_policy.reward_mode "strict_bonus" (the collision-cost reward is
+    left for a later run), recovery.yield_escalation_per_repeat 5.
+Code changes riding along, as in cold_run25: the measurement fixes (behaviour
+identical), the recovery cost charged once, the rescue-path fixes.
+"""
+"""
 config_Warehouse.py
 
 Centralized configuration payload for the DhaaRn FLOWRRA orchestrator.
@@ -588,7 +611,7 @@ CONFIG = {
     # seeded queue drawn from the goal bank. Absent or enabled=False: the fixed
     # 46-mission behaviour, exactly (config_benchmark_cold_run23.py).
     "stream": {
-        "enabled": True,
+        "enabled": False,
         "exit_floors": "all",          # "all": docks on every floor; "ground": lowest floor only
         "exits_per_floor": 12,         # spread evenly around each floor's perimeter (was 6: catchments up to 236 cells)
         "vertical_axis": "auto",       # the axis with the fewest edges (lifts), or "X"/"Y"/"Z"
@@ -662,7 +685,7 @@ CONFIG = {
         # retires or stops. cold_run22's delivery value reached 1.84 against a
         # physical ceiling of 1.42 by bootstrapping from untrained retired states.
         "per_fleet_terminal": True,
-        "buffer_capacity": 15000,   # 60 fleets: the same memory as 20,000 at 46 (STREAM_DESIGN.md)
+        "buffer_capacity": 20000,   # 60 fleets: the same memory as 20,000 at 46 (STREAM_DESIGN.md)
         "batch_size": 64,                  # <--- Bumped for smoother gradient averaging  (# Experiences sampled per learn step)
         "total_episodes": 11,             # Total benchmark runs
         "max_steps_per_episode": 780,      # Timeout limit for a single run
@@ -844,7 +867,7 @@ CONFIG = {
     # rebuild on every error -- precisely the full-graph replan cost the whole
     # timing argument says FLOWRRA does not pay.
     "errors": {
-        "enabled": False,                  # OFF for the first stream run (STREAM_DESIGN.md); was True                   # Master switch. False = exactly the old
+        "enabled": True,                  # OFF for the first stream run (STREAM_DESIGN.md); was True                   # Master switch. False = exactly the old
                                             # behaviour, no errors ever injected.
         "prob_per_step": 0.006,            # TRAINING RATE, deliberately unrealistic.
                                             # Was 0.0008, giving 0.28 errors per episode
@@ -1063,19 +1086,19 @@ CONFIG = {
         #    following only closer than `follow_gap`; the rest never.
         #    Feeds the loop's warning set -> integrity, risk steps, preemption,
         #    splats (on the meeting cell) and the in-warning feature.
-        "path_warnings": False,
+        "path_warnings": True,
         # 2. DIRECTION-AWARE BRAKING. A steady-gap convoy partner at
         #    `follow_gap` or more no longer throttles either fleet; braking
         #    uses the nearest peer that is not one. Needed with 1: today's
         #    braking holds convoys at 1.5-2 hops, where 1 no longer warns.
-        "directional_braking": False,
+        "directional_braking": True,
         # 3. CORRIDOR ENTRY. A fleet on a junction does not step into a
         #    corridor (single-lane, no junction along it) when the nearest fleet
         #    it can see inside -- max_vision_range edges down a straight
         #    corridor, as its ray would; route intents within `radius` hops in a
         #    bent one -- is heading toward it. Convoys may enter behind. Two
         #    fleets at the two ends in sight of each other: priority picks one.
-        "corridor_entry": False,
+        "corridor_entry": True,
         # 4. PRIORITY. Lower key goes first: hops to goal minus `aging` per step
         #    the fleet was made to wait (reset on delivery), then seniority in
         #    the corridor (who entered first), then a fixed per-fleet tiebreak.
@@ -1083,7 +1106,7 @@ CONFIG = {
         #    the junction behind, pull over off the corridor's line, and hold
         #    until the winners are through. Two fleets claiming the same cell:
         #    the lower waits a step. (Decided 2026-09-29, CONFLICT_DESIGN.md.)
-        "priority": False,
+        "priority": True,
         "aging": 0.25,           # hops of priority gained per step made to wait
         # 6. YIELD TO STOPPED FLEETS. A fleet never moves into a cell held by a
         #    fleet that stays put this step (told to wait, held, waiting, idle):
@@ -1091,7 +1114,7 @@ CONFIG = {
         #    waits (a junction waiter and the fleet it waits for). Added
         #    2026-09-29: with 1-4 on, 62% of the remaining collisions on 50_
         #    were a moving fleet driving into a stopped one on a mesh junction.
-        "yield_to_stopped": False,
+        "yield_to_stopped": True,
         # NODE-ALIGNED MOVES. A step that would cross the next node stops on
         # it, and a turn snaps the old axis onto the node. Without it, braking
         # leaves fleets out of phase with the grid: they jump over junctions
@@ -1102,7 +1125,7 @@ CONFIG = {
         # preemption: +22% deliveries, +42% collisions vs version_unrefined),
         # which is why the components are judged against version_unrefined +
         # this, not against version_unrefined. See node_warehouse.NODE_ALIGNED.
-        "node_aligned_moves": False,
+        "node_aligned_moves": True,
         "radius": 3.0,           # hops; pairs beyond this are never classified
         "floor": 1.0,            # hops; always a warning inside this
         "follow_gap": 1.5,       # hops; the kinematic minimum convoy gap

@@ -8,7 +8,7 @@ FLOWRRA (Flow Recognition Reconfiguration Agent) is an independent research proj
 
 ---
 <div align="center"> 
-  <img src="Flowrra_animation.gif" alt="FLOWRRA in Warehouse" width="400"/> <br></br>
+  <img src="Flowrra_animation.gif" alt="FLOWRRA in Warehouse" width="750"/> <br></br>
 </div>
 
 ## Headline result: recovering from vehicle failures

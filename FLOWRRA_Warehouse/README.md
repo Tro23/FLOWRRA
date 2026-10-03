@@ -7,6 +7,9 @@ FLOWRRA (Flow Recognition Reconfiguration Agent) is an independent research proj
 > **Start here: [`FLOWRRA_Warehouse_V2/`](FLOWRRA_Warehouse_V2/) is the current version.** Everything else in this folder belongs to the previous version and is kept as a fixed reference point.
 
 ---
+<div align="center"> 
+  <img src="Flowrra_animation.gif" alt="FLOWRRA in Warehouse" width="400"/> <br></br>
+</div>
 
 ## Headline result: recovering from vehicle failures
 
@@ -28,7 +31,7 @@ Both maps come from the 3D MAPF warehouse dataset (Wang, Veerapaneni, Wu, Li & L
 
 The comparison of RULES against RHCR-PIBT + nearest-idle uses paired Wilcoxon signed-rank tests. For recovery, p = 0.0009 on the small map and p = 0.0013 on the large one. For rescue vehicles lost, p < 0.001 on both maps, with 91% fewer losses on the small map and 59% fewer on the large one.
 
-![FLOWRRA V2 benchmark synthesis](FLOWRRA_Warehouse/FLOWRRA_Warehouse_V2/flowrra_complete_benchmark_synthesis.png)
+![FLOWRRA V2 benchmark synthesis](FLOWRRA_Warehouse_V2/flowrra_complete_benchmark_synthesis.png)
 
 *The benchmark at a glance. In the recovery panel, the two right-most bars ("Train") come from training logs, not from this benchmark. See the note below.*
 

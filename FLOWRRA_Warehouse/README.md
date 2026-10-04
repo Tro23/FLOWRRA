@@ -202,9 +202,9 @@ Add `--cold-start` when training from scratch.
 
 ## About
 
-FLOWRRA is an independent research project by Rohit Tamidapati ([DhaaRn](https://dhaarn.com)). I designed the system and the experiments, and I built it with heavy AI assistance. I hold the work to a few practices: frozen benchmarks, paired comparisons, predictions written down before runs, and correcting the record in public when a result doesn't hold.
+FLOWRRA is an independent research project by Rohit Tamidapati ([DhaaRn](https://dhaarn.com)). I designed the system and the experiments, and I built it with heavy AI assistance. I hold the work to a few practices: system design, informational flow, policy transformation, frozen benchmarks, paired comparisons, predictions written down before runs, and correcting the record in public when a result doesn't hold.In short, The inuitive one.
 
-I'd love to do this kind of work inside a team facing these problems at scale. If you run a fleet and want to see how FLOWRRA behaves on your layout, or have a view on how it should be tested, I'd like to hear from you through [dhaarn.com](https://dhaarn.com).
+I'd love to do this kind of work inside a team facing these problems at scale. If you run a fleet and want to see how FLOWRRA behaves on your layout, or have a view on how it should be tested, I'd like to hear from you through [dhaarn.com](https://dhaarn.com) or [ rohittamidapati@gmail.com ] .
 
 **Writing**
 

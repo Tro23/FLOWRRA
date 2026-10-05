@@ -1,6 +1,6 @@
 # FLOWRRA v2 — The Conflict Ladder
 
-Oct 5, 2026 · @Rohit
+Rohit Tamidapati · 5 October 2026
 
 ## Why
 
@@ -19,8 +19,8 @@ What the 115 episodes showed:
 
 One ladder of path-aware RULES moves replaces the position-based tiers, and each learned head does one job.
 
-1. **Three jobs in three heads.** Safety, Delivery and Efficiency forecast consequences. A Learner head learns RULES' judgement and speaks only inside conflicts. The recovery head decides when to step in. They combine only at choice time.
-2. &#32;**RULES are the**** ****tiers.** Every intervention is a RULES move, chosen from the routes the fleets intend, not from where they stand.
+1. **Three jobs in three heads.** Safety, Delivery and Efficiency forecast consequences. A Learner head learns RULES' judgement and speaks only inside conflicts. When the ladder itself fails, a fixed rule steps in (L3); the learned recovery head is parked. They combine only at choice time.
+2. **RULES are the tiers.** Every intervention is a RULES move, chosen from the routes the fleets intend, not from where they stand.
 3. **Freedom first.** A fleet moves as its policy chooses until its move conflicts on a path. The ladder steps in early, not after a crash.
 4. **Physics.** Every move is one hop per step at driving speed, retreats included. No jumps.
 5. **Commitment.** Once a fleet is granted passage, it keeps it until it has cleared the conflict.
@@ -64,7 +64,9 @@ For 3+ fleets with cycles, the fewest-retreats choice is a feedback-vertex-set p
 
 Four rungs, each tried only when the one above cannot resolve the group; ordinary traffic never leaves L0.
 
-&#91;embedded content: the conflict ladder · 4 rungs, structural triggers\]
+<div align="center"> 
+  <img src="The_Ladder_Conflict_v2.png" width="750"/> <br></br>
+</div>
 
 The triggers between rungs are structural (a cycle, a blocked trail, no progress in T steps), never a learned head's guess. Only L3 uses today's tiers, and Tier 2 stays there as the last resort.
 
@@ -74,7 +76,7 @@ Four rules decide every rung: who retreats, how long a grant lasts, how waiting 
 
 **Who retreats: the cheapest retreat, not the furthest from goal.** If side A backs out, the cost is about twice its retreat (out and back) plus the time for B to pass; B barely waits. A side is the fleet and every fleet following it, as in today's corridor back-out. So retreat the side with the smaller total:
 
-```latex
+```math
 R(S) = \sum_{f \in S} r_f, \qquad \text{retreat } \arg\min_{S \in \{A, B\}} R(S)
 ```
 
@@ -117,7 +119,7 @@ Each head has one job and one training signal, and only the choice step combines
 | --- | --- | --- | --- |
 | Safety, Delivery, Efficiency | Forecast the consequences of a fleet's own move | TD on real rewards only | Choice: weighted sum 6 : 4 : 1, as today |
 | Learner (new, step 3) | Learn RULES' judgement: what the ladder would do here | Supervised, on every L0–L2 decision | Choice only, and only for a fleet inside a conflict group: its preference is added with weight β. Silent in free traffic, where it was never taught. Never inside a Q-value or a target |
-| Recovery | Decide when the ladder has failed | TD on the holon signal, as today | L3 only; acts only if Q(act) − Q(none) > δ |
+| Recovery | Decide when the ladder has failed | TD on the holon signal; frozen while the ladder runs | Parked: L3 is a fixed rule. If L3 proves common, it can learn when to fire L3 and which tier, acting only if Q(act) − Q(none) > δ |
 
 **Safety pays by rung.** Costs are charged to the fleets the event involved, through the per-fleet ledger that already runs in shadow mode:
 
@@ -130,7 +132,7 @@ Each head has one job and one training signal, and only the choice step combines
 
 The values c₁, c₂ and c₃ get calibrated against the existing safety terms before any run. Paying the retreating fleet only would punish the fleet that solved the conflict, so every fleet in the group shares the cost. The share is weighted by path: fleets in the conflict group pay 1.0, fleets whose route heads into the conflict's cells pay 0.25, and everyone else pays 0. Distance alone would charge bystanders, such as a fleet parked nearby or driving away. A fleet that routes itself around a jam pays nothing, so the cost teaches good routing, not just escaping.
 
-**Recovery head, two fixes beyond masked pooling.** It acts only when "act" beats "none" by a margin δ larger than its value noise, so a coin flip defaults to doing nothing. And it gets its own small encoder over the fleets' raw features, so the fleet heads' drift cannot change what it sees. A stop-gradient alone would not do this: it only stops the recovery head from disturbing the shared trunk, not the trunk from disturbing it.
+**Recovery head: frozen under the ladder, with two fixes ready if it returns.** If unfrozen, it acts only when "act" beats "none" by a margin δ larger than its value noise, so a coin flip defaults to doing nothing. And it gets its own small encoder over the fleets' raw features, so the fleet heads' drift cannot change what it sees. A stop-gradient alone would not do this: it only stops the recovery head from disturbing the shared trunk, not the trunk from disturbing it.
 
 ## What happens to the teacher
 
@@ -142,6 +144,19 @@ The margin teacher is retired; its idea continues as the Learner head: the ladde
 - **The margin switch** (`training.teacher_margin.enabled`) stays in the code, set to off, so teacher\_run1 can be reproduced. Its write-up records it as tried and replaced, with the reason: it pushed on values that no experience could correct.
 - **The test.** First the ladder and Safety costs with the Learner off; then the same run with the Learner on. If L0 overrides do not fall, the Learner head is not doing its job.
 
+**Ladder context: letting fleets see the ladder.** The Learner can only learn a back-off if a fleet can tell it is in a situation that needs one, and today its observation cannot show that waiting will not help. Step 3 adds four signals to every fleet's observation. All four are knowable from its neighbours' broadcasts, so nothing becomes central.
+
+| Signal | What it tells the fleet | Values |
+| --- | --- | --- |
+| In a cycle | Waiting alone cannot resolve my conflict | 0 or 1 |
+| Steps in this conflict | How long my group has been stuck | Count, divided by T |
+| Group's rung | How far the ladder has escalated | L0–L3, one-hot |
+| Cheaper side to back out | My side's retreat cost against the other side's | Ratio; below 1 means my side is cheaper |
+
+With these, the reflex becomes learnable from a fleet's own view, the way a good driver reads the road: facing another fleet in a single lane, closer to the junction, so reverse now, before the ladder has to order it. A back-off that starts before any ladder order also costs nothing (the grace check), so Safety rewards the same reflex the Learner copies. The signals enlarge the network's input, which v2 can absorb because it trains from scratch.
+
+Tracked: **self-initiated back-offs**, where a fleet reverses with no ladder order. As the reflex forms, they rise while RULES-ordered retreats fall.
+
 ## Build order, switches and tests
 
 Three steps, each behind its own switch and each off by default, so a run with every switch off reproduces today exactly.
@@ -150,9 +165,9 @@ Three steps, each behind its own switch and each off by default, so a run with e
 | --- | --- | --- | --- |
 | 1 (done) | Masked pooling for the graph-level heads | none: a bug fix | `test_graph_pooling.py` |
 | 2a | Ladder: wait-for graph, retreat by cheapest side, commitment, retrace one hop per step, one authority (no hold lock-out) | `conflict.ladder` | `test_ladder.py`: scripted 2-fleet head-on, 3-fleet cycle, blocked trail, the 7/73 replay |
-| 2b | Recovery head: margin δ, own encoder, L3 only | `recovery_policy.ladder_mode` | `test_recovery_margin.py` |
+| 2b | Recovery head frozen under the ladder (done); margin δ and its own encoder only if it is unfrozen later | `conflict.ladder` (freezes it) | `test_recovery_frozen.py` |
 | 2c | Safety pays by rung (per-fleet ledger goes live) | `training.rung_costs` | `test_rung_costs.py` |
-| 3 | Learner head, silent outside conflict groups | `training.learner` | `test_learner_head.py` |
+| 3 | Learner head, silent outside conflict groups, and the ladder-context signal in every fleet's observation | `training.learner` | `test_learner_head.py` |
 
 The run plan:
 
@@ -174,10 +189,10 @@ Each prediction is written before the runs and judged against teacher\_run1 on t
 | Values stay honest | qval\_recovery −15, qval\_safety −6.6 | both within ±1 for the whole run |
 | Delivery holds | completion 97–99% | ≥ 97% in every 20-episode block |
 | Safety holds | collisions under 1 per episode | no worse |
-| Bleeding (run 3 only) | not measured | L0 overrides fall across training, while the Learner's agreement rises |
+| Bleeding (run 3 only) | not measured | L0 overrides fall across training, while the Learner's agreement rises; self-initiated back-offs rise as RULES-ordered retreats fall |
 | The verdict | policy + RULES 67–70% vs RULES 85–87% | on the re-run shock benchmark, policy + RULES ≥ RULES alone |
 
-New counters the CSV needs: rung per intervention (L0–L3), retreat hops, grant flips per pair, groups by size and cycle count, and time-to-clear per group.
+New counters the CSV needs: rung per intervention (L0–L3), retreat hops, grant flips per pair, groups by size and cycle count, time-to-clear per group, self-initiated back-offs (a fleet reverses with no ladder order), and the four ladder-context signals.
 
 ## Decisions
 
@@ -198,8 +213,8 @@ Most of the ladder extends code that already exists; the genuinely new parts are
 | --- | --- | --- |
 | `conflict_warehouse.py` | Build W from the pair verdicts; find cycles per group | Extended |
 | `corridor_warehouse.py` | `_new_meetings` generalised from corridors to any 2-cycle; loser chosen by R(S), not priority key; retrace order type alongside pull-over | Extended |
-| `core_warehouse.py` | Remove the `and not _held` lock-out; per-fleet trail; rung counters; one authority in warning zones | Extended |
+| `core_warehouse.py` | Remove the `and not _held` lock-out; per-fleet trail; rung counters; one authority in warning zones; ladder-context features in each fleet's state (3) | Extended |
 | `recovery_warehouse.py` | Tiers 1–3 called only at L3; Tier 2 kept as the safety net | Narrowed |
-| `agent_warehouse.py` | Recovery head: margin δ, own encoder (2b); Learner head (3) | New heads |
-| `config_warehouse.py` | `conflict.ladder`, `recovery_policy.ladder_mode`, `training.rung_costs`, `training.learner`, all off | New switches |
+| `agent_warehouse.py` | Recovery head frozen under the ladder (2b, done); Learner head (3) | New heads |
+| `config_warehouse.py` | `conflict.ladder`, `conflict.ladder.shadow`, `training.rung_costs`, `training.learner`, all off | New switches |
 | `main_runner_warehouse.py` | Log rung counts, flips and retreat hops per episode | Extended |

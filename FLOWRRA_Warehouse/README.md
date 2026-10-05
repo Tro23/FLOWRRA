@@ -40,7 +40,7 @@ The comparison of RULES against RHCR-PIBT + nearest-idle uses paired Wilcoxon si
 ### What this shows, and what it doesn't
 
 - **The orchestrator carries the recovery.** Its rules (below) keep the corridors around a failure moving. That lets rescuers reach stranded orders without becoming casualties themselves.
-- **The learned policy doesn't yet add value on top of the rules under failure shocks.** With the policy in the loop, recovery is 67–70%, below the rules alone (paired p = 0.003 on the small map and p < 0.001 on the large one). This is a known issue with a diagnosis and a fix in progress; see the next section.
+- **The learned policy doesn't yet add value on top of the rules under failure shocks.** With the policy in the loop, recovery is 67–70%, below the rules alone (paired p = 0.003 on the small map and p < 0.001 on the large one). A first fix did not hold up, and a redesign is in progress; see the next section.
 - **No replanning pause is not the same as no compute.** FLOWRRA spends decision time on every step rather than in replanning bursts. A per-step compute comparison against central replanning, broken down by map size, is on the roadmap.
 - **The article's 95% figure.** "Evolution towards Harmony" reports 95% recovery, which comes from training logs: 191 of 201 stranded orders were delivered over 150 episodes, with exploration still on. That is about 1.3 stranded orders per episode, against 8–9 per episode here. It is a different, lighter regime and can't be compared with the table above.
 
@@ -48,13 +48,20 @@ The comparison of RULES against RHCR-PIBT + nearest-idle uses paired Wilcoxon si
 
 ### Known issue, in progress: the policy under failure shocks
 
+> **Update, 5 October 2026: the first fix did not hold up, and a redesign is in progress.**
+> After 150 training episodes (teacher_run1, with failure waves), the frozen policy + RULES recovered **56.5%** of stranded orders on the small map and **48.9%** on the large one, on the same 48 instances. That is below RULES alone (87.4% / 85.2%, paired p ≤ 0.017) and below the policy before the fix (70.0% / 66.8%).
+>
+> Of the three predictions below, the first held: proposed and executed waits converged during training. The other two failed. Recovery hops rose to 107 and 184 instead of falling toward the rules' 23 and 49, and the frozen policy fell well short of RULES alone.
+>
+> What went wrong, in short: the extra loss term pushed on values that no experience could correct, so they drifted, and the learned recovery head diverged with them. The redesign, **[The Conflict Ladder](FLOWRRA_Warehouse_V2/V2_The_Conflict_Ladder.md)**, keeps RULES' judgement but carries it through path-aware RULES rungs and a separate Learner head instead of the values. Its predictions are written in that document before its runs. Both results will be written up here together.
+
 With the learned policy in the loop, recovery under failure shocks is 67–70%, below the 85–87% the rules reach alone. We're treating this as an issue to fix. The working hypothesis has two parts.
 
 **The policy has had no way to learn from being overridden.** When RULES overrides the policy, training records the action RULES executed. The action the policy proposed is never recorded, so the policy is never told its choice was vetoed, and it keeps preferring moves RULES has to veto. Training logs are consistent with this. In warning zones, the network proposes waiting 12–17% of the time while waits are executed 61–70% of the time, and the gap does not close over 60 episodes (cold_run25).
 
 **The policy hasn't practised this regime.** Training saw about 1.3 stranded orders per episode; the benchmark has 8–9. Under the policy, rescuers also take the long way: 84 hops to reach a stranded order, against 23 for the rules on the small map. That leaves them exposed when the next failure wave hits.
 
-**Being built and tested:**
+**The first fix (tried in teacher_run1):**
 
 1. A training signal from every override. On steps where RULES overrides the policy, an extra loss term pushes the value of the rules' action above the value of the policy's own proposal (as in DQfD, Hester et al., 2018). This moves RULES' judgement into the policy's weights.
 2. Training with failure waves, on seeds the benchmark doesn't use.
@@ -65,7 +72,7 @@ With the learned policy in the loop, recovery under failure shocks is 67–70%, 
 - Recovery hops should fall toward the rules'.
 - Frozen policy + RULES should match or beat RULES alone on the same 48 instances.
 
-The result will be posted here either way.
+The result is in the update at the top of this section.
 
 ---
 
@@ -192,7 +199,7 @@ Add `--cold-start` when training from scratch.
 
 1. **Continuous-flow benchmark against RULES:** frozen weights, paired episodes, failures on.
 2. **Obstacles:** people in aisles and unmapped blockages, the cases a planner can't prepare for.
-3. **The policy earning its place:** a collision-cost recovery reward, with every training run judged against RULES on the same instances.
+3. **The policy earning its place:** [The Conflict Ladder](FLOWRRA_Warehouse_V2/V2_The_Conflict_Ladder.md). RULES become path-aware escalating rungs, a Learner head learns their judgement, and Safety pays by rung. Every training run is judged against RULES on the same instances.
 4. **Learning while deployed:** the policy keeps learning in operation, with the orchestrator as its safety guardrail.
 5. **Kiva, using Follower's lifelong protocol:** throughput on their exact 60 instances, reported together with the physics difference (POGEMA has no braking or collisions).
 6. **Compute microbenchmark:** per-step decision cost against central replanning, by map size.

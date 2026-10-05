@@ -65,7 +65,7 @@ For 3+ fleets with cycles, the fewest-retreats choice is a feedback-vertex-set p
 Four rungs, each tried only when the one above cannot resolve the group; ordinary traffic never leaves L0.
 
 <div align="center"> 
-  <img src="The_Ladder_Conflict_v2.png" width="750"/> <br></br>
+  <img src="The_Ladder_Conflict_v2.png" alt="![The conflict ladder: L0 RULES ordering, L1 retrace, L2 pull over, L3 safety net](...)" width="750"/> <br></br>
 </div>
 
 The triggers between rungs are structural (a cycle, a blocked trail, no progress in T steps), never a learned head's guess. Only L3 uses today's tiers, and Tier 2 stays there as the last resort.

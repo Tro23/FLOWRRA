@@ -1,6 +1,8 @@
 # FLOWRRA v2 — The Conflict Ladder
 
-Rohit Tamidapati · 5 October 2026
+Rohit Tamidapati · 5 October 2026 · updated 6 October 2026
+
+> **Status, 6 October 2026.** Steps 1, 2a, 2b and 2c are built and tested. Run 2 (the ladder plus rung costs, Learner off, 150 episodes) is under way; step 3 (the Learner head) is next. The build log at the end records each step and what its runs showed.
 
 ## Why
 
@@ -22,7 +24,7 @@ One ladder of path-aware RULES moves replaces the position-based tiers, and each
 1. **Three jobs in three heads.** Safety, Delivery and Efficiency forecast consequences. A Learner head learns RULES' judgement and speaks only inside conflicts. When the ladder itself fails, a fixed rule steps in (L3); the learned recovery head is parked. They combine only at choice time.
 2. **RULES are the tiers.** Every intervention is a RULES move, chosen from the routes the fleets intend, not from where they stand.
 3. **Freedom first.** A fleet moves as its policy chooses until its move conflicts on a path. The ladder steps in early, not after a crash.
-4. **Physics.** Every move is one hop per step at driving speed, retreats included. No jumps.
+4. **Physics.** Every move happens at driving speed, retreats included: half a cell per step, so one hop takes two steps. No jumps.
 5. **Commitment.** Once a fleet is granted passage, it keeps it until it has cleared the conflict.
 6. **Pay by consequence.** A fleet pays for the rung its move made necessary, never for following a rule.
 7. **Values stay honest.** Nothing but real rewards ever moves a Q-value.
@@ -65,8 +67,10 @@ For 3+ fleets with cycles, the fewest-retreats choice is a feedback-vertex-set p
 Four rungs, each tried only when the one above cannot resolve the group; ordinary traffic never leaves L0.
 
 <div align="center"> 
-  <img src="The_Ladder_Conflict_v2.png" alt="![The conflict ladder: L0 RULES ordering, L1 retrace, L2 pull over, L3 safety net](...)" width="750"/> <br></br>
+  <img src="The_Ladder_Conflict_v2.png" alt="The conflict ladder: L0 RULES ordering, L1 retrace, L2 pull over, L3 safety net" width="750"/> <br></br>
 </div>
+
+In the drawing, "one hop per step" means one hop at a time: fleets drive half a cell per step, so each hop takes two steps.
 
 The triggers between rungs are structural (a cycle, a blocked trail, no progress in T steps), never a learned head's guess. Only L3 uses today's tiers, and Tier 2 stays there as the last resort.
 
@@ -82,7 +86,7 @@ R(S) = \sum_{f \in S} r_f, \qquad \text{retreat } \arg\min_{S \in \{A, B\}} R(S)
 
 Ties go by priority key, then the fixed tie-break. Example: A is one hop outside a junction, B is inside the corridor heading out. R(A) = 1, R(B) ≥ 2, so A steps back one hop and B comes out.
 
-**Commitment.** A grant holds until the winner's route no longer meets the loser's within the horizon. No new decision is made on that pair while a grant stands. Today's corridor retreat orders already work this way; the recovery tiers' alternation rule does not, which is what looped 7 and 73.
+**Commitment.** A grant holds until the conflict it settled is over: no member is still head-on with the fleet that gave way, or racing it for the same cell. A convoy or a queue that remains is left to braking and the queue rules, which are built for it. *Corrected 6 October 2026: the first version held until the two routes shared no cell at all. In a harmless convoy they keep sharing cells, so retreating fleets stayed parked and blocked others; in retrace_run2's first episode, blocked pairs tripled.* No new decision is made on that pair while a grant stands. Today's corridor retreat orders already work this way; the recovery tiers' alternation rule does not, which is what looped 7 and 73.
 
 **One grace check before a retreat.** A cycle is spotted from routes up to 8 cells ahead, so it starts as a standoff, not a crash. On first detection, L0 holds both sides and their policies get one chance to break it; if the cycle is still there at the next check, L1 acts. A fleet that backs off on its own pays no rung cost, so Safety learns that resolving early is free. Exception: a cycle first spotted with the fleets already adjacent goes straight to L1.
 
@@ -130,7 +134,7 @@ Each head has one job and one training signal, and only the choice step combines
 | L2 | Retreat to a pull-over cell | c₁ per hop + c₂ |
 | L3 | Safety net fired | c₃ per fleet involved, about one collision |
 
-The values c₁, c₂ and c₃ get calibrated against the existing safety terms before any run. Paying the retreating fleet only would punish the fleet that solved the conflict, so every fleet in the group shares the cost. The share is weighted by path: fleets in the conflict group pay 1.0, fleets whose route heads into the conflict's cells pay 0.25, and everyone else pays 0. Distance alone would charge bystanders, such as a fleet parked nearby or driving away. A fleet that routes itself around a jam pays nothing, so the cost teaches good routing, not just escaping.
+Calibrated against the existing safety terms (fatal collision −50, worst warning step −1.2, both raw): **c₁ = −2.4 per hop**, because one hop takes two steps at half speed, so giving way costs what lingering in the worst warning would for the same time; **c₂ = −6** extra for leaving a corridor for a bay; **c₃ = −50**, what a collision costs. Each escalation is charged once, when it happens. All four values are settings (`training.rung_costs`), open to a paired dry run. Paying the retreating fleet only would punish the fleet that solved the conflict, so every fleet in the group shares the cost. The share is weighted by path: fleets in the conflict group pay 1.0, fleets whose route heads into the conflict's cells pay 0.25, and everyone else pays 0. Distance alone would charge bystanders, such as a fleet parked nearby or driving away. A fleet that routes itself around a jam pays nothing, so the cost teaches good routing, not just escaping.
 
 **Recovery head: frozen under the ladder, with two fixes ready if it returns.** If unfrozen, it acts only when "act" beats "none" by a margin δ larger than its value noise, so a coin flip defaults to doing nothing. And it gets its own small encoder over the fleets' raw features, so the fleet heads' drift cannot change what it sees. A stop-gradient alone would not do this: it only stops the recovery head from disturbing the shared trunk, not the trunk from disturbing it.
 
@@ -157,6 +161,18 @@ With these, the reflex becomes learnable from a fleet's own view, the way a good
 
 Tracked: **self-initiated back-offs**, where a fleet reverses with no ladder order. As the reflex forms, they rise while RULES-ordered retreats fall.
 
+**Pair relations on the attention connections.** The four signals summarise a fleet's situation; the pairwise picture they come from can go into the network too. Graph attention already carries 4 numbers on each neighbour connection (`edge_dim=4`). Step 3 adds each pair's path-awareness label to that connection, so every fleet sees, neighbour by neighbour, how that neighbour relates to it:
+
+| Relation | What it tells the fleet |
+| --- | --- |
+| head-on | Each route runs into the other: one of us must give way |
+| contested | We reach the same cell at about the same time |
+| blocked | My route runs into a neighbour standing still, or theirs into me |
+| following | Same direction, one behind the other |
+| wait direction | Whether I wait for this neighbour, it waits for me, or neither |
+
+As numbers, that is a one-hot over the four kinds plus the wait direction, a handful of extra values per connection. It stays decentralised: each label comes from two neighbours' broadcast routes, exactly what the orchestrator already computes for the wait-for graph.
+
 ## Build order, switches and tests
 
 Three steps, each behind its own switch and each off by default, so a run with every switch off reproduces today exactly.
@@ -164,10 +180,10 @@ Three steps, each behind its own switch and each off by default, so a run with e
 | Step | What lands | Switch | Its own test |
 | --- | --- | --- | --- |
 | 1 (done) | Masked pooling for the graph-level heads | none: a bug fix | `test_graph_pooling.py` |
-| 2a | Ladder: wait-for graph, retreat by cheapest side, commitment, retrace one hop per step, one authority (no hold lock-out) | `conflict.ladder` | `test_ladder.py`: scripted 2-fleet head-on, 3-fleet cycle, blocked trail, the 7/73 replay |
+| 2a (done) | Ladder: one authority (no hold lock-out), wait-for graph, retreat by cheapest side, grace check, commitment, retrace one hop at a time at driving speed | `conflict.ladder` (`shadow`, `retrace`) | `test_ladder_authority.py`, `test_ladder_shadow.py`, `test_ladder_retrace.py` |
 | 2b | Recovery head frozen under the ladder (done); margin δ and its own encoder only if it is unfrozen later | `conflict.ladder` (freezes it) | `test_recovery_frozen.py` |
-| 2c | Safety pays by rung (per-fleet ledger goes live) | `training.rung_costs` | `test_rung_costs.py` |
-| 3 | Learner head, silent outside conflict groups, and the ladder-context signal in every fleet's observation | `training.learner` | `test_learner_head.py` |
+| 2c (done) | Safety pays by rung, weighted by path | `training.rung_costs` | `test_rung_costs.py` |
+| 3 | Learner head, silent outside conflict groups, and the ladder-context signal in every fleet's observation, plus pair relations on the attention connections | `training.learner` | `test_learner_head.py` |
 
 The run plan:
 
@@ -192,7 +208,7 @@ Each prediction is written before the runs and judged against teacher\_run1 on t
 | Bleeding (run 3 only) | not measured | L0 overrides fall across training, while the Learner's agreement rises; self-initiated back-offs rise as RULES-ordered retreats fall |
 | The verdict | policy + RULES 67–70% vs RULES 85–87% | on the re-run shock benchmark, policy + RULES ≥ RULES alone |
 
-New counters the CSV needs: rung per intervention (L0–L3), retreat hops, grant flips per pair, groups by size and cycle count, time-to-clear per group, self-initiated back-offs (a fleet reverses with no ladder order), and the four ladder-context signals.
+New counters the CSV needs: rung per intervention (L0–L3), retreat hops, grant flips per pair, groups by size and cycle count, time-to-clear per group, self-initiated back-offs (a fleet reverses with no ladder order), the four ladder-context signals, and why each retrace order timed out (reached its cell or not, whether the other fleet progressed, the pair's last relationship).
 
 ## Decisions
 
@@ -201,9 +217,24 @@ All six open questions are decided; δ and β take their values from paired dry 
 - [x] **Recovery head at L3: a fixed rule first.** If a group has not shrunk within T steps, collapse. The learned head stays in the code, switched off, and every L3 event is logged; if L3 proves common, that data will train it. Training on denser maps just to make L3 common would defeat the ladder.
 - [x] **Lifts: retrace allowed.** Edges are two-way, so a fleet can back up or down the way it came instead of going out, waiting and coming back in. A shaft of single-lane cells is a corridor, so the entry rule orders fleets at its mouth.
 - [x] **Trail length: 8 cells,** the route horizon. Simple and light to compute.
-- [x] **T: 2 × the group's largest retreat distance + 10 steps.**
+- [x] **T, in steps: steps per hop × (2 × the group's largest retreat + one route length) + 10.** Fleets drive half a cell per step, so a hop takes 2 steps, and a 1-hop retreat gives T = 2 × (2 + 8) + 10 = 30. The same formula sets each retrace order's budget. *Corrected 6 October 2026: the first version counted hops as steps, and in retrace_run1, 6 of 22 retrace orders timed out while the other fleet was still passing at half speed.*
 - [x] **δ and β.** δ sits above the recovery head's measured value noise, so a coin flip defaults to doing nothing. β starts small and is set by a paired dry run.
 - [x] **Stream mode.** A fleet driving to its exit dock is a normal group member at full weight; at zero weight it would learn to push through on its way out. Once it has left the floor it drops out, and the group re-checks its cycles.
+
+## Build log
+
+Each step was built behind its own switch, tested, and run against the step before it on the same seed and the same 10 episodes (both maps, 25/40/60 fleets). Ten cold episodes are noisy: identical setups have swung from 12 to 24 collisions between reruns, so only large or consistent changes are read as effects.
+
+1. **Step 1, masked pooling.** The recovery head averaged dummy padding rows into its view of the floor during training, but not when acting. Fixed; a padded state now gives exactly the live answer (`test_graph_pooling.py`).
+2. **Step 2a-i, one authority.** The learned recovery head was switched off and L3 became a fixed rule (for now: a warned pair lasting 30 steps with neither fleet closer to its goal). Holds no longer silence RULES, and aging resets per conflict. In a paired dry run at 60 fleets, an episode that had 96 recoveries and 1,529 holds had 3 L3 calls and 2 holds instead.
+3. **Step 2b, recovery head frozen.** Under the ladder its loss is left out of training, so its drifting values can no longer reach the trunk the fleet heads share (`test_recovery_frozen.py`). pooling_run1 had shown it drifts even without the teacher.
+4. **Step 2a-ii, the shadow graph** (shadow_run1, measuring only). 79 wait-for cycles in 10 episodes: 97% two fleets facing each other, 59% cleared on their own within one check, 85% on corridor cells. RULES' yield-to-stopped guard steps aside from loops it cannot order; in the two episodes where it did, cycles lived 29 and 31 steps.
+5. **Step 2a-iii (2a-iv folded in), retrace.** retrace_run1: longest cycle 31 → 8 steps, loops left by the guard 8 → 1, L3 fires 2 → 0. But 6 of 22 orders timed out.
+   - *Fix 1, the budget in steps* (retrace_run2). The budget had counted hops as steps; fleets drive half a cell per step. Timeouts halved in the calm episodes, but the first, most exploratory episode cascaded.
+   - *Fix 2, release when the conflict is over* (retrace_run3). Orders had waited for the two routes to share no cell, which a harmless convoy never satisfies. Now an order ends once nobody is head-on with the fleet or racing it for a cell. Result: all 49 orders released, 0 timeouts, longest cycle 6 steps, completion 99.4%, the best of the series.
+6. **Step 2c, Safety pays by rung** (rung_run1). Safety's values stayed stable (−0.002 to 0.013), and no collision ever involved a retreating fleet: reversing does not cause contact. Collisions fell 24 → 10 and retreats needed 49 → 18, within run-to-run noise so far. To watch: L2 corridor back-outs carry 75% of all charges, and completion dipped in two episodes.
+
+**Next.** Run 2 judges steps 1–2c over 150 episodes against the predictions above. Step 3 (the Learner head, the ladder-context signals, pair relations on the attention connections) is built in parallel, then run 3. Later: corridor back-outs chosen by retreat cost, and a calibration test that hops stay hops across every unit the system uses.
 
 ## Code map
 
@@ -213,7 +244,7 @@ Most of the ladder extends code that already exists; the genuinely new parts are
 | --- | --- | --- |
 | `conflict_warehouse.py` | Build W from the pair verdicts; find cycles per group | Extended |
 | `corridor_warehouse.py` | `_new_meetings` generalised from corridors to any 2-cycle; loser chosen by R(S), not priority key; retrace order type alongside pull-over | Extended |
-| `core_warehouse.py` | Remove the `and not _held` lock-out; per-fleet trail; rung counters; one authority in warning zones; ladder-context features in each fleet's state (3) | Extended |
+| `core_warehouse.py` | Remove the `and not _held` lock-out; per-fleet trail; rung counters; one authority in warning zones; ladder-context features in each fleet's state and pair relations on the attention connections (3) | Extended |
 | `recovery_warehouse.py` | Tiers 1–3 called only at L3; Tier 2 kept as the safety net | Narrowed |
 | `agent_warehouse.py` | Recovery head frozen under the ladder (2b, done); Learner head (3) | New heads |
 | `config_warehouse.py` | `conflict.ladder`, `conflict.ladder.shadow`, `training.rung_costs`, `training.learner`, all off | New switches |

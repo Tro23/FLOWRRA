@@ -124,6 +124,17 @@ class ConflictRules:
         self.entered: Dict[str, Tuple[int, int]] = {}      # fid -> (sid, step)
         self.waited: Dict[str, int] = {}
         self.goal_seen: Dict[str, Any] = {}
+        # PER-CONFLICT AGING (conflict.ladder, LADDER_DESIGN "Rules"). Waiting
+        # raises a fleet's priority only within its CURRENT conflict: the count
+        # resets once the fleet has spent `aging_reset_steps` consecutive steps
+        # outside every warned or colliding pair. Carried across a whole trip,
+        # an old wait let a fleet outrank one a cell from its goal in an
+        # unrelated conflict. Ladder off: 0, the old rule (reset on delivery).
+        _lad = cfg.get("ladder", {}) or {}
+        self.aging_reset_steps = (int(_lad.get("aging_reset_steps", 3))
+                                  if _lad.get("enabled", False) else 0)
+        self.calm: Dict[str, int] = {}
+        self.aging_resets = 0
         # fid -> {"target", "dmap", "sid", "winners", "until"}
         self.orders: Dict[str, Dict[str, Any]] = {}
         # (step, fleet, event, corridor) for every retreat, pull-over, release
@@ -250,6 +261,20 @@ class ConflictRules:
             if self.goal_seen.get(n.id, g) != g:
                 self.waited[n.id] = 0
             self.goal_seen[n.id] = g
+
+        if self.aging_reset_steps > 0:                     # ...and per conflict
+            loop = getattr(env, "loop", None)
+            in_conflict = (set(getattr(loop, "deadlocked_nodes", ()) or ())
+                           | set(getattr(loop, "warning_nodes", ()) or ()))
+            for n in active:
+                if n.id in in_conflict:
+                    self.calm[n.id] = 0
+                    continue
+                self.calm[n.id] = self.calm.get(n.id, 0) + 1
+                if (self.calm[n.id] >= self.aging_reset_steps
+                        and self.waited.get(n.id, 0) > 0):
+                    self.waited[n.id] = 0
+                    self.aging_resets += 1
 
         loc: Dict[str, Tuple] = {}
         occ: Dict[int, List[Tuple[float, str, int]]] = {}
@@ -538,4 +563,5 @@ class ConflictRules:
     def statistics(self) -> Dict[str, Any]:
         return {f"corridor_{k}": v for k, v in self.stats.items()} | {
             "corridor_count": len(self.idx.cells),
-            "corridor_orders_open": len(self.orders)}
+            "corridor_orders_open": len(self.orders),
+            "corridor_aging_resets": self.aging_resets}

@@ -370,7 +370,8 @@ class GNNPolicy(nn.Module):
             nn.Sigmoid(),  # Integrity is [0, 1]
         )
 
-    def forward(self, node_features: torch.Tensor, adj_matrix: torch.Tensor):
+    def forward(self, node_features: torch.Tensor, adj_matrix: torch.Tensor,
+                node_mask: Optional[torch.Tensor] = None):
         """
         Args:
             node_features: [batch, num_nodes, node_feature_dim]
@@ -414,7 +415,22 @@ class GNNPolicy(nn.Module):
 
         # Decode Stability (Global)
         # Mean pool over nodes to get graph representation
-        h_graph = torch.mean(h, dim=1)
+        #
+        # MASKED POOLING (2026-10-05). The graph-level heads -- recovery and
+        # stability -- read ONE summary of the whole floor: the mean of every
+        # fleet's embedding. In training, states of different fleet counts share
+        # a batch and the smaller ones are padded with dummy fleets; a plain mean
+        # averaged those dummies in. A 25-fleet state in a batch padded to 60 was
+        # summarised as 25 real fleets + 35 dummies, while the SAME state, seen
+        # live when choosing, had no dummies at all. The recovery head trained on
+        # one picture and acted on another. node_mask marks the real rows (1) and
+        # the padding (0); the mean is over real rows only. None = every row is
+        # real -- exactly the old mean, which is what a live, unpadded state is.
+        if node_mask is None:
+            h_graph = torch.mean(h, dim=1)
+        else:
+            _m = node_mask.to(h.dtype).unsqueeze(-1)                # [B, N, 1]
+            h_graph = (h * _m).sum(dim=1) / _m.sum(dim=1).clamp(min=1.0)
         stability_pred = self.stability_head(h_graph)
         self.last_recovery_q = self.recovery_head(h_graph)  # [B, 3]
 
@@ -448,6 +464,9 @@ class GraphReplayBuffer:
         active_mask: Optional[np.ndarray] = None,
         recovery_action: int = 0,
         next_valid_mask: Optional[np.ndarray] = None,
+        next_active_mask: Optional[np.ndarray] = None,
+        valid_mask: Optional[np.ndarray] = None,
+        teacher_mask: Optional[np.ndarray] = None,
     ):
         """
         Store a transition.
@@ -466,6 +485,14 @@ class GraphReplayBuffer:
         applying today's frozen set to a transition recorded 400 steps ago would
         mask the wrong nodes. Defaults to all-active so an un-updated caller
         behaves exactly as before.
+
+        valid_mask / teacher_mask: the TEACHER SIGNAL (see learn(), section 1c).
+        valid_mask is [N, A], the structural validity of each action in THIS
+        state, so the margin compares the rules' action only with moves the
+        fleet could actually make. teacher_mask is [N], 1.0 where the executed
+        action was chosen by the orchestrator's rules. Both are recorded on
+        every push (measurement); learn() trains on them only when
+        teacher_weight > 0. None: an old caller, no teacher signal.
         """
         if active_mask is None:
             active_mask = np.ones(rewards.shape[0], dtype=np.float32)
@@ -491,6 +518,17 @@ class GraphReplayBuffer:
                 # unmasked behaviour rather than inventing a mask.
                 (np.asarray(next_valid_mask, dtype=bool).copy()
                  if next_valid_mask is not None else None),
+                # 1.0 for each fleet still able to act in the NEXT state, 0.0 for
+                # one that retired or stopped during this step: its own life ends
+                # with this transition (learn()'s per-fleet terminal). None means
+                # unknown (an old caller), and learn() then ignores it.
+                (np.asarray(next_active_mask, dtype=np.float32).copy()
+                 if next_active_mask is not None else None),
+                # TEACHER SIGNAL -- see the docstring.
+                (np.asarray(valid_mask, dtype=bool).copy()
+                 if valid_mask is not None else None),
+                (np.asarray(teacher_mask, dtype=np.float32).copy()
+                 if teacher_mask is not None else None),
             )
         )
 
@@ -512,7 +550,13 @@ class GraphReplayBuffer:
         as a second line of defence, but doing it correctly here is cheaper and
         keeps the attention distribution well-formed.)
         """
-        (nf, adj, act, rew, nnf, nadj, done, integ, amask, rec, nvm) = exp
+        # Older layouts: 11 fields (before next_active existed), 12 (before the
+        # teacher signal). Missing fields read as None -- "unknown", never
+        # invented -- so transitions stored by older code still pad and train.
+        if len(exp) < 14:
+            exp = tuple(exp) + (None,) * (14 - len(exp))
+        (nf, adj, act, rew, nnf, nadj, done, integ, amask, rec, nvm, nam,
+         vm, tm) = exp
         n = nf.shape[0]
         if n == n_max:
             return exp
@@ -567,6 +611,11 @@ class GraphReplayBuffer:
             # keeps the row well-defined. active_mask is 0 for these fleets, so
             # whatever comes out is multiplied away before it reaches the loss.
             _pad_valid(nvm),
+            # Padded fleets: 0.0 -- no bootstrap, and masked out of the loss anyway.
+            (pad_rows(nam) if nam is not None else None),
+            # Teacher signal: padded fleets are valid-idle only and never taught.
+            _pad_valid(vm),
+            (pad_rows(tm) if tm is not None else None),
         )
 
     def sample(self, batch_size: int) -> Optional[Tuple[torch.Tensor, ...]]:
@@ -621,6 +670,11 @@ class GraphReplayBuffer:
         # Pad to the largest fleet count present IN THIS BATCH (not the global
         # max) so a batch that happens to be all-small stays small and cheap.
         n_max = max(exp[0].shape[0] for exp in raw_batch)
+        # REAL ROWS, counted BEFORE padding, for the state and the next state
+        # separately (a stream can change the fleet count between the two). The
+        # graph-level heads average over real rows only -- see GNNPolicy.forward.
+        real_n = np.array([exp[0].shape[0] for exp in raw_batch])
+        next_real_n = np.array([exp[4].shape[0] for exp in raw_batch])
         batch = [self._pad_transition(exp, n_max) for exp in raw_batch]
 
         (
@@ -635,6 +689,9 @@ class GraphReplayBuffer:
             active_masks,
             recovery_actions,
             next_valid_masks,
+            next_active_masks,
+            valid_masks,
+            teacher_masks,
         ) = zip(*batch)
 
         # Convert to tensors (now all have same shape!)
@@ -669,6 +726,25 @@ class GraphReplayBuffer:
         next_valid_masks_t = (
             torch.from_numpy(np.array(next_valid_masks, dtype=bool)).to(DEVICE)
             if all(m is not None for m in next_valid_masks) else None)
+        next_active_masks_t = (
+            torch.from_numpy(np.array(next_active_masks, dtype=np.float32)).to(DEVICE)
+            if all(m is not None for m in next_active_masks) else None)
+        # TEACHER SIGNAL. Unlike the bootstrap mask, a missing teacher row has a
+        # safe meaning -- "no teacher acted here" -- so a transition stored by
+        # older code reads as zeros rather than switching the signal off for the
+        # whole batch. Its validity row is then never read: the teacher mask
+        # multiplies it away. A teacher row WITHOUT its validity row cannot be
+        # used (nothing to compare against), so it is zeroed too.
+        _vm_ref = next((m for m in valid_masks if m is not None), None)
+        if _vm_ref is None:
+            valid_masks_t, teacher_masks_t = None, None
+        else:
+            _vm = [m if m is not None else np.ones_like(_vm_ref) for m in valid_masks]
+            _tm = [t if (t is not None and v is not None)
+                   else np.zeros(n_max, dtype=np.float32)
+                   for t, v in zip(teacher_masks, valid_masks)]
+            valid_masks_t = torch.from_numpy(np.array(_vm, dtype=bool)).to(DEVICE)
+            teacher_masks_t = torch.from_numpy(np.array(_tm, dtype=np.float32)).to(DEVICE)
         integrity_target = (
             torch.FloatTensor(np.array(integrity)).unsqueeze(-1).to(DEVICE)
         )
@@ -685,10 +761,71 @@ class GraphReplayBuffer:
             active_mask_t,
             recovery_actions_t,
             next_valid_masks_t,
+            next_active_masks_t,
+            valid_masks_t,
+            teacher_masks_t,
+            # [B, N] and [B, N'], 1.0 = a real fleet, 0.0 = padding.
+            torch.from_numpy((np.arange(node_feats_t.shape[1])[None, :]
+                              < real_n[:, None]).astype(np.float32)).to(DEVICE),
+            torch.from_numpy((np.arange(next_node_feats_t.shape[1])[None, :]
+                              < next_real_n[:, None]).astype(np.float32)).to(DEVICE),
         )
 
     def __len__(self) -> int:
         return len(self.buffer)
+
+
+def teacher_margin_terms(
+    q_values: torch.Tensor,
+    actions: torch.Tensor,
+    valid_masks: torch.Tensor,
+    teacher_mask: torch.Tensor,
+    active_mask: torch.Tensor,
+    margin: float,
+) -> Tuple[torch.Tensor, float, float, float]:
+    """
+    Large-margin teacher loss over the fleets whose executed action came from
+    the orchestrator's rules. See GNNAgent.learn(), section 1c, for why.
+
+        loss = mean over taught fleets of
+               relu( max over valid a != a_rules of Q(s,a)  +  margin  -  Q(s,a_rules) )
+
+    Zero once the rules' action leads every valid alternative by `margin`.
+    Q(s,a_rules) is DETACHED, so the gradient only ever pushes the network's
+    preferred alternative DOWN -- it never pulls the rules' action up.
+
+    Args (B batch, N fleets, A actions):
+        q_values     [B, N, A] combined value, sum_k w_k Q_k -- what picks
+        actions      [B, N]    executed action (the rules' action where taught)
+        valid_masks  [B, N, A] structural validity in the state acted from
+        teacher_mask [B, N]    1.0 where the rules chose the executed action
+        active_mask  [B, N]    1.0 for fleets active at action time
+        margin       how far ahead the rules' action must be
+
+    Returns (loss, agree, share, n_taught):
+        loss   scalar tensor; zero, without a graph, when nothing is taught
+        agree  share of taught fleets whose top VALID action already IS the
+               rules' action (no margin needed) -- the learning signal to watch
+        share  taught fleets as a share of active fleets in the batch
+        n      number of taught fleets, for weighting episode averages
+    """
+    taught = teacher_mask * active_mask                                  # [B, N]
+    n_t = float(taught.sum().item())
+    if n_t <= 0:
+        return q_values.new_zeros(()), 0.0, 0.0, 0.0
+    q_rules = q_values.gather(2, actions.unsqueeze(-1)).squeeze(-1)      # [B, N]
+    is_rules = F.one_hot(actions, q_values.shape[-1]).bool()             # [B, N, A]
+    # A finite sentinel, not -inf: a fleet with no valid alternative gives
+    # relu(-1e4 + ...) = 0 instead of NaN (see the bootstrap mask in learn()).
+    alternatives = torch.where(valid_masks.bool() & ~is_rules, q_values,
+                               torch.full_like(q_values, -1e4))
+    best_alt = alternatives.max(dim=2).values                            # [B, N]
+    hinge = F.relu(best_alt + margin - q_rules.detach())
+    loss = (hinge * taught).sum() / n_t
+    with torch.no_grad():
+        agree = float(((best_alt < q_rules).float() * taught).sum().item() / n_t)
+        share = n_t / max(1.0, float(active_mask.sum().item()))
+    return loss, agree, share, n_t
 
 
 # =============================================================================
@@ -717,6 +854,13 @@ class GNNAgent:
         reward_heads: Optional[List[str]] = None,
         head_weights: Optional[List[float]] = None,
         double_dqn: bool = False,
+        target_tau: float = 0.0,
+        recovery_double_dqn: bool = False,
+        recovery_value_bound: float = 0.0,
+        per_fleet_terminal: bool = False,
+        teacher_margin: float = 0.2,
+        teacher_weight: float = 0.0,
+        train_recovery: bool = True,
         lr: float = 0.0003,
         gamma: float = 0.95,
         buffer_capacity: int = 15000,
@@ -740,6 +884,50 @@ class GNNAgent:
         # DOUBLE DQN: see the bootstrap in learn(). False = plain DQN, exactly
         # as before.
         self.double_dqn = bool(double_dqn)
+        # SOFT TARGET UPDATES: tau > 0 blends the target network toward the
+        # online network on every learning step (Polyak averaging) instead of a
+        # hard copy every --target-sync steps. 0 = hard copies, exactly as
+        # before. See soft_update_target().
+        self.target_tau = float(target_tau)
+        # RECOVERY HEAD STABILITY (cold_run21). The recovery head's value ran
+        # from -0.4 to 32,554 in ~20 episodes while the three reward heads held
+        # steady: it was the one head still on plain DQN, its tiny reward barely
+        # anchors it, and a soft-updated target lets it chase its own rising
+        # estimate every step. Its loss then took nearly the whole clipped
+        # gradient budget. Two fixes, each switchable:
+        #   recovery_double_dqn  -- online net picks the next recovery mode,
+        #                           target net scores it (as the other heads).
+        #   recovery_value_bound -- clamp its TD target to the range its rewards
+        #                           make possible (computed by the runner from
+        #                           the config: per-step reward bound / (1-gamma)).
+        #                           0 = no bound.
+        self.recovery_double_dqn = bool(recovery_double_dqn)
+        self.recovery_value_bound = float(recovery_value_bound)
+        # See learn(): a fleet's bootstrap ends when it retires or stops.
+        self.per_fleet_terminal = bool(per_fleet_terminal)
+        # TEACHER MARGIN (learn(), section 1c). weight 0 = OFF: the loss is never
+        # added and its diagnostics are measured under no_grad, so training is
+        # exactly as before -- and a control run still reports how often the
+        # network already agrees with the rules.
+        self.teacher_margin = float(teacher_margin)
+        self.teacher_weight = float(teacher_weight)
+        self.last_teacher_loss = 0.0
+        self.last_teacher_agree = 0.0
+        self.last_teacher_share = 0.0
+        self.last_teacher_n = 0.0
+        # FROZEN UNDER THE LADDER (LADDER_DESIGN, "Decisions"). False: the
+        # recovery head's loss never enters the total, so its weights get no
+        # gradient and -- the point -- its drifting error signal no longer flows
+        # into the trunk the fleet heads share. It still runs and is still logged.
+        self.train_recovery = bool(train_recovery)
+        # Per-episode diagnostics (read by the runner): the value level of each
+        # head -- mean Q of the actions taken, over active fleets -- and the
+        # recovery head's mean Q. Losses hint at drift; these measure it.
+        # Built from the constructor argument: self.reward_heads is not set
+        # until further down. Every head present from the start, so a learning
+        # step that returns early can never leave the runner a missing key.
+        self.last_head_values = {h: 0.0 for h in (list(reward_heads) if reward_heads else ["total"])}
+        self.last_recovery_q = 0.0
         self.stability_coef = stability_coef
         self.steps_done = 0
 
@@ -807,8 +995,12 @@ class GNNAgent:
             from config_warehouse import CONFIG as _C
             self.recovery_eps_scale = float(
                 _C.get('recovery_policy', {}).get('exploration_scale', 1.0))
+            # Optional schedule settings (config "exploration"); absent keys keep
+            # epsilon_gaussian's historical values exactly.
+            self.explore_cfg = dict(_C.get('exploration', {}) or {})
         except Exception:
             self.recovery_eps_scale = 1.0
+            self.explore_cfg = {}
 
         # Optimizer
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
@@ -875,8 +1067,8 @@ class GNNAgent:
         self,
         t: int,
         total_episodes: int,
-        eps_min: float = 0.01,
-        eps_peak: float = 0.95,
+        eps_min: Optional[float] = None,
+        eps_peak: Optional[float] = None,
         mu: Optional[float] = None,
         sigma: Optional[float] = None,
         cold_start: Optional[bool] = None,
@@ -918,6 +1110,20 @@ class GNNAgent:
         # exploit-explore-exploit shape.
         if cold_start is None:
             cold_start = getattr(self, "cold_start", False)
+        # CONFIGURABLE SCHEDULE (config "exploration"; cold_run23). Each absent
+        # key keeps the historical value exactly: eps_min 0.01, eps_peak 0.95,
+        # peak at T/2, width T/6. cold_run22's 0.95 peak at T/2 left the 25-episode
+        # buffer 63% random at episode 50 and only 5 near-greedy episodes at the
+        # end; see CALIBRATION.md.
+        _x = getattr(self, "explore_cfg", {}) or {}
+        if eps_min is None:
+            eps_min = float(_x.get("eps_min", 0.01))
+        if eps_peak is None:
+            eps_peak = float(_x.get("eps_peak", 0.95))
+        if mu is None and not cold_start and "mu_frac" in _x:
+            mu = total_episodes * float(_x["mu_frac"])
+        if sigma is None and not cold_start and "sigma_frac" in _x:
+            sigma = total_episodes * float(_x["sigma_frac"])
         if mu is None:
             mu = 0.0 if cold_start else total_episodes * 0.5
         if sigma is None:
@@ -1174,6 +1380,11 @@ class GNNAgent:
             active_mask,
             recovery_actions,
             next_valid_masks,
+            next_active_masks,
+            valid_masks,
+            teacher_masks,
+            real_mask,
+            next_real_mask,
         ) = batch
 
         B, N, _ = node_feats.shape
@@ -1209,7 +1420,8 @@ class GNNAgent:
         rewards = rewards[..., :K]
 
         # Current Q, per head: q_per_head is [B, N, K, A]
-        q_values, curr_stability, q_per_head = self.policy_net(node_feats, adjs)
+        q_values, curr_stability, q_per_head = self.policy_net(
+            node_feats, adjs, node_mask=real_mask)
         actions_idx = actions.unsqueeze(-1).unsqueeze(-1).expand(B, N, K, 1)
         q_taken_per_head = q_per_head.gather(3, actions_idx).squeeze(-1)  # [B, N, K]
 
@@ -1224,7 +1436,8 @@ class GNNAgent:
         # sum_k Q_k a valid estimate of the return of the policy actually run.
         # (Hybrid Reward Architecture, van Seijen et al. 2017.)
         with torch.no_grad():
-            next_q_sum, _, next_q_per_head = self.target_net(next_node_feats, next_adjs)
+            next_q_sum, _, next_q_per_head = self.target_net(
+                next_node_feats, next_adjs, node_mask=next_real_mask)
 
             # DOUBLE DQN. Plain DQN lets ONE network (the target) both pick the
             # next action -- argmax -- and score it. Taking the max over noisy
@@ -1245,11 +1458,17 @@ class GNNAgent:
             # forward pass stores on the network; save it and put it back.
             # (Caught by the check that Double DQN with identical online and
             # target nets must give exactly the plain-DQN loss.)
+            _next_rec_online = None
             if self.double_dqn:
                 _was_training = self.policy_net.training
                 _saved_rec_q = getattr(self.policy_net, "last_recovery_q", None)
                 self.policy_net.eval()
-                next_q_sum, _, _ = self.policy_net(next_node_feats, next_adjs)
+                next_q_sum, _, _ = self.policy_net(
+                    next_node_feats, next_adjs, node_mask=next_real_mask)
+                # The same pass also produced the online net's recovery values
+                # for the NEXT states -- kept for the recovery head's Double DQN
+                # below, so it needs no forward pass of its own.
+                _next_rec_online = self.policy_net.last_recovery_q
                 self.policy_net.train(_was_training)
                 self.policy_net.last_recovery_q = _saved_rec_q
 
@@ -1284,7 +1503,19 @@ class GNNAgent:
             next_q_taken = next_q_per_head.gather(3, gather_idx).squeeze(-1)  # [B,N,K]
 
             done_mask = dones.unsqueeze(1).unsqueeze(-1).expand(B, N, K).float()
-            targets = rewards + (self.gamma * next_q_taken * (1.0 - done_mask))
+            _cont = 1.0 - done_mask
+            if self.per_fleet_terminal and next_active_masks is not None:
+                # PER-FLEET TERMINAL (cold_run22). A fleet's life ends when it
+                # retires or stops, not when the episode does. Without this, the
+                # step where a fleet delivers bootstrapped from the value of its
+                # RETIRED self -- a state masked out of the loss, so never trained,
+                # only extrapolated from active fleets near their goals. The
+                # delivery head's mean value rose to 1.84 against a physical
+                # ceiling of 1.42 (one delivery, 100 / 70.4). The episode and the
+                # loop go on; only that fleet's own value chain stops here.
+                _cont = _cont * next_active_masks.unsqueeze(-1).expand(B, N, K)
+            targets = rewards + (self.gamma * next_q_taken * _cont)
+            self._last_targets = targets.detach()          # measurement / tests
 
         # Compute loss, counting ONLY fleets that were active in each transition.
         #
@@ -1323,8 +1554,65 @@ class GNNAgent:
                 h: float(head_losses[k].item())
                 for k, h in enumerate(self.reward_heads)
             }
+            # VALUE LEVEL per head: mean Q of the actions taken, over active
+            # fleets -- the same mask as the loss. Measurement only.
+            _qlev = (q_taken_per_head.detach() * mask3).sum(dim=(0, 1)) / mask_sum
+            self.last_head_values = {
+                h: float(_qlev[k].item()) for k, h in enumerate(self.reward_heads)
+            }
         else:
             q_loss = per_node_loss.mean() * 0.0
+
+        # --- 1c. TEACHER MARGIN (CONFIG training.teacher_margin) ---
+        #
+        # WHAT THIS FIXES. When the orchestrator's rules override a fleet, the
+        # buffer stores the action the RULES executed -- correctly -- and the TD
+        # loss above trains the value of that action. The action the network
+        # itself preferred is never trained at all: it was not executed, so no
+        # transition carries its consequence, and its value stays wherever it
+        # drifted. The network keeps preferring the vetoed move, the rules keep
+        # vetoing it, and nothing ever tells the network. cold_run25: in warning
+        # zones the network proposed waiting 12-17% of the time while 61-70% of
+        # executed actions were waits, flat across all 60 episodes.
+        #
+        # WHY A LOSS AND NOT A TRANSITION. The vetoed move never happened, so it
+        # has no reward and no next state. Pushing it as a transition would mean
+        # inventing both -- and borrowing the executed action's reward would teach
+        # that the vetoed move was as good as the rules' move.
+        #
+        # THE LOSS: large-margin supervision (DQfD, Hester et al. 2018) on the
+        # COMBINED value, the one that picks. See teacher_margin_terms(). Two
+        # deliberate departures from the paper:
+        #   * The rules' action is compared with what the network prefers NOW,
+        #     not with the proposal stored at the time. The network has changed
+        #     since, and a proposal drawn by epsilon was never its preference.
+        #   * Q(s, a_rules) is detached: the loss pushes the preferred alternative
+        #     DOWN rather than pulling the rules' action UP. An inflated value
+        #     feeds every bootstrap max, and this codebase has fought exactly
+        #     that drift (cold_run5, cold_run16, cold_run21). The TD loss above
+        #     already gives the rules' action its true value.
+        #
+        # MARGIN UNITS: the combined value, sum_k w_k Q_k. cold_run23's taken-
+        # action values sat between 0.1 and 3.0 in those units, so the default
+        # 0.2 is ~7% of the range -- not DQfD's 0.8, which was sized for Atari.
+        teacher_loss = None
+        if valid_masks is not None and teacher_masks is not None:
+            _ctx = torch.enable_grad() if self.teacher_weight > 0 else torch.no_grad()
+            with _ctx:
+                _tl, _agree, _share, _n = teacher_margin_terms(
+                    q_values, actions, valid_masks, teacher_masks, active_mask,
+                    self.teacher_margin)
+            self.last_teacher_loss = float(_tl.item())
+            self.last_teacher_agree = _agree
+            self.last_teacher_share = _share
+            self.last_teacher_n = _n
+            if self.teacher_weight > 0 and _n > 0:
+                teacher_loss = _tl
+        else:
+            self.last_teacher_loss = 0.0
+            self.last_teacher_agree = 0.0
+            self.last_teacher_share = 0.0
+            self.last_teacher_n = 0.0
 
         # --- 1b. RECOVERY HEAD TD LOSS ---
         #
@@ -1355,18 +1643,44 @@ class GNNAgent:
         q_rec = self.policy_net.last_recovery_q                # [B, 3]
         q_rec_taken = q_rec.gather(1, recovery_actions.unsqueeze(-1)).squeeze(-1)
         with torch.no_grad():
-            _ = self.target_net(next_node_feats, next_adjs)
-            next_rec_max = self.target_net.last_recovery_q.max(dim=1).values
+            _ = self.target_net(next_node_feats, next_adjs, node_mask=next_real_mask)
+            _next_rec_tgt = self.target_net.last_recovery_q          # [B, 3]
+            if self.recovery_double_dqn:
+                # ONLINE picks the next recovery mode, TARGET scores it.
+                if _next_rec_online is None:        # main Double DQN is off
+                    _was = self.policy_net.training
+                    _saved = getattr(self.policy_net, "last_recovery_q", None)
+                    self.policy_net.eval()
+                    self.policy_net(next_node_feats, next_adjs, node_mask=next_real_mask)
+                    _next_rec_online = self.policy_net.last_recovery_q
+                    self.policy_net.train(_was)
+                    self.policy_net.last_recovery_q = _saved
+                _pick = _next_rec_online.argmax(dim=1, keepdim=True)
+                next_rec_max = _next_rec_tgt.gather(1, _pick).squeeze(1)
+            else:
+                next_rec_max = _next_rec_tgt.max(dim=1).values
             rec_target = graph_r + self.gamma * next_rec_max * (1.0 - dones.float())
+            if self.recovery_value_bound > 0:
+                # Its value cannot exceed per-step reward bound / (1 - gamma);
+                # anything beyond is bootstrap feedback, not earned value.
+                rec_target = rec_target.clamp(-self.recovery_value_bound,
+                                              self.recovery_value_bound)
         recovery_loss = F.smooth_l1_loss(q_rec_taken, rec_target)
         self.last_recovery_loss = float(recovery_loss.item())
+        self.last_recovery_q = float(q_rec_taken.detach().mean().item())
 
         # --- 2. Compute Stability Loss (Auxiliary) ---
         # Predict current integrity vs actual integrity
         stability_loss = F.mse_loss(curr_stability.view(-1), integrity_target.view(-1))
 
         # --- 3. Total Loss ---
-        loss = q_loss + recovery_loss + (self.stability_coef * stability_loss)
+        loss = q_loss + (self.stability_coef * stability_loss)
+        if self.train_recovery:
+            loss = loss + recovery_loss
+        # Teacher margin: added only when switched on and something was taught
+        # in this batch. Off, `loss` is exactly the expression above.
+        if teacher_loss is not None:
+            loss = loss + self.teacher_weight * teacher_loss
 
         # Expose both components separately (in addition to the combined float
         # still returned below, unchanged) so a caller can log them side by side --
@@ -1466,6 +1780,26 @@ class GNNAgent:
                         print(
                             f"[Gradient Mask] {name}: Zeroed {num_frozen_in_batch}/{len(node_ids)} node gradients"
                         )
+
+    def soft_update_target(self):
+        """
+        Polyak averaging: target <- (1 - tau) * target + tau * online, on every
+        learning step. Replaces the hard copy every --target-sync steps, whose
+        jumps can capture a momentarily inflated estimate and hold it fixed for
+        the next 1,000 steps -- the slow build and one-episode snap seen in
+        cold_run16, 18, 19 and 20. Soft blending lags the online network by
+        about 1/tau steps on average; a hard copy every target_sync steps lags
+        target_sync/2 on average. So tau = 2 / target_sync keeps the average lag
+        unchanged (0.002 for target_sync 1000 -> ~500 steps): what changes is the
+        jumps, not the lag.
+        Buffers (none today) are copied outright.
+        """
+        tau = self.target_tau
+        with torch.no_grad():
+            for pt, p in zip(self.target_net.parameters(), self.policy_net.parameters()):
+                pt.mul_(1.0 - tau).add_(p, alpha=tau)
+            for bt, b in zip(self.target_net.buffers(), self.policy_net.buffers()):
+                bt.copy_(b)
 
     def update_target_network(self):
         """Copy policy network weights to target network."""

@@ -1,4 +1,39 @@
 """
+config_warehouse.py -- THE TEACHER-MARGIN RUN (2026-10-04).
+
+Built from config_benchmark_rules.py, unchanged except for TWO added blocks:
+training.teacher_margin (enabled) and errors.waves (enabled). Everything below
+this paragraph is that file's own description, kept as it was.
+
+    all six conflict switches ON, stream OFF, errors ON (single random
+    failures), recovery_policy.reward_mode "collision_cost",
+    recovery.yield_escalation_per_repeat 0, buffer 20,000.
+
+Failure waves stop several fleets AT ONCE, a few times an episode, at random --
+the shock benchmark's regime (9 vehicles in 3 waves), which single random
+failures never produce. See core_warehouse.py, _maybe_inject_wave(), and
+test_failure_waves.py.
+
+The teacher margin trains the policy on every step where the RULES overrode it:
+see agent_warehouse.py, learn() section 1c, and test_teacher_margin.py. It needs
+the conflict switches ON -- with them off nothing is ever overridden and there
+is nothing to teach.
+
+-------------------------------------------------------------------------------
+config_benchmark_rules.py -- the cold_run23 benchmark, re-run with everything since.
+
+Copy over config_warehouse.py on the machine that runs it. Same benchmark as
+cold_run23 (config_benchmark_cold_run23.py): fixed missions, rescues on
+(errors.enabled), buffer 20,000 -- run with the same command and --seed 0, so the
+60 instances are identical to cold_run19-23 and the comparison is paired.
+
+Differs from cold_run23 by: the six conflict switches (CONFLICT_DESIGN.md),
+the recovery head priced on collisions (recovery_policy.reward_mode), the
+recovery charge counted once, the rescue-path fixes, frozen_obstacle_severity
+0.0 (the parked-fleet false alarm cold_run23's handoff suspected) and
+slow_decay_factor 0.9786.
+"""
+"""
 config_Warehouse.py
 
 Centralized configuration payload for the DhaaRn FLOWRRA orchestrator.
@@ -588,7 +623,7 @@ CONFIG = {
     # seeded queue drawn from the goal bank. Absent or enabled=False: the fixed
     # 46-mission behaviour, exactly (config_benchmark_cold_run23.py).
     "stream": {
-        "enabled": True,
+        "enabled": False,
         "exit_floors": "all",          # "all": docks on every floor; "ground": lowest floor only
         "exits_per_floor": 12,         # spread evenly around each floor's perimeter (was 6: catchments up to 236 cells)
         "vertical_axis": "auto",       # the axis with the fewest edges (lifts), or "X"/"Y"/"Z"
@@ -662,7 +697,48 @@ CONFIG = {
         # retires or stops. cold_run22's delivery value reached 1.84 against a
         # physical ceiling of 1.42 by bootstrapping from untrained retired states.
         "per_fleet_terminal": True,
-        "buffer_capacity": 15000,   # 60 fleets: the same memory as 20,000 at 46 (STREAM_DESIGN.md)
+        # TEACHER MARGIN (agent_warehouse.py, learn() section 1c). On every step
+        # where the orchestrator chose a fleet's executed action, push the
+        # network's preferred alternative at least `margin` below the rules'
+        # action, on the combined value sum_k w_k Q_k. Never pulls the rules'
+        # action up: the TD loss already gives it its true value.
+        #   enabled  False = exactly the old training; agreement still measured.
+        #   sources  "rules" = corridor entry, priority, yield to stopped.
+        #            Add "holds" to also teach recovery holds (not this run:
+        #            a hold depends on a timer the state does not fully show).
+        #   margin   in combined-value units; cold_run23's taken-action values
+        #            sat at 0.1-3.0, so 0.2 is ~7% of the range (DQfD's 0.8 was
+        #            sized for Atari).
+        #   weight   multiplier on the term in the total loss. NOT DQfD's 1.0:
+        #            healthy TD losses here are ~0.003-0.005 while the margin
+        #            term starts near 0.37, so at 1.0 it drowned the TD signal.
+        #            Paired 2-episode dry runs (2026-10-04, seed 0, 100 steps):
+        #              weight 1.0  qval_safety -2.8 -> -569, loss_safety 569
+        #              teacher off qval_safety  0.02 -> -0.001, agree 49% / 39%
+        #              weight 0.01 qval_safety  0.00 -> -0.02,  agree 66% / 68%
+        "teacher_margin": {
+            # RETIRED (teacher_run1): it pushed on values no experience could
+            # correct, and qval_safety drifted to -6.9. Kept, off, so that run
+            # can be reproduced. Its idea returns as the Learner head (step 3).
+            "enabled": False,
+            "sources": ["rules"],
+            "margin": 0.2,
+            "weight": 0.01,
+        },
+        # 2c SAFETY PAYS BY RUNG (V2_The_Conflict_Ladder.md, "The three heads").
+        # Raw units, calibrated against fatal_collision (-50) and the worst
+        # warning step (-1.2). One hop takes two steps at half speed, so c1 =
+        # 2 x -1.2: backing off a hop costs what lingering in the worst warning
+        # would for the same time. Weights: conflict group 1.0, a fleet heading
+        # into the group's cells heading_in_weight, everyone else 0.
+        "rung_costs": {
+            "enabled": True,
+            "c1_per_hop": -2.4,      # L1 retrace, and L2 per hop to the pull-over cell
+            "c2_pullover": -6.0,     # L2 extra: leaving a corridor for a bay
+            "c3_l3": -50.0,          # L3, the safety net: what a collision costs
+            "heading_in_weight": 0.25,
+        },
+        "buffer_capacity": 20000,   # 60 fleets: the same memory as 20,000 at 46 (STREAM_DESIGN.md)
         "batch_size": 64,                  # <--- Bumped for smoother gradient averaging  (# Experiences sampled per learn step)
         "total_episodes": 11,             # Total benchmark runs
         "max_steps_per_episode": 780,      # Timeout limit for a single run
@@ -796,7 +872,10 @@ CONFIG = {
 
         "max_yield_steps": 30,
 
-        "yield_escalation_per_repeat": 5,  # Added per repeat: 1st offence holds for
+        "yield_escalation_per_repeat": 0,  # FLAT for this run (2026-09-30 A/B: no
+                                           # capped-hold lockups, 140 vs 129 deliveries
+                                           # under constant preemption). Default: 5.
+                                            # Added per repeat: 1st offence holds for
                                             # base_yield_steps, 2nd for +5, 3rd for +10...
                                             # NOW ACTUALLY READ -- this was accepted by
                                             # WarehouseRecovery.__init__ and never used by
@@ -844,7 +923,7 @@ CONFIG = {
     # rebuild on every error -- precisely the full-graph replan cost the whole
     # timing argument says FLOWRRA does not pay.
     "errors": {
-        "enabled": False,                  # OFF for the first stream run (STREAM_DESIGN.md); was True                   # Master switch. False = exactly the old
+        "enabled": True,                  # OFF for the first stream run (STREAM_DESIGN.md); was True                   # Master switch. False = exactly the old
                                             # behaviour, no errors ever injected.
         "prob_per_step": 0.006,            # TRAINING RATE, deliberately unrealistic.
                                             # Was 0.0008, giving 0.28 errors per episode
@@ -958,6 +1037,35 @@ CONFIG = {
                                             # one is an unplanned hazard -- but still
                                             # finite, so a rescuer can push through it
                                             # to reach the pickup.
+        # FAILURE WAVES (core_warehouse.py, _maybe_inject_wave). Several fleets
+        # under way stop AT ONCE -- the shock benchmark's regime, 9 vehicles in
+        # 3 waves -- on top of the single failures above. Random per episode:
+        # each eligible step rolls prob_per_step, and a wave's size and victims
+        # are drawn, so episodes differ in how many waves hit, when and whom.
+        # Part of the error system: off whenever `enabled` above is False.
+        #
+        # Sized by simulation: at 0.015 an episode whose progress window lasts
+        # ~250 steps gets 0/1/2/3 waves 2/15/35/48% of the time (~6.8 wave
+        # failures); a ~150-step window 10/40/40/9%. With ~2.5 single failures
+        # on top, episodes average near the benchmark's 9, varying either side.
+        "waves": {
+            "enabled": True,
+            "prob_per_step": 0.015,   # chance per eligible step that a wave fires
+            "max_waves": 3,           # per episode
+            "size_min": 2,            # fleets per wave, drawn uniformly
+            "size_max": 4,
+            # Eligible while this share of the episode's orders is in a terminal
+            # state (delivered, or stranded on a dead fleet) -- the measure the
+            # benchmark times its waves by. Stream: share of steps used instead.
+            "progress_start": 0.15,
+            "progress_end": 0.80,
+            # Steps between waves: long enough that the last wave's rescues are
+            # under way, so the next one can catch a rescuer mid-rescue.
+            "min_gap_steps": 40,
+            # Wave schedules are drawn from their own random stream, seeded by
+            # (seed, episode count): different every episode, the same on rerun.
+            "seed": 0,
+        },
     },
 
     # ==========================================
@@ -1063,19 +1171,19 @@ CONFIG = {
         #    following only closer than `follow_gap`; the rest never.
         #    Feeds the loop's warning set -> integrity, risk steps, preemption,
         #    splats (on the meeting cell) and the in-warning feature.
-        "path_warnings": False,
+        "path_warnings": True,
         # 2. DIRECTION-AWARE BRAKING. A steady-gap convoy partner at
         #    `follow_gap` or more no longer throttles either fleet; braking
         #    uses the nearest peer that is not one. Needed with 1: today's
         #    braking holds convoys at 1.5-2 hops, where 1 no longer warns.
-        "directional_braking": False,
+        "directional_braking": True,
         # 3. CORRIDOR ENTRY. A fleet on a junction does not step into a
         #    corridor (single-lane, no junction along it) when the nearest fleet
         #    it can see inside -- max_vision_range edges down a straight
         #    corridor, as its ray would; route intents within `radius` hops in a
         #    bent one -- is heading toward it. Convoys may enter behind. Two
         #    fleets at the two ends in sight of each other: priority picks one.
-        "corridor_entry": False,
+        "corridor_entry": True,
         # 4. PRIORITY. Lower key goes first: hops to goal minus `aging` per step
         #    the fleet was made to wait (reset on delivery), then seniority in
         #    the corridor (who entered first), then a fixed per-fleet tiebreak.
@@ -1083,7 +1191,7 @@ CONFIG = {
         #    the junction behind, pull over off the corridor's line, and hold
         #    until the winners are through. Two fleets claiming the same cell:
         #    the lower waits a step. (Decided 2026-09-29, CONFLICT_DESIGN.md.)
-        "priority": False,
+        "priority": True,
         "aging": 0.25,           # hops of priority gained per step made to wait
         # 6. YIELD TO STOPPED FLEETS. A fleet never moves into a cell held by a
         #    fleet that stays put this step (told to wait, held, waiting, idle):
@@ -1091,7 +1199,7 @@ CONFIG = {
         #    waits (a junction waiter and the fleet it waits for). Added
         #    2026-09-29: with 1-4 on, 62% of the remaining collisions on 50_
         #    were a moving fleet driving into a stopped one on a mesh junction.
-        "yield_to_stopped": False,
+        "yield_to_stopped": True,
         # NODE-ALIGNED MOVES. A step that would cross the next node stops on
         # it, and a turn snaps the old axis onto the node. Without it, braking
         # leaves fleets out of phase with the grid: they jump over junctions
@@ -1102,11 +1210,37 @@ CONFIG = {
         # preemption: +22% deliveries, +42% collisions vs version_unrefined),
         # which is why the components are judged against version_unrefined +
         # this, not against version_unrefined. See node_warehouse.NODE_ALIGNED.
-        "node_aligned_moves": False,
+        "node_aligned_moves": True,
         "radius": 3.0,           # hops; pairs beyond this are never classified
         "floor": 1.0,            # hops; always a warning inside this
         "follow_gap": 1.5,       # hops; the kinematic minimum convoy gap
         "route_horizon": 8,      # cells of each fleet's route compared
+        # THE CONFLICT LADDER (LADDER_DESIGN). Step 2a-i, ONE AUTHORITY:
+        #   * a recovery hold no longer silences RULES (a held fleet still
+        #     takes its retreat / pull-over / wait order);
+        #   * the learned recovery head is OFF; L3 is a fixed rule -- a warned
+        #     pair lasting l3_stuck_steps with neither fleet closer to its goal
+        #     gets separated, and only that pair;
+        #   * aging resets per conflict, after aging_reset_steps steps outside
+        #     every warned pair (was: only on delivery).
+        # Off = exactly the old behaviour.
+        "ladder": {
+            "enabled": True,
+            "aging_reset_steps": 3,
+            "l3_stuck_steps": 30,  # interim; group-level T arrives with 2a-iv
+            # 2a-ii SHADOW MODE: count conflict groups and wait-for cycles (2-
+            # and multi-fleet, in corridors or not, how long they last). Measures
+            # only; safe with the ladder on or off.
+            "shadow": True,
+            # 2a-iii RETRACE (needs enabled): a wait-for cycle seen at more than
+            # grace_checks consecutive checks gets its cheapest member backed up
+            # its own trail (at most trail_length cells), one hop per step, held
+            # there until the routes no longer meet. Fleets RULES is backing out
+            # of a corridor are left to RULES. 3-fleet cycles: the same rule.
+            "retrace": True,
+            "grace_checks": 1,
+            "trail_length": 8,
+        },
     },
 
     "recovery_policy": {
@@ -1205,7 +1339,7 @@ CONFIG = {
         #                      A "clear" bonus would pay for situations that clear
         #                      anyway (119 of 121 in cold_run25 ep 1) and teach
         #                      the head to preempt always.
-        "reward_mode": "strict_bonus",
+        "reward_mode": "collision_cost",
         "collision_cost": -8.0,
         "collision_charge_cap": 3,
         "prevention_window": 5,            # MEASUREMENT ONLY (CONFLICT_DESIGN.md

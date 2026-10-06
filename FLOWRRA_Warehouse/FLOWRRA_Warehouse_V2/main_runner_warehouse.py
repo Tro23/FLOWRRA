@@ -326,6 +326,22 @@ def _recovery_value_bound() -> float:
     return per_step / (1.0 - float(CONFIG["training"]["gamma"]))
 
 
+def _teacher_summary(dg):
+    """Episode averages of the teacher-margin diagnostics. Loss and agreement
+    are weighted by how many taught fleets each learning step's batch held, so
+    a batch with none does not drag them toward zero; share is a plain mean."""
+    n = float(sum(d.get("teacher_n", 0.0) for d in dg))
+    if n <= 0:
+        return {"loss_teacher": 0.0, "teacher_agree": 0.0,
+                "teacher_share": 0.0, "teacher_n": 0.0}
+    return {
+        "loss_teacher": sum(d["loss_teacher"] * d["teacher_n"] for d in dg) / n,
+        "teacher_agree": sum(d["teacher_agree"] * d["teacher_n"] for d in dg) / n,
+        "teacher_share": float(np.mean([d["teacher_share"] for d in dg])),
+        "teacher_n": n,
+    }
+
+
 def main():
     ap = argparse.ArgumentParser(allow_abbrev=False)  # see ablate.py: prefix
                                                      # matching silently
@@ -418,6 +434,10 @@ def main():
         f"obstacles={CONFIG.get('obstacles', {}).get('enabled')} "
         f"despawn={CONFIG.get('episode', {}).get('despawn_on_delivery')}")
 
+    # TEACHER MARGIN (agent_warehouse.py, learn() section 1c). Absent from the
+    # config = off, exactly as before; the diagnostics are logged either way.
+    _tmc = CONFIG["training"].get("teacher_margin", {}) or {}
+    _teacher_on = bool(_tmc.get("enabled", False))
     agent = GNNAgent(
         node_feature_dim=input_dim, edge_feature_dim=_edim,
         action_size=CONFIG["gnn"]["action_size"],
@@ -430,6 +450,10 @@ def main():
         recovery_double_dqn=bool(CONFIG["training"].get("recovery_double_dqn", False)),
         recovery_value_bound=_recovery_value_bound(),
         per_fleet_terminal=bool(CONFIG["training"].get("per_fleet_terminal", False)),
+        teacher_margin=float(_tmc.get("margin", 0.2)),
+        teacher_weight=(float(_tmc.get("weight", 0.01)) if _teacher_on else 0.0),
+        # The ladder parks the learned recovery head: frozen, not trained.
+        train_recovery=not bool(((CONFIG.get("conflict", {}) or {}).get("ladder", {}) or {}).get("enabled", False)),
         dropout=CONFIG["gnn"]["dropout"], lr=CONFIG["gnn"]["learning_rate"],
         gamma=CONFIG["training"]["gamma"],
         buffer_capacity=CONFIG["training"]["buffer_capacity"],
@@ -466,6 +490,30 @@ def main():
                 f"last={_eps[-1]:.3f} | below 0.05 from ep "
                 f"{next((t for t in range(1 + _eps.index(max(_eps)), args.episodes + 1) if _eps[t - 1] < 0.05), None)} "
                 f"| config {agent.explore_cfg or 'historical defaults'}")
+    logger.info(f"teacher margin: enabled={_teacher_on} "
+                f"sources={sorted(_tmc.get('sources', ['rules']))} "
+                f"margin={agent.teacher_margin} weight={agent.teacher_weight}"
+                + ("" if _teacher_on else " (off: agreement measured only)"))
+    _wc = (CONFIG.get("errors", {}) or {}).get("waves", {}) or {}
+    logger.info(f"failure waves: enabled={bool(_wc.get('enabled', False))} "
+                f"(errors.enabled={bool(CONFIG.get('errors', {}).get('enabled', False))}) "
+                f"prob/step={_wc.get('prob_per_step')} max={_wc.get('max_waves')} "
+                f"size={_wc.get('size_min')}-{_wc.get('size_max')} "
+                f"progress={_wc.get('progress_start')}-{_wc.get('progress_end')} "
+                f"gap={_wc.get('min_gap_steps')} seed={_wc.get('seed', 0)}")
+    _lc = (CONFIG.get("conflict", {}) or {}).get("ladder", {}) or {}
+    logger.info(f"conflict ladder: enabled={bool(_lc.get('enabled', False))} "
+                f"aging_reset_steps={_lc.get('aging_reset_steps')} "
+                f"l3_stuck_steps={_lc.get('l3_stuck_steps')}"
+                + (" | learned recovery head OFF and FROZEN, L3 fixed" if _lc.get("enabled") else "")
+                + f" | shadow={bool(_lc.get('shadow', False))}"
+                + f" | retrace={bool(_lc.get('retrace', False))}"
+                  f" (grace={_lc.get('grace_checks', 1)}, trail={_lc.get('trail_length', 8)})")
+    _rcc = CONFIG["training"].get("rung_costs", {}) or {}
+    logger.info(f"rung costs: enabled={bool(_rcc.get('enabled', False))} "
+                f"c1={_rcc.get('c1_per_hop')}/hop c2={_rcc.get('c2_pullover')} "
+                f"c3={_rcc.get('c3_l3')} heading_in={_rcc.get('heading_in_weight')}"
+                + ("" if _rcc.get("enabled") else " (off: counted only)"))
     _sc = CONFIG.get("stream") or {}
     logger.info(f"stream: enabled={bool(_sc.get('enabled', False))} "
                 f"exit_floors={_sc.get('exit_floors', 'all')} docks/floor={_sc.get('exits_per_floor', 6)} "
@@ -516,7 +564,11 @@ def main():
                 hl.append(dict(agent.last_head_losses))
                 dg.append({**{f"qval_{h}": v for h, v in agent.last_head_values.items()},
                            "loss_recovery": agent.last_recovery_loss,
-                           "qval_recovery": agent.last_recovery_q})
+                           "qval_recovery": agent.last_recovery_q,
+                           "loss_teacher": agent.last_teacher_loss,
+                           "teacher_agree": agent.last_teacher_agree,
+                           "teacher_share": agent.last_teacher_share,
+                           "teacher_n": agent.last_teacher_n})
             if env.is_episode_over():
                 break
 
@@ -547,6 +599,10 @@ def main():
         _wp, _we = est.get("choice_policy_wait_share"), est.get("choice_exec_wait_share")
         _wait_txt = (f" | wait policy {_wp * 100:.0f}% / done {_we * 100:.0f}%"
                      if _wp is not None and np.isfinite(_wp) else "")
+        # Failure waves: how many of the errors arrived together.
+        _wave_txt = (f" (waves {est['wave_fired']}: {est['wave_failures']} at once"
+                     + (f", {est['wave_rescuers_hit']} mid-rescue" if est.get("wave_rescuers_hit") else "")
+                     + ")" if est.get("wave_fired") else "")
         logger.info(
             f"Ep {ep:04d} | {map_name:<22} k={len(env.nodes):<3} | R {ep_reward:9.1f} | "
             f"done {done}/{total}{_eff_txt} | coll {env.loop.total_collisions} | "
@@ -554,12 +610,19 @@ def main():
             f"clear{est['preempt_window']} {est['preempt_clear_k']}/{_prev_res}{_wait_txt} | "
             f"risk {est['risk_steps_acted']}/{est['risk_steps']} "
             f"({est['intervention_rate']*100:.0f}%) | "
-            f"err {est['errors_injected']} hand {est['handovers_completed']} | "
+            f"err {est['errors_injected']}{_wave_txt} hand {est['handovers_completed']} | "
             f"ovr {est['action_override_rate']*100:.0f}% | "
             f"eps {agent.epsilon_gaussian(ep, args.episodes):.3f} | "
             f"grad {env.get_gradient_agreement():.3f} | left {left:.1f}h | "
             + " ".join(f"{h}:{mean_hl[h]:.3f}" for h in heads)
         )
+        _tsum = _teacher_summary(dg)
+        if _tsum["teacher_n"] > 0:
+            logger.info(
+                f"       teacher | {'training' if agent.teacher_weight > 0 else 'measured only'} "
+                f"| rules decided {_tsum['teacher_share'] * 100:.1f}% of sampled fleet-steps "
+                f"| network already agrees {_tsum['teacher_agree'] * 100:.0f}% "
+                f"| margin loss {_tsum['loss_teacher']:.4f}")
         if "stream_deliveries" in est:
             logger.info(
                 f"        stream | delivered {est['stream_deliveries']} of {est['stream_orders_issued']} orders "
@@ -610,7 +673,7 @@ def main():
         row.update({k: v for k, v in est.items()
                     if k.startswith(("incomplete_", "hops_", "sep_", "orders_",
                                      "tier1_", "tier2_", "recurrence_", "doorstep_", "start_hops_",
-                                     "steps_held_", "steps_waiting_",
+                                     "steps_held_", "steps_waiting_", "wave_", "ladder_",
                                      "convoy_", "held_pair_", "rwd_", "path_", "stream_", "choice_",
                                      "preempt_", "conflict_", "watch_", "corridor_"))})
         row.update({f"loss_{h}": mean_hl[h] for h in heads})
@@ -618,6 +681,9 @@ def main():
         # episode means over learning steps (0.0 before learning starts).
         row.update({k: (float(np.mean([d[k] for d in dg])) if dg else 0.0)
                     for k in ([f"qval_{h}" for h in heads] + ["loss_recovery", "qval_recovery"])})
+        # Teacher margin: agreement and loss are averaged over TAUGHT fleets, so
+        # a learning step whose batch held none does not drag them toward 0.
+        row.update(_tsum)
         logs.append(row)
 
         if ep % 5 == 0:

@@ -62,6 +62,7 @@ class Verdict:
     why: str                                  # "floor", "kind", "gap", "fallback", ""
     meet: Optional[Cell] = None               # where to splat, for MEETING_KINDS
     follower: Optional[str] = None            # for "following": who is behind
+    blocker: Optional[str] = None             # for "blocked": who stands still
 
 
 @dataclass
@@ -217,8 +218,14 @@ class PathConflicts:
             self.kind_counts[kind] += 1
             if warn:
                 self.warn_counts[kind] += 1
+            # The blocker is the fleet standing on the meeting cell (classify()
+            # sets meet to the stationary fleet's own cell). The wait-for graph
+            # of the conflict ladder needs the arrow's direction: mover -> blocker.
+            blocker = None
+            if kind == "blocked" and meet is not None:
+                blocker = b if meet in o(b) else a
             out.append(Verdict(a, b, d, kind, warn, why, meet,
-                               {"a": a, "b": b}.get(fol) if fol else None))
+                               {"a": a, "b": b}.get(fol) if fol else None, blocker))
         return out
 
     def statistics(self) -> Dict[str, Any]:

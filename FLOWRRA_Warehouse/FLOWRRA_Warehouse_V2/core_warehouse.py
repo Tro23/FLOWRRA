@@ -28,6 +28,11 @@ PRIORITY_HEADS = ("safety", "delivery", "efficiency")
 
 import node_warehouse as _node_module
 
+# FAILURE WAVES: environments built in this process with waves enabled. Seeds
+# each episode's own wave RNG (errors.waves.seed, count), so every episode gets
+# a different wave schedule while a rerun with the same seed gets the same ones.
+_WAVE_EPISODES = 0
+
 class FLOWRRA:
     """
     Command center for the discrete warehouse holon.
@@ -449,6 +454,39 @@ class FLOWRRA:
         self.recall_retired = bool(e.get("recall_retired", True))
         self.recall_distance_slack = float(e.get("recall_distance_slack", 1.5))
 
+        # ---- FAILURE WAVES (errors.waves) -----------------------------------
+        # Several fleets stopping AT ONCE, a few times an episode: the regime of
+        # the shock benchmark (9 vehicles in 3 waves), which single random
+        # failures -- one at a time, ~2.5 an episode -- never produce. Part of
+        # the error system: they fire only while errors_enabled is True, checked
+        # every step, so a harness that switches errors off (the shock benchmark
+        # does, to inject its own scripted waves) switches waves off too.
+        #
+        # RANDOM PER EPISODE, like single failures: whether a wave fires is a
+        # per-step roll, and its size and its victims are drawn too, so episodes
+        # differ in how many waves hit, when, and whom. Drawn from the wave's OWN
+        # random stream, never the global one, so turning waves on leaves every
+        # other random draw (exploration, single failures) where it was.
+        _w = e.get("waves", {}) or {}
+        self.waves_enabled = bool(_w.get("enabled", False))
+        self.wave_prob_per_step = float(_w.get("prob_per_step", 0.0))
+        self.wave_max = int(_w.get("max_waves", 0))
+        self.wave_size_min = int(_w.get("size_min", 1))
+        self.wave_size_max = max(self.wave_size_min, int(_w.get("size_max", self.wave_size_min)))
+        self.wave_progress_start = float(_w.get("progress_start", 0.0))
+        self.wave_progress_end = float(_w.get("progress_end", 1.0))
+        self.wave_min_gap = int(_w.get("min_gap_steps", 0))
+        self.waves_fired = 0
+        self.wave_failures = 0
+        self.wave_rescuers_hit = 0
+        self._last_wave_step: Optional[int] = None
+        self._wave_rng: Optional[random.Random] = None
+        if self.waves_enabled:
+            global _WAVE_EPISODES
+            _WAVE_EPISODES += 1
+            self._wave_rng = random.Random(
+                int(_w.get("seed", 0)) * 1_000_003 + _WAVE_EPISODES)
+
         # Fleets that have errored and stopped moving. Immobile from the moment
         # they enter this set; the mission response waits for confirmation.
         self.stopped_nodes: Set[str] = set()
@@ -807,6 +845,87 @@ class FLOWRRA:
                 or _ccfg.get("yield_to_stopped", False)):
             from corridor_warehouse import ConflictRules
             self.rules = ConflictRules(self, _ccfg, CONFIG["warehouse"]["max_vision_range"])
+        # TEACHER SIGNAL (agent_warehouse.py, learn() section 1c). Which
+        # orchestrator decisions count as the teacher when the executed action
+        # is recorded: "rules" (components 3 and 4 -- corridor entry, priority,
+        # yield to stopped) and, optionally, "holds" (a fleet held by recovery).
+        # Recorded on every push whether or not the agent trains on it, so the
+        # switch itself lives on the agent (training.teacher_margin.enabled).
+        _tcfg = (CONFIG.get("training", {}) or {}).get("teacher_margin", {}) or {}
+        self.teacher_sources = set(_tcfg.get("sources", ["rules"]))
+        # THE CONFLICT LADDER, step 2a-i (LADDER_DESIGN): ONE AUTHORITY.
+        #   * a recovery hold no longer silences RULES (the lock-out below);
+        #   * the learned recovery head is off -- L3 is a fixed rule: a warned
+        #     pair lasting l3_stuck_steps with neither fleet closer to its goal;
+        #   * aging resets per conflict (corridor_warehouse.ConflictRules).
+        # Off: everything exactly as before.
+        _lcfg = _ccfg.get("ladder", {}) or {}
+        self.ladder_on = bool(_lcfg.get("enabled", False))
+        self.ladder_stuck_steps = int(_lcfg.get("l3_stuck_steps", 30))
+        self._ladder_pairs: Dict[frozenset, Tuple[int, float, float]] = {}
+        self._ladder_l3_set: Optional[Set[str]] = None
+        self.ladder_l3_fired = 0
+        self.ladder_l3_fleets = 0
+        self.ladder_rules_while_held = 0
+        # 2a-ii SHADOW MODE (ladder.shadow): measure, never act. Counts what the
+        # ladder would face -- conflict groups, wait-for cycles, where they are
+        # and how long they last -- so 2a-iii/iv are built on numbers.
+        self.ladder_shadow = bool(_lcfg.get("shadow", False))
+        self._shadow_cycles: Dict[frozenset, int] = {}
+        self._coord_to_id: Optional[Dict[tuple, str]] = None
+        # 2a-iii RETRACE (ladder.retrace): a wait-for cycle that outlasts the
+        # grace check gets one fleet backed up along its own trail -- the
+        # member with the cheapest retreat -- one hop per step, holding there
+        # until the routes no longer meet (commitment). Covers what nothing
+        # else does: loops RULES' yield-to-stopped guard leaves alone, and
+        # cycles outside corridors. Never touches a fleet RULES is already
+        # backing out of a corridor (one authority). Needs RULES on.
+        self.ladder_retrace = (bool(_lcfg.get("retrace", False)) and self.ladder_on
+                               and self.rules is not None)
+        self.ladder_grace_checks = int(_lcfg.get("grace_checks", 1))
+        self.ladder_trail_len = int(_lcfg.get("trail_length", 8))
+        self._trail: Dict[str, List[str]] = {}
+        self._retrace: Dict[str, Dict[str, Any]] = {}
+        # CALIBRATION (retrace_run1): fleets drive base_speed cells per step,
+        # so one HOP takes steps_per_hop STEPS (2 at 0.5). The first budget
+        # counted hops as steps and timed out 6 of 22 orders while the other
+        # fleet was still passing at half speed.
+        _bs = float(CONFIG["warehouse"].get("base_speed", 0.5)) or 0.5
+        self.ladder_steps_per_hop = max(1, int(np.ceil(1.0 / _bs - 1e-9)))
+        self.ladder_route_horizon = int(_ccfg.get("route_horizon", 8))
+        self.ladder_retrace_stats = {k: 0 for k in (
+            "orders", "hops", "released", "timeouts", "no_room", "multi",
+            "skipped_corridor",
+            # WHY an order timed out (retrace_run2: 17 of 27 in one episode)
+            "timeout_not_arrived", "timeout_others_stuck",
+            "timeout_last_head_on", "timeout_last_contested", "timeout_last_blocked",
+            "timeout_last_following", "timeout_last_none",
+            # fleet-steps a fleet was in a fatal collision WHILE retreating:
+            # near 0 means reversing never causes contact.
+            "collisions_while_retreating")}
+        self._pair_kind: Dict[frozenset, str] = {}
+        # 2c SAFETY PAYS BY RUNG (training.rung_costs). Each escalation is
+        # charged ONCE, when it happens, to the Safety reward of the fleets it
+        # involved: the conflict group at weight 1.0, a fleet whose route heads
+        # into the group's cells at heading_in_weight, everyone else nothing.
+        # Raw units, like fatal_collision (-50) and warning_zone (-1.2). Counted
+        # always (what it WOULD charge); added to rewards only when enabled.
+        _rc = (CONFIG.get("training", {}) or {}).get("rung_costs", {}) or {}
+        self.rung_costs_on = bool(_rc.get("enabled", False))
+        self.rung_c1 = float(_rc.get("c1_per_hop", -2.4))
+        self.rung_c2 = float(_rc.get("c2_pullover", -6.0))
+        self.rung_c3 = float(_rc.get("c3_l3", -50.0))
+        self.rung_heading_in = float(_rc.get("heading_in_weight", 0.25))
+        self._rung_pending: Dict[str, float] = {}
+        self._seen_corridor_orders: Set[str] = set()
+        self.rung_stats = {k: 0.0 for k in (
+            "l1_events", "l2_events", "l3_events",
+            "l1_charged", "l2_charged", "l3_charged")}
+        self.ladder_shadow_stats = {k: 0 for k in (
+            "steps_with_groups", "groups", "groups_2", "groups_3plus", "max_group",
+            "cycles_seen", "cycles_2", "cycles_3plus", "cycles_in_corridor",
+            "max_cycle", "max_cycle_persist", "cycles_cleared_in_grace",
+            "cycles_needing_retreat")}
         
         # Calculate GNN input dimension based on node state vector shape
         input_dim = len(self.nodes[0].get_state_vector(self.nodes)) + len(self.density.get_local_affordance(self.nodes[0].current_pos, self.nodes, self.frozen_nodes))
@@ -1914,7 +2033,10 @@ class FLOWRRA:
         """
         if not self.errors_enabled:
             return
-        if self.total_errors >= self.error_max_per_episode:
+        # Single failures keep their OWN budget: wave failures are counted in
+        # total_errors too, and must not use it up. Waves off: wave_failures is
+        # 0 and this is the old check exactly.
+        if self.total_errors - self.wave_failures >= self.error_max_per_episode:
             return
         if self.step_count < self.error_min_step:
             return
@@ -1927,16 +2049,31 @@ class FLOWRRA:
         # Only fleets genuinely under way. Erroring one still sitting on its
         # spawn makes the pickup and the start the same cell, which teaches
         # nothing about mid-mission recovery.
-        candidates = [
+        candidates = self._error_candidates()
+        if not candidates:
+            return
+
+        victim = random.choice(candidates)
+        self._stop_fleet(victim)
+
+    def _error_candidates(self) -> List[Any]:
+        """
+        Fleets that can be failed: genuinely under way. Shared by single failures
+        and waves, so both strike the same kind of fleet.
+        """
+        return [
             n for n in self.nodes
             if n.id not in self.immobile_nodes
             and n.current_goal_id is not None
             and n.get_progress_fraction() >= self.error_min_progress
         ]
-        if not candidates:
-            return
 
-        victim = random.choice(candidates)
+    def _stop_fleet(self, victim: Any):
+        """
+        Stop one fleet dead, as a VDA 5050 error stop. The body of the original
+        single-failure path, unchanged -- moved here so a wave stops each of its
+        fleets exactly the way a single failure does.
+        """
         self.stopped_nodes.add(victim.id)
         self._error_step[victim.id] = self.step_count
         self.total_errors += 1
@@ -1972,6 +2109,63 @@ class FLOWRRA:
         print(f"[Core] *** VDA5050 ERROR *** Fleet {victim.id} stopped at step "
               f"{self.step_count} ({victim.get_progress_fraction()*100:.0f}% through "
               f"its journey to {victim.current_goal_id}).")
+
+    def _wave_progress(self) -> float:
+        """
+        How far the episode is: the share of its orders already in a terminal
+        state, delivered or stranded on a dead fleet -- the same measure the
+        shock benchmark times its waves by. A stream has no fixed order count, so
+        there it is the share of the step budget used.
+        """
+        if getattr(self, "stream", False) or not self.goal_pool:
+            return self.step_count / max(1, self.max_steps_per_episode)
+        return ((len(self.claimed_goals) + len(self.stopped_nodes))
+                / max(1, len(self.goal_pool)))
+
+    def _maybe_inject_wave(self):
+        """
+        Roll for a FAILURE WAVE: size_min..size_max fleets under way stop at once.
+
+        Eligible while errors are on, fewer than max_waves have fired, at least
+        min_gap_steps have passed since the last one (so rescues from it are
+        under way and can be hit by the next), the step is inside the same late
+        cut-off single failures use (max_step_fraction), and the episode's
+        progress is between progress_start and progress_end. Then it fires with
+        probability prob_per_step.
+        """
+        if not (self.waves_enabled and self.errors_enabled):
+            return
+        if self._wave_rng is None or self.waves_fired >= self.wave_max:
+            return
+        if (self._last_wave_step is not None
+                and self.step_count - self._last_wave_step < self.wave_min_gap):
+            return
+        if self.step_count > self.error_max_step_fraction * self.max_steps_per_episode:
+            return
+        progress = self._wave_progress()
+        if not (self.wave_progress_start <= progress <= self.wave_progress_end):
+            return
+        if self._wave_rng.random() >= self.wave_prob_per_step:
+            return
+        candidates = self._error_candidates()
+        if not candidates:
+            return
+
+        k = min(len(candidates),
+                self._wave_rng.randint(self.wave_size_min, self.wave_size_max))
+        victims = self._wave_rng.sample(candidates, k)
+        # Counted BEFORE stopping: _stop_fleet releases a rescuer's assignment.
+        mid_rescue = [v.id for v in victims if v.id in self._pickup_assignment]
+        self.waves_fired += 1
+        self._last_wave_step = self.step_count
+        self.wave_rescuers_hit += len(mid_rescue)
+        print(f"[Core] *** FAILURE WAVE {self.waves_fired}/{self.wave_max} *** step "
+              f"{self.step_count}, {progress * 100:.0f}% of orders done: {k} fleet(s) "
+              f"stop at once [{', '.join(sorted(str(v.id) for v in victims))}]"
+              + (f"; {len(mid_rescue)} of them mid-rescue" if mid_rescue else "") + ".")
+        for v in victims:
+            self._stop_fleet(v)
+            self.wave_failures += 1
 
     def _confirm_stops_and_open_pickups(self):
         """
@@ -2709,6 +2903,17 @@ class FLOWRRA:
         if preemptive:
             dead, warn = warn, set()
 
+        # L3 (conflict.ladder): separate the STUCK fleets only, never the ones
+        # RULES are handling elsewhere on the floor. The two filters below exist
+        # to stop preemptive flips mid-pass; a pair stuck for l3_stuck_steps
+        # with no progress is not mid-pass, so L3 goes past them.
+        _l3 = self._ladder_l3_set
+        self._ladder_l3_set = None
+        if _l3 is not None and preemptive:
+            dead = dead & _l3
+            if not dead:
+                return {"reinit_from": "l3_pair_cleared"}
+
         # CONVOYS ARE NOT CONFLICTS.
         #
         # Measured on cold_run12: 742 of 769 recovery invocations (96%) were
@@ -2734,7 +2939,7 @@ class FLOWRRA:
         # force_repair, no invocation cost, no counter. The warning stays on the
         # books, because the fleets really are close -- they just are not in
         # conflict.
-        if preemptive and self.preempt_skip_convoys:
+        if preemptive and self.preempt_skip_convoys and _l3 is None:
             before = len(dead)
             dead = self._drop_following_pairs(dead)
             self.convoy_fleets_exempted += before - len(dead)
@@ -2759,7 +2964,7 @@ class FLOWRRA:
         # set -- the pass is supposed to happen. A fleet stays at risk only if it
         # has a warning partner that is neither followed nor held. Real
         # collisions never reach this path and are always recovered.
-        if preemptive and self.preempt_skip_held_pairs:
+        if preemptive and self.preempt_skip_held_pairs and _l3 is None:
             before = len(dead)
             dead = self._drop_handled_pairs(dead)
             self.held_pair_fleets_exempted += before - len(dead)
@@ -2903,6 +3108,373 @@ class FLOWRRA:
         if int(duration) >= int(self.recovery.max_yield_steps):
             self.holds_at_cap += 1
 
+    def _ladder_shadow_step(self, verdicts) -> None:
+        """
+        2a-ii SHADOW MODE. Build the wait-for graph W from this step's WARNED
+        verdicts and count what the ladder would face. Measurement only.
+
+            head_on    a -> b and b -> a     (a 2-cycle: waiting cannot solve it)
+            blocked    mover -> blocker
+            following  follower -> leader
+            contested  same group, no arrow  (ordering solves it)
+
+        Groups are the connected pieces (union-find); cycles are the strongly
+        connected components of W with 2+ fleets. A cycle seen at one check only
+        would have cleared inside the grace check; one seen at 2+ checks would
+        have needed a retreat (L1/L2).
+        """
+        import networkx as nx              # local, as elsewhere in this file
+        st = self.ladder_shadow_stats
+        parent: Dict[str, str] = {}
+
+        def find(x):
+            parent.setdefault(x, x)
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        # This step's relationship of every warned pair -- what the retrace
+        # release reads ("is anyone still head-on with me or racing me?").
+        self._pair_kind = {frozenset((v.a, v.b)): v.kind for v in verdicts if v.warn}
+        W = nx.DiGraph()
+        for v in verdicts:
+            if not v.warn or v.kind not in ("head_on", "blocked", "following", "contested"):
+                continue
+            ra, rb = find(v.a), find(v.b)
+            if ra != rb:
+                parent[ra] = rb
+            W.add_node(v.a)
+            W.add_node(v.b)
+            if v.kind == "head_on":
+                W.add_edge(v.a, v.b)
+                W.add_edge(v.b, v.a)
+            elif v.kind == "blocked" and v.blocker:
+                W.add_edge(v.a if v.blocker == v.b else v.b, v.blocker)
+            elif v.kind == "following" and v.follower:
+                W.add_edge(v.follower, v.b if v.follower == v.a else v.a)
+
+        groups: Dict[str, Set[str]] = {}
+        for x in list(parent):
+            groups.setdefault(find(x), set()).add(x)
+        if groups:
+            st["steps_with_groups"] += 1
+        for g in groups.values():
+            st["groups"] += 1
+            st["groups_2" if len(g) == 2 else "groups_3plus"] += 1
+            st["max_group"] = max(st["max_group"], len(g))
+
+        now = {frozenset(c) for c in nx.strongly_connected_components(W) if len(c) >= 2}
+        for c in now:
+            if c not in self._shadow_cycles:
+                st["cycles_seen"] += 1
+                st["cycles_2" if len(c) == 2 else "cycles_3plus"] += 1
+                if self._in_corridor(c):
+                    st["cycles_in_corridor"] += 1
+            self._shadow_cycles[c] = self._shadow_cycles.get(c, 0) + 1
+            st["max_cycle"] = max(st["max_cycle"], len(c))
+            st["max_cycle_persist"] = max(st["max_cycle_persist"], self._shadow_cycles[c])
+        for c in list(self._shadow_cycles):
+            if c not in now:
+                n = self._shadow_cycles.pop(c)
+                st["cycles_cleared_in_grace" if n == 1 else "cycles_needing_retreat"] += 1
+        if self.ladder_retrace:
+            self._ladder_plan_retreats(now)
+
+    # ------------------------------------------------------------ 2a-iii retrace
+    def _ladder_update_trails(self) -> None:
+        """Each fleet's last trail_length + 1 cells (the current one last), from
+        the cells it actually stood on. A fleet between two cells adds nothing
+        until it lands. The trail is the only way back a retrace may use."""
+        keep = self.ladder_trail_len + 1
+        for n in self.nodes:
+            if n.id in self.immobile_nodes:
+                continue
+            an = self.rules._anchors(n)
+            if len(an) != 1:
+                continue
+            t = self._trail.setdefault(n.id, [])
+            if not t or t[-1] != an[0]:
+                t.append(an[0])
+                if len(t) > keep:
+                    del t[0]
+
+    def _route_cells(self, node) -> Set[str]:
+        """Cell ids on a fleet's route (next route_horizon cells, all branches)."""
+        out: Set[str] = set()
+        for lvl in (self.conflicts.route(node) or []):
+            for c in lvl:
+                nid = self.grid_pos_dict.get(c)
+                if nid is not None:
+                    out.add(nid)
+        return out
+
+    def _retreat_cost(self, node, others: Set[str]) -> Tuple[float, Optional[str]]:
+        """
+        Hops this fleet must reverse along its own trail to reach the first cell
+        that is free and off every other member's route, and that cell. A cell
+        on the way back that another fleet now stands on blocks the retreat:
+        (inf, None). An empty or exhausted trail: (inf, None).
+        """
+        by_id = {n.id: n for n in self.nodes}
+        bad: Set[str] = set()
+        for o in others:
+            on = by_id.get(o)
+            if on is not None:
+                bad |= self._route_cells(on)
+                bad |= set(self.rules._anchors(on))
+        occupied: Set[str] = set()
+        for n in self.nodes:
+            if n.id != node.id:
+                occupied |= set(self.rules._anchors(n))
+        here = set(self.rules._anchors(node))
+        hops = 0
+        for cell in reversed(self._trail.get(node.id, [])):
+            if cell in here:
+                continue
+            hops += 1
+            if cell in occupied:
+                return float("inf"), None
+            if cell not in bad:
+                return float(hops), cell
+        return float("inf"), None
+
+    def _ladder_plan_retreats(self, cycles) -> None:
+        """For every cycle seen at more than grace_checks consecutive checks and
+        not already handled: order its cheapest member back along its trail.
+        Ties: the member further from its goal (priority key) backs out."""
+        st = self.ladder_retrace_stats
+        by_id = {n.id: n for n in self.nodes}
+        corridor = set(getattr(self.rules, "orders", {}) or {})
+        busy = set(self._retrace) | corridor
+        for c in sorted(cycles, key=lambda s: sorted(s)):
+            seen = self._shadow_cycles.get(c, 0)
+            if seen <= self.ladder_grace_checks:
+                continue                       # grace: the policies get a chance first
+            first_time = seen == self.ladder_grace_checks + 1
+            if c & busy:
+                if first_time and c & corridor:
+                    st["skipped_corridor"] += 1
+                continue
+            best = None
+            for f in sorted(c):
+                node = by_id.get(f)
+                if node is None or f in self.immobile_nodes:
+                    continue
+                r, cell = self._retreat_cost(node, set(c) - {f})
+                if cell is None:
+                    continue
+                k = self.rules.key(node)
+                cand = (r, -k[0], k[2], f, cell)
+                if best is None or cand < best:
+                    best = cand
+            if best is None:
+                if first_time:
+                    st["no_room"] += 1         # left to L3
+                continue
+            r, _, _, f, cell = best
+            self._retrace[f] = {"target": cell, "others": set(c) - {f},
+                                "others_h0": {x: self._hops_to_goal(by_id.get(x))
+                                              for x in set(c) - {f}},
+                                "since": self.step_count,
+                                "budget": self._retrace_budget(r), "arrived": False}
+            st["orders"] += 1
+            st["hops"] += int(r)
+            self._charge_rung("l1", set(c), self.rung_c1 * r)
+            if len(c) >= 3:
+                st["multi"] += 1
+            busy |= c
+
+    # ------------------------------------------------------------ 2c rung costs
+    def _charge_rung(self, rung: str, group: Set[str], cost: float) -> None:
+        """
+        One escalation, charged once. Every fleet in `group` pays `cost`; a fleet
+        whose route heads into the group's cells pays heading_in_weight x cost
+        (it was driving into the jam); nobody else pays. Path, not distance: a
+        fleet parked nearby or driving away is a bystander and pays nothing.
+        """
+        self.rung_stats[f"{rung}_events"] += 1
+        if cost == 0.0:
+            return
+        by_id = {n.id: n for n in self.nodes}
+        cells: Set[str] = set()
+        if self.rules is not None:
+            for f in group:
+                n = by_id.get(f)
+                if n is not None:
+                    cells |= set(self.rules._anchors(n))
+        for n in self.nodes:
+            if n.id in self.immobile_nodes:
+                continue
+            if n.id in group:
+                w = 1.0
+            elif (cells and getattr(self, "conflicts", None) is not None
+                  and (self._route_cells(n) & cells)):
+                w = self.rung_heading_in
+            else:
+                continue
+            self.rung_stats[f"{rung}_charged"] += w * cost
+            if self.rung_costs_on:
+                self._rung_pending[n.id] = self._rung_pending.get(n.id, 0.0) + w * cost
+
+    def _charge_corridor_orders(self) -> None:
+        """L2: every corridor back-out RULES started this step costs c1 per hop
+        to its pull-over cell plus c2, shared by the retreating fleet and the
+        fleets it made way for (its winners)."""
+        orders = getattr(self.rules, "orders", {}) or {}
+        by_id = {n.id: n for n in self.nodes}
+        for f in [x for x in orders if x not in self._seen_corridor_orders]:
+            od = orders[f]
+            node = by_id.get(f)
+            dmap = od.get("dmap") or {}
+            hops = min((dmap[a] for a in (self.rules._anchors(node) if node else [])
+                        if a in dmap), default=1)
+            self._charge_rung("l2", {f} | set(od.get("winners", ()) or ()),
+                              self.rung_c1 * max(1, hops) + self.rung_c2)
+        self._seen_corridor_orders = set(orders)
+
+    def _rung_vector(self) -> np.ndarray:
+        """This step's rung costs per fleet, in node order; clears them."""
+        v = np.array([self._rung_pending.get(n.id, 0.0) for n in self.nodes],
+                     dtype=np.float64)
+        self._rung_pending = {}
+        return v
+
+    @staticmethod
+    def _hops_to_goal(node) -> float:
+        h = node.get_graph_distance_to_goal() if node is not None else None
+        return float(h) if h is not None and np.isfinite(h) else float("inf")
+
+    def _retrace_budget(self, hops: float) -> int:
+        """
+        Steps a retrace order may last: back out `hops` and return, plus the time
+        for the other fleet to clear up to one route's length, plus 10 steps of
+        slack -- all in STEPS, at steps_per_hop steps per hop. At base_speed 0.5
+        a 1-hop retreat gets 2 x (2 + 8) + 10 = 30 steps.
+        """
+        return int(self.ladder_steps_per_hop * (2 * hops + self.ladder_route_horizon) + 10)
+
+    def _ladder_retrace_actions(self) -> Dict[str, int]:
+        """
+        This step's move for every fleet under a retrace order. Commitment: the
+        order ends when no other member is still head-on with this fleet or
+        racing it for a cell -- the conflict it was ordered for is over -- and
+        a convoy or queue that remains is left to braking and the queue rules.
+        Not merely when the wait-for cycle dissolves: backing off dissolves it
+        at once, and releasing then would send the fleet straight back in. Until then: one hop per step toward
+        the retreat cell, then hold. A budget in STEPS ends it: see
+        _retrace_budget().
+        """
+        st = self.ladder_retrace_stats
+        by_id = {n.id: n for n in self.nodes}
+        out: Dict[str, int] = {}
+        for f in self._retrace:
+            if f in self.loop.deadlocked_nodes:
+                st["collisions_while_retreating"] += 1
+        for f, o in list(self._retrace.items()):
+            node = by_id.get(f)
+            if node is None or f in self.immobile_nodes:
+                del self._retrace[f]
+                continue
+            if self.step_count - o["since"] > o["budget"]:
+                del self._retrace[f]
+                st["timeouts"] += 1
+                if not o["arrived"]:
+                    st["timeout_not_arrived"] += 1
+                h0 = o.get("others_h0", {})
+                if not any(self._hops_to_goal(by_id.get(x)) < h0.get(x, float("inf"))
+                           for x in o["others"]):
+                    st["timeout_others_stuck"] += 1
+                kinds = [self._pair_kind.get(frozenset((f, x))) for x in o["others"]]
+                for k in ("head_on", "contested", "blocked", "following"):
+                    if k in kinds:
+                        st[f"timeout_last_{k}"] += 1
+                        break
+                else:
+                    st["timeout_last_none"] += 1
+                continue
+            # RELEASE (retrace_run2): the order exists to settle ONE conflict --
+            # a member head-on with this fleet or racing it for a cell. Once no
+            # member is, it ends, and a convoy or a queue is left to braking and
+            # the queue rules, which are built for it. (The first version waited
+            # for the routes to share no cell at all; in a harmless convoy they
+            # keep sharing cells, so fleets stayed parked until the budget ran
+            # out and blocked others: "blocked" pairs tripled in that episode.)
+            live = [x for x in o["others"] if x in by_id and x not in self.immobile_nodes]
+            if not any(self._pair_kind.get(frozenset((f, x))) in ("head_on", "contested")
+                       for x in live):
+                del self._retrace[f]
+                st["released"] += 1
+                continue
+            an = self.rules._anchors(node)
+            if len(an) == 1 and an[0] == o["target"]:
+                o["arrived"] = True
+            if o["arrived"]:
+                out[f] = 0                     # hold at the retreat cell
+                continue
+            dmap = self.rules._bfs(self.G, o["target"], banned=set(), cutoff=12)
+            out[f] = self.rules._toward(node, dmap)
+        return out
+
+    def _in_corridor(self, fleets) -> bool:
+        """True if any of these fleets stands on a single-lane corridor cell --
+        where RULES' back-out already exists. Cycles OUTSIDE corridors are the
+        ground 2a-iii has to cover."""
+        if self.rules is None:
+            return False
+        if self._coord_to_id is None:
+            self._coord_to_id = {tuple(int(v) for v in c): nid
+                                 for nid, c in self.density._coords_by_id.items()}
+        sid_of = self.rules.idx.sid_of
+        by_id = {n.id: n for n in self.nodes}
+        for f in fleets:
+            node = by_id.get(f)
+            if node is None:
+                continue
+            for cell in self.conflicts.occupied(node):
+                nid = self._coord_to_id.get(cell)
+                if nid is not None and nid in sid_of:
+                    return True
+        return False
+
+    def _ladder_stuck(self) -> Set[str]:
+        """
+        The interim L3 trigger (step 2a-i): a warned pair that has lasted
+        ladder_stuck_steps steps with NEITHER fleet closer to its goal than when
+        the window began. Progress restarts the window; firing restarts it too,
+        so one stuck pair gets at most one L3 per window. The group-level rule
+        (T = 2 x largest retreat + 10) arrives with the wait-for graph (2a-ii).
+
+        Needs the graph proximity sweep (loop.warning_pairs); without it no pair
+        is ever tracked and only collisions (the forced path) reach recovery.
+        """
+        now = self.step_count
+        by_id = {n.id: n for n in self.nodes}
+
+        def hops(fid) -> float:
+            n = by_id.get(fid)
+            h = n.get_graph_distance_to_goal() if n is not None else None
+            return float(h) if h is not None and np.isfinite(h) else float("inf")
+
+        current = {frozenset((a, b)) for a, b, _d in (self.loop.warning_pairs or [])}
+        for k in list(self._ladder_pairs):
+            if k not in current:
+                del self._ladder_pairs[k]
+        stuck: Set[str] = set()
+        for k in current:
+            a, b = sorted(k)
+            if k not in self._ladder_pairs:
+                self._ladder_pairs[k] = (now, hops(a), hops(b))
+                continue
+            t0, ha, hb = self._ladder_pairs[k]
+            if now - t0 < self.ladder_stuck_steps:
+                continue
+            self._ladder_pairs[k] = (now, hops(a), hops(b))
+            if hops(a) < ha or hops(b) < hb:
+                continue                  # someone got closer: not stuck
+            stuck |= {a, b}
+        return stuck
+
     def _policy_recovery_step(self):
         """
         Let the POLICY decide whether to collapse, before any collision forces it.
@@ -2927,7 +3499,19 @@ class FLOWRRA:
         H = self.HEAD
 
         mode = 0
-        if self.gnn is not None and hasattr(self.gnn, "choose_recovery"):
+        if self.ladder_on:
+            # The learned head is OFF under the ladder (LADDER_DESIGN,
+            # "Decisions"): its values drifted with or without the teacher
+            # (pooling_run1, aws_run4). L3 is a fixed rule instead.
+            self._ladder_l3_set = None        # never carry a stale L3 set over
+            stuck = self._ladder_stuck()
+            if stuck:
+                mode = 1
+                self._ladder_l3_set = stuck
+                self.ladder_l3_fired += 1
+                self._charge_rung("l3", set(stuck), self.rung_c3)
+                self.ladder_l3_fleets += len(stuck)
+        elif self.gnn is not None and hasattr(self.gnn, "choose_recovery"):
             mode = int(self.gnn.choose_recovery())
         self.last_recovery_mode = mode
 
@@ -3081,6 +3665,25 @@ class FLOWRRA:
         """Error/handover counters for the training log."""
         return {
             "errors_injected": self.total_errors,
+            # Failure waves (errors.waves). Their failures are inside
+            # errors_injected too; these say how many arrived together.
+            "wave_fired": self.waves_fired,
+            "wave_failures": self.wave_failures,
+            "wave_rescuers_hit": self.wave_rescuers_hit,
+            # The conflict ladder (step 2a-i).
+            "ladder_l3_fired": self.ladder_l3_fired,
+            "ladder_l3_fleets": self.ladder_l3_fleets,
+            "ladder_rules_while_held": self.ladder_rules_while_held,
+            # 2a-ii shadow counts (ladder.shadow). Cycles still alive at the end
+            # that already outlasted the grace check count as needing a retreat.
+            **{f"ladder_shadow_{k}": v for k, v in self.ladder_shadow_stats.items()
+               if k != "cycles_needing_retreat"},
+            **{f"ladder_retrace_{k}": v for k, v in self.ladder_retrace_stats.items()},
+            "ladder_retrace_open": len(self._retrace),
+            **{f"ladder_rung_{k}": v for k, v in self.rung_stats.items()},
+            "ladder_shadow_cycles_needing_retreat": (
+                self.ladder_shadow_stats["cycles_needing_retreat"]
+                + sum(1 for n in self._shadow_cycles.values() if n >= 2)),
             "stops_confirmed": len(self.stopped_confirmed),
             "handovers_completed": self.total_handovers,
             "retired_fleets_recalled": self.total_recalls,
@@ -3424,6 +4027,7 @@ class FLOWRRA:
         self._stream_maintenance()
 
         self._maybe_inject_error()
+        self._maybe_inject_wave()
         self._confirm_stops_and_open_pickups()
         self._dispatch_rescuers()
 
@@ -3485,6 +4089,10 @@ class FLOWRRA:
 
         if self.path_warnings:
             self._verdicts_start = self._evaluate_conflicts()
+            if self.ladder_retrace:
+                self._ladder_update_trails()
+            if self.ladder_shadow or self.ladder_retrace:
+                self._ladder_shadow_step(self._verdicts_start)
             current_integrity = self.loop.check_integrity(
                 self.nodes, self.step_count, self.immobile_nodes, proximity=self.proximity,
                 warn_pairs=self._warn_set(self._verdicts_start),
@@ -3874,6 +4482,17 @@ class FLOWRRA:
         # its place in the list.
         self._rule_actions = (self.rules.plan(actions, node_ids)
                               if self.rules is not None and actions is not None else {})
+        if self.rules is not None and actions is not None:
+            self._charge_corridor_orders()
+        if self.ladder_retrace and actions is not None:
+            # L1 retrace orders outrank RULES' L0 waits. They ride in the same
+            # dict, so they execute last, reach held fleets, and are recorded as
+            # RULES decisions -- teaching labels for the Learner head (step 3).
+            self._rule_actions.update(self._ladder_retrace_actions())
+        # TEACHER SIGNAL: 1.0 for each fleet whose EXECUTED action the
+        # orchestrator chose this step (see teacher_sources). Indexed like
+        # `actions`, so it lines up with the transition pushed below.
+        _teacher = np.zeros(len(self.nodes), dtype=np.float32)
         if self.directional_braking:
             self._brake_snap = {
                 n.id: (np.asarray(n.direction, dtype=np.float32).copy(),
@@ -4185,9 +4804,21 @@ class FLOWRRA:
             # Execute physical move
             # CONFLICT RULES (components 3, 4): applied last, so they are what
             # executes -- except that a fleet held by recovery stays held.
-            if (node.id in self._rule_actions
-                    and not self.step_count < self._yield_until.get(node.id, -1)):
+            # Same condition as before, split only so the teacher signal can
+            # record which of the two decided the action.
+            _held = self.step_count < self._yield_until.get(node.id, -1)
+            # ONE AUTHORITY (conflict.ladder): a held fleet still takes its RULES
+            # order -- a retreat, a pull-over, a wait. In teacher_run1's storms,
+            # holds overrode the policy 5-12x more often than RULES and kept
+            # RULES from ordering the very pairs that looped. Off: holds win.
+            if node.id in self._rule_actions and (not _held or self.ladder_on):
                 action_id = self._rule_actions[node.id]
+                if _held:
+                    self.ladder_rules_while_held += 1
+                if "rules" in self.teacher_sources:
+                    _teacher[i] = 1.0
+            elif _held and "holds" in self.teacher_sources:
+                _teacher[i] = 1.0
             _pos_before = node.current_pos.copy()
             # RECORD WHAT WAS EXECUTED, not what the network picked. action_id is a
             # local that four paths overwrite above (livelock escape, Tier-3 yield,
@@ -4937,6 +5568,9 @@ class FLOWRRA:
                                              include_potential=False,
                                              include_recovery=self.safety_includes_recovery,
                                              warn_override=(_sh_approach if self.approach_warning else None))
+                if self.rung_costs_on and self._rung_pending:
+                    # 2c: Safety pays by rung -- raw units, before scaling.
+                    _pr["safety"] = _pr["safety"] + self._rung_vector()
                 # Fourth column, for the RECOVERY HEAD only: the legacy integrity head
                 # (holon coherence + every recovery event at full size, identical on
                 # every fleet), unscaled -- exactly the signal it trained on before.
@@ -4982,6 +5616,11 @@ class FLOWRRA:
                     [n.id not in self.immobile_nodes and n.id not in _leaving
                      for n in self.nodes],
                     dtype=np.float32),
+                # TEACHER SIGNAL. Validity in the state the fleet ACTED from --
+                # the mask built before the action loop, the one the network
+                # chose under -- and which fleets the orchestrator decided.
+                valid_mask=valid_action_masks_array,
+                teacher_mask=_teacher,
             )
         
         # ---- REWARD COMPOSITION (measurement only) -------------------------

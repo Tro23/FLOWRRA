@@ -2,7 +2,7 @@
 
 Rohit Tamidapati · 5 October 2026 · updated 6 October 2026
 
-> **Status, 6 October 2026.** Steps 1, 2a, 2b and 2c are built and tested. Run 2 (the ladder plus rung costs, Learner off, 150 episodes) is under way. Step 3 is built and tested: 3a (the Learner head, β = 0.3 from a four-value sweep), 3b (ladder-context signals) and 3c (pair relations on the attention connections). An ablation chose run 3's configuration: **3a + 3b**, with 3c and the next-state edge fix deferred to an experiment of their own. **Runs 2 and 3 and the shock benchmark are complete; their scores are in the build log.** The verdict splits by map: on the large map, policy + RULES matches RULES alone; on the small map it falls well short. The Learner's nudge is being redesigned to be bounded. The build log at the end records each step and what its runs showed.
+> **Status, 7 October 2026.** Steps 1–3 are built and tested. Runs 2 and 3 and the shock benchmark are complete, with their scores in the build log: on the large map, policy + RULES matches RULES alone; on the small map it falls well short. Run 3 showed the Learner's nudge was too loud, so it was made **bounded** and recalibrated (β = 0.1), and next-state edge features earned their place in a paired test. **Run 4 (learner_run2) is under way**, with its predictions written below before its results. The build log at the end records each step and what its runs showed.
 
 ## Why
 
@@ -321,7 +321,36 @@ Each step was built behind its own switch, tested, and run against the step befo
 
     **Why the small map fails, a hypothesis, not yet tested.** There the policy drives 2–3 times RULES' distance at every fleet count (745 against 370 cells at 25 fleets) and takes about twice the hops to reach a stranded order (51 against 23). Rescuer losses do not track collisions across instances (correlation −0.43), so the likelier link is exposure: a rescuer on the road twice as long is more often caught by the next failure wave. The detours predate the ladder (v1 took 84 hops); the ladder checkpoint shortened them but not enough. A possible contributor: L2 corridor back-outs carried 75% of the rung charges in training, which could teach fleets to avoid the small map's narrow aisles. Separating the two is the next diagnostic.
 
-**Next.** Run 2 judges steps 1–2c over 150 episodes against the predictions above. Step 3 (the Learner head, the ladder-context signals, pair relations on the attention connections) is built in parallel, then run 3. Later: corridor back-outs chosen by retreat cost, and a calibration test that hops stay hops across every unit the system uses.
+15. **Calibrating the bounded nudge, and next-state edges** (5-episode paired dry runs, small map, 60 fleets, each cut at 300 steps; all with the ladder, context and rung costs on, pair relations off).
+
+    | 5 episodes | no Learner | unbounded, β 0.3 | bounded, β 0.3 | bounded, β 0.1 | β 0.1 + next-state edges |
+    | --- | --- | --- | --- | --- | --- |
+    | completion, average | 90.3% | 92.7% | 90.0% | 94.0% | 94.3% |
+    | collisions | 51 | 45 | 41 | 49 | 38 |
+    | L3 fires | 10 | 14 | 5 | 5 | 4 |
+    | retreats the ladder had to order | 80 | 34 | 52 | 67 | 44 |
+    | self back-off rate | 32% | 12% | 28% | 27% | 29% |
+    | conflicted choices the Learner changed, by episode 5 | – | 63% | 31% | 14% | 10% |
+    | Learner agrees with RULES | – | 83% | 80% | 80% | 85% |
+
+    - *The bound works.* At β 0.3 the bounded nudge changed a quarter as many choices as the unbounded one, L3 fell to the lowest seen (5), and the back-off reflex returned to near the no-Learner level. But its share still climbed (3% → 31%) and completion slid every episode (95% → 87%), because the heads' own best-versus-second-best gap was shrinking (0.133 → 0.068) while the Learner grew confident.
+    - *β from the heads' gap.* The gap's median was about 0.1, so **β = 0.1**. There the Learner's share held at 2–14%, completion stayed at 92–97%, and the heads' gap stopped shrinking (it settled near 0.1). A hint, from one pair of runs, that a loud nudge also flattens the heads' own preferences.
+    - *Next-state edges, tested alone.* At β 0.1, turning them on gave the fewest collisions (38 against 49), the fewest L3 fires (4 against 5), fewer ordered retreats (44 against 67) and the highest agreement with RULES (85%). Per episode the ranges overlap, so no single number is decisive, but every measure points the same way. This reverses the earlier dry run where they hurt; that run also had the pair relations on, which points to the pair relations as the cause there.
+
+    **Run 4, learner_run2: run 3 with the bounded nudge (β = 0.1) and next-state edge features on** (150 episodes, same instances; config header records every switch). It changes two things at once against run 3, and the evidence for each is the dry pairs above. **Predictions, written before the run:**
+
+    | Prediction | Pass if | run 2 | run 3 |
+    | --- | --- | --- | --- |
+    | The Learner stays a voice | conflicted choices changed stay below 20% in every 25-episode block | – | 57% → 89% |
+    | No return of stalemates | L3 fires ≤ 0.4 per episode in every 25-episode block (run 2's worst block: 0.36) | 0.15 overall | 0.66 overall (worst block 1.24) |
+    | The bleeding holds | RULES overrides fall across training, below run 2's | 7,547 | 3,338 |
+    | Delivery holds | ≥ 97% in every 20-episode block | 98.05% lowest | 98.03% lowest |
+    | Values stay honest | qval_safety and qval_recovery within ±1 | −0.029 to −0.003 | −0.057 to −0.004 |
+    | The verdict | re-run shock benchmark: policy + RULES ≥ RULES alone on the large map, and closer than 74.9% vs 93.3% on the small map | | |
+
+    No prediction is made that run 4 closes the small-map gap. The Learner speaks only inside conflicts, while the small-map shortfall looks like routing in free traffic (detours of 2–3 times RULES' distance), which the Learner never touches. That gets its own diagnostic, run alongside.
+
+**Next.** Run 4 is judged against the predictions above, paired with runs 2 and 3, using the replicate's noise band. In parallel: a small-map diagnostic separating corridor avoidance from longer exposure. Later: L2 pull-over outside corridors (the "no room" case), corridor back-outs chosen by retreat cost, and a calibration test that hops stay hops across every unit the system uses. Then stream mode.
 
 ## Code map
 

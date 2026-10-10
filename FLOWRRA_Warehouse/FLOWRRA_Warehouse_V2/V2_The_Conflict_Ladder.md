@@ -2,7 +2,7 @@
 
 Rohit Tamidapati · 5 October 2026 · updated 6 October 2026
 
-> **Status, 7 October 2026.** Steps 1–3 are built and tested. Runs 2 and 3 and the shock benchmark are complete, with their scores in the build log: on the large map, policy + RULES matches RULES alone; on the small map it falls well short. Run 3 showed the Learner's nudge was too loud, so it was made **bounded** and recalibrated (β = 0.1), and next-state edge features earned their place in a paired test. **Run 4 (learner_run2) is under way**, with its predictions written below before its results. The build log at the end records each step and what its runs showed.
+> **Status, 11 October 2026.** Steps 1–3 are built and tested, and runs 2–4 are complete. **The v2 champion is run 2's checkpoint: the ladder and rung costs, with no Learner.** In a seeded re-run of the shock benchmark it beat run 4 (the bounded Learner) on all five pre-registered small-map measures. On the large map it matches RULES alone and beats RHCR-PIBT + naive by 14 points of recovered orders, losing 60% fewer rescuers. The Learner stays in the code, switched off. The benchmark is now seeded per instance, after the same checkpoint scored 65.5% and 70.6% in two unseeded runs. Next: stream mode, then obstacles. The build log at the end records each step and what its runs showed.
 
 ## Why
 
@@ -183,7 +183,7 @@ Three steps, each behind its own switch and each off by default, so a run with e
 | 2a (done) | Ladder: one authority (no hold lock-out), wait-for graph, retreat by cheapest side, grace check, commitment, retrace one hop at a time at driving speed | `conflict.ladder` (`shadow`, `retrace`) | `test_ladder_authority.py`, `test_ladder_shadow.py`, `test_ladder_retrace.py` |
 | 2b | Recovery head frozen under the ladder (done); margin δ and its own encoder only if it is unfrozen later | `conflict.ladder` (freezes it) | `test_recovery_frozen.py` |
 | 2c (done) | Safety pays by rung, weighted by path | `training.rung_costs` | `test_rung_costs.py` |
-| 3 | Learner head, silent outside conflict groups, and the ladder-context signal in every fleet's observation, plus pair relations on the attention connections | `training.learner` | `test_learner_head.py` |
+| 3 (done; off in the v2 champion, build log 21) | Learner head, silent outside conflict groups, and the ladder-context signal in every fleet's observation, plus pair relations on the attention connections | `training.learner` | `test_learner_head.py` |
 
 The run plan:
 
@@ -352,7 +352,97 @@ Each step was built behind its own switch, tested, and run against the step befo
 
     No prediction is made that run 4 closes the small-map gap. The Learner speaks only inside conflicts, while the small-map shortfall looks like routing in free traffic (detours of 2–3 times RULES' distance), which the Learner never touches. That gets its own diagnostic, run alongside.
 
-**Next.** Run 4 is judged against the predictions above, paired with runs 2 and 3, using the replicate's noise band. In parallel: a small-map diagnostic separating corridor avoidance from longer exposure. Later: L2 pull-over outside corridors (the "no room" case), corridor back-outs chosen by retreat cost, and a calibration test that hops stay hops across every unit the system uses. Then stream mode.
+16. **Run 4, learner_run2: scored** (150 episodes, same instances as runs 2 and 3).
+
+    | Prediction | Pass if | run 2 | run 3 | run 4 | |
+    | --- | --- | --- | --- | --- | --- |
+    | The Learner stays a voice | changes < 20% of conflicted choices in every 25-episode block | – | 57% → 89% | 12, 25, 28, 30, 34, 28% | ❌ |
+    | No return of stalemates | L3 ≤ 0.4 per episode in every 25-episode block | 0.15 (worst block 0.36) | 0.66 (worst 1.24) | 0.16, 0.24, 0.36, 0.28, **0.96**, 0.04 | ❌ narrowly: 5 of 6 blocks |
+    | The bleeding holds | RULES overrides fall, below run 2's | 7,547 | 3,338 | 8,012 | ❌ |
+    | Delivery holds | ≥ 97% in every 20-episode block | 98.05% lowest | 98.03% lowest | 98.11% lowest | ✅ |
+    | Values stay honest | within ±1 | −0.029 to −0.003 | −0.057 to −0.004 | qval_safety −0.050 to −0.012, qval_recovery 0.07 to 0.25 | ✅ |
+    | The verdict | benchmark: ≥ RULES on the large map, closer than 74.9% vs 93.3% on the small | | | large 82.6% vs 86.5% (p = 0.29), a match; small 71.2% vs 93.3%, further not closer (seeded, entry 20) | ❌ |
+
+    Over the whole run, run 4 sat between runs 2 and 3 on every measure: completion 98.6%, collisions 1.19 per episode (run 2: 1.05, run 3: 1.32), L3 0.34 (0.15, 0.66), episodes with a pair repeating more than 3 times 7 (2, 11). Its last 25 episodes were the best of any run: L3 0.04 and collisions 0.36 per episode, RULES overrides 23.5 per episode against run 2's 40.0. *Why the Learner's share kept rising:* the heads' own best-versus-second-best gap shrank to 0.042 by the end, so a fixed β of 0.1 grew to 2.4 times the typical near-tie, and the bounded nudge decided more choices as training went on.
+
+17. **Tying β to the heads' gap** (built: `learner.beta_mode = "gap"`, β = `beta_scale` × the running median of the heads' gap over the last 5,000 conflicted choices, with the fixed β until 200 are seen; `test_learner_head.py`). Paired against fixed β 0.1 (10 episodes, 800 steps, small map, 60 fleets, same seed). The rule was fixed before the run: adopted only if it wins at least 3 of 5 measures.
+
+    | 10 episodes | fixed β 0.1 | gap-tied β |
+    | --- | --- | --- |
+    | completion | 95.8% | **96.3%** |
+    | collisions | **64** | 82 |
+    | L3 fires | **13** | 14 |
+    | retreats the ladder had to order | **130** | 205 |
+    | longest repeat of one pair | 7 | **5** |
+
+    **Fixed won, 3 to 2; not adopted.** The gap-tied β did what it was built to do: the Learner's share held at 5–11% per episode (fixed: up to 28%) as the effective β eased from 0.131 to about 0.09. But fewer Learner changes came with more collisions and 58% more ordered retreats. The switch stays in the code, default `"fixed"`.
+
+18. **β around 0.1, with a narrower exploration schedule** (dry runs without `--cold-start`, so most of each run exploits; run 4's settings, 10 episodes, same seed; scored with `five_measure_rule.py`, which applies the 5-measure rule to any two CSVs).
+
+    | 10 episodes | β 0.08 | β 0.1 | β 0.117 (reference) | β 0.15 |
+    | --- | --- | --- | --- | --- |
+    | completion | 96.3% | 96.8% | 96.2% | 96.2% |
+    | collisions | 74 | 72 | **51** | 85 |
+    | L3 fires | 18 | 19 | **13** | 19 |
+    | retreats the ladder had to order | 152 | 142 | **99** | 115 |
+    | longest repeat of one pair | 11 | 4 | 5 | 8 |
+    | Learner's share of conflicted choices | 5.9% | 9.8% | 11.3% | 15.6% (up to 40%) |
+    | score against β 0.117 | 1–4 | 2–3 | – | 1–4 |
+
+    β 0.117 led every other value on collisions, L3 fires and retreats. Not taken to a long run: with several candidates, a 3–2 win can come from luck, and the benchmark (entries 19–20) was answering a different question by then.
+
+19. **The benchmark was noisy; it is now seeded.** Run 4's checkpoint at β 0.1, benchmarked twice with identical settings, recovered 65.5% and then 70.6% of stranded orders on the small map. The cause: the evaluation ε (0.015) takes its random moves from Python's `random`, which the benchmark never seeded, so each run made different random moves, and on the crowded small map a few different moves change an episode. **Fix** (`benchmark_all.py`): before every run, `random`, numpy and torch are seeded from (map, seed, fleet count), the same for every arm, so arms face the same draws until their choices differ. Verified: wherever the Learner was never consulted, the three β arms below produced identical rows. Also added: `--betas` (several Learner strengths on one checkpoint, no training) and `--no-seed` (the old behaviour). *What it means for earlier results:* RULES (ε = 0) and RHCR make no random moves, so their numbers stand; a single unseeded FLOWRRA result carries about ±5 points of small-map recovery. Run 2's 74.9% re-ran at 73.9% seeded. The seeded runs used **780 steps** (the config's value at launch) against 800 for entry 14's RULES and RHCR rows, which if anything favours those two.
+
+20. **Voice or network?** Run 4's checkpoint did worse than run 2's on the small map. Was that the Learner's nudge at choice time, or what the network had learned? Test: run 4's checkpoint, seeded, with β set to 0.1, 0 and 0.117 at test time, no training. The rule was fixed before the run: if β 0 recovers at least 70% of stranded orders on the small map (halfway between run 4's 65.5% and run 2's 74.9%), the voice was the cause; below 70%, the network.
+
+    | Small map, 30 instances (p against β 0.1) | β 0.1 (trained) | β 0 (muted) | β 0.117 |
+    | --- | --- | --- | --- |
+    | stranded orders recovered | **71.2%** | 64.2% | 64.1% |
+    | orders delivered | **92.3%** | 90.6% | 91.3% |
+    | collisions per episode | **2.17** | 3.20 (0.09) | 3.40 (0.02) |
+    | rescuers lost per episode | **1.47** | 1.67 | 1.97 (0.02) |
+    | safety-tier actions per episode | **3.9** | 7.4 | 7.6 (0.03) |
+    | longest repeat of one pair | **0.47** | 1.07 (0.08) | 1.13 (0.03) |
+    | choices the Learner changed, per instance | 134 | 0 | 238 |
+
+    **β 0 recovered 64.2%: the network.** Run 4's network came to rely on the nudge it trained with; muting it, or raising it by 17%, both made it worse. On the large map the three arms were within a point (82.6%, 83.1%, 82.6%) and identical in 26 of 30 instances, because the Learner was consulted about 20 times per instance and changed about 3 choices, against about 600 and 130 on the small map: its influence scales with how dense the conflicts are. *The lesson:* a component that is on during training cannot be switched off at deployment for free.
+
+21. **Run 2, seeded: the v2 champion.** The rule was fixed before the run: run 2 against run 4 at β 0.1, paired, on the small map (where they can differ), five measures; 3 or more wins confirm run 2. The large map is reported, not scored.
+
+    | Small map, 30 paired instances | run 2 (ladder only) | run 4 (β 0.1) | p | |
+    | --- | --- | --- | --- | --- |
+    | stranded orders recovered | **73.9%** | 71.2% | 0.49 | run 2 |
+    | orders delivered | **94.7%** | 92.3% | 0.009 | run 2 |
+    | collisions per episode | **1.30** | 2.17 | 0.006 | run 2 |
+    | rescuers lost per episode | **1.37** | 1.47 | 0.69 | run 2 |
+    | longest repeat of one pair | **0.27** | 0.47 | 0.26 | run 2 |
+    | *distance travelled (cells)* | *1,124* | *1,445* | *< 0.001* | |
+    | *safety-tier actions per episode* | *2.3* | *3.9* | *0.02* | |
+
+    **Run 2 wins 5 to 0;** completion and collisions are significant on their own. On the large map it also leads on 4 of 5 (recovery 85.7% against 82.6%, completion 97.2% against 96.4%, rescuers lost 1.00 against 1.10), with collisions tied.
+
+    **The champion against the baselines** (run 2 seeded at 780 steps; RULES and RHCR from entry 14 at 800 steps; paired by instance):
+
+    | small / large | Run 2 (ladder) | RULES alone | RHCR-PIBT + naive |
+    | --- | --- | --- | --- |
+    | Stranded orders recovered | 73.9% / **85.7%** | 93.3% / 86.5% | 69.6% / 71.9% |
+    | Rescuers lost per episode | 1.37 / **1.00** | 0.20 / 1.00 | 2.73 / 2.53 |
+    | Orders delivered | 94.7% / **97.2%** | 97.3% / 97.2% | 92.1% / 92.8% |
+    | Collisions per episode | 1.30 / 0.07 | 0.10 / 0.00 | 0.07 / 0.00 |
+    | Distance travelled (cells) | 1,124 / 1,519 | 434 / 1,266 | 421 / 1,326 |
+    | Replan downtime (s per episode) | 0 / 0 | 0 / 0 | 2.1 / 46.0 |
+
+    On the large map, run 2 and RULES are indistinguishable (recovery p = 0.91, rescuers lost p = 0.97, completion p = 0.92), and both clearly beat RHCR (recovery p = 0.001, rescuers lost and completion p < 0.001). On the small map, run 2 loses half as many rescuers as RHCR (p < 0.001) and delivers more (p = 0.009), with recovery level (p = 0.09); RULES alone stays well ahead of both.
+
+    **Decision.** Run 2's configuration is the v2 champion: the ladder (shadow, retrace) and rung costs, with the Learner, ladder context, pair relations and next-state edges off. The Learner and the other switches stay in the code. If the Learner returns, it is on from the start of training, or runs in shadow (logging what it would choose, with no voice) during a warm phase; it is never switched on or off around a trained network. The small-map gap to RULES (73.9% against 93.3%) remains the open problem, and entry 14's hypothesis (exposure from detours: 2.6 times RULES' distance) still stands untested.
+
+**Next.**
+
+1. **Stream mode on the champion.** A short run (50–60 episodes) with the ladder and stream on. Two possible questions, chosen before the run: cold, *can FLOWRRA learn in stream mode?*; warm from run 2's checkpoint, *does a good fleet stay good while it keeps learning on the job?* Predictions will compare early episodes with late ones, because stream mode never resets the density field or the fleet.
+2. **Obstacles.**
+3. **Two realistic maps** from the 3D MAPF warehouse generator: an Amazon-style single-floor layout that warehouse teams recognise, and a three-level layout to show the complexity.
+
+Later: L2 pull-over outside corridors (the "no room" case); anchoring for continual learning (L2-SP or EWC) with a champion/challenger gate, so nothing learned live reaches the floor untested; a sensitivity test of the density field's decay rate; the small-map diagnostic; corridor back-outs chosen by retreat cost; and a calibration test that hops stay hops.
 
 ## Code map
 

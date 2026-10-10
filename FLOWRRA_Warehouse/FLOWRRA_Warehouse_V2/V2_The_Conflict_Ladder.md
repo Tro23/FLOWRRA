@@ -2,7 +2,7 @@
 
 Rohit Tamidapati · 5 October 2026 · updated 6 October 2026
 
-> **Status, 11 October 2026.** Steps 1–3 are built and tested, and runs 2–4 are complete. **The v2 champion is run 2's checkpoint: the ladder and rung costs, with no Learner.** In a seeded re-run of the shock benchmark it beat run 4 (the bounded Learner) on all five pre-registered small-map measures. On the large map it matches RULES alone and beats RHCR-PIBT + naive by 14 points of recovered orders, losing 60% fewer rescuers. The Learner stays in the code, switched off. The benchmark is now seeded per instance, after the same checkpoint scored 65.5% and 70.6% in two unseeded runs. Next: stream mode, then obstacles. The build log at the end records each step and what its runs showed.
+> **Status, 11 October 2026.** Steps 1–3 are built and tested, and runs 2–4 are complete. **The v2 champion is run 2's checkpoint: the ladder and rung costs, with no Learner.** In a seeded re-run of the shock benchmark it beat run 4 (the bounded Learner) on all five pre-registered small-map measures. On the large map it matches RULES alone and beats RHCR-PIBT + naive by 14 points of recovered orders, losing 60% fewer rescuers. The Learner stays in the code, switched off. The benchmark is now seeded per instance, after the same checkpoint scored 65.5% and 70.6% in two unseeded runs. People now share the floor (debris that a human comes to clear), and **run 5 (warm_stream1)** puts the champion back to work with the order stream and people on, still learning; its predictions are written below before its results. The build log at the end records each step and what its runs showed.
 
 ## Why
 
@@ -436,11 +436,29 @@ Each step was built behind its own switch, tested, and run against the step befo
 
     **Decision.** Run 2's configuration is the v2 champion: the ladder (shadow, retrace) and rung costs, with the Learner, ladder context, pair relations and next-state edges off. The Learner and the other switches stay in the code. If the Learner returns, it is on from the start of training, or runs in shadow (logging what it would choose, with no voice) during a warm phase; it is never switched on or off around a trained network. The small-map gap to RULES (73.9% against 93.3%) remains the open problem, and entry 14's hypothesis (exposure from detours: 2.6 times RULES' distance) still stands untested.
 
+22. **People on the floor, and the order stream** (built and tested before run 5).
+    - *Obstacles, "cleanup" mode* (`obstacles_warehouse.py`). Debris appears during the episode (about once every 200 steps, at most 2 at a time, never on a fleet, a goal, a dock or a dock's neighbours). Ten steps later a human enters at the edge of that floor, walks a shortest path to it, clears it in 5 steps and walks out to another edge cell. A human never steps onto a fleet: blocked, they wait, look for a way round after 2 blocked moves, and with no way round step aside after 6. Nothing is permanent: debris nobody can reach is cleared after 1,000 steps, and a human boxed in for 2,000 steps leaves. Humans have absolute priority; the ladder (fleet to fleet) never asks one to move. Obstacles cost no state dimensions: the fleets perceive them through the six `ray_hit_unknown` inputs reserved for this, through the density field's repulsion, and through the hard veto on moves. The old "wander" mode is kept and behaves exactly as before.
+    - *Two bugs the integration test found, both older than this work, both invisible until obstacles were switched on:* (1) **the veto checked the wrong cell.** It rounded the half-step position, and Python rounds halves to even: from x = 2, half a step toward 3 is 2.5, and `round(2.5)` is 2, the fleet's own cell. From every even coordinate moving up, or odd one moving down, a fleet could drive halfway into a human. The veto now checks the next whole cell along the move (`test_obstacle_veto.py`). (2) **The livelock escape ignored the veto.** A fleet stalled for a while is handed to the goal gradient for a burst of steps; a fleet waiting behind a human counts as stalled, and the gradient points straight through them. Moves into an obstacle are now dropped from that choice; with none on the floor it picks exactly as before (checked on about 200,000 random gradients).
+    - *Also:* a human on a dock now delays a fleet's re-entry there; the obstacle stream is seeded per episode (it used an empty config seed, so placements differed on every rerun); a dead-end test caught the floor detection treating rows as floors on single-floor maps. With all of it in place: no fleet ever on an obstacle, no human ever on a fleet, identical obstacle histories on identical seeds (`test_obstacles_integration.py`).
+    - *Left out on purpose:* a retreat checks its way back for fleets, not people. A human on a retreating fleet's trail delays the retreat until they walk on; the retreat-timeout counter will show whether that ever matters.
+
+    **Run 5, warm_stream1: the champion keeps learning on the job, with the order stream and people clearing debris** (50 episodes, warm from run 2's checkpoint, both maps, 25/40/60 fleets, 800 steps; every switch the network trained with is run 2's; new: stream, obstacles, gentle exploration peaking at 0.05; the order window fixed at 3 floors so the task does not change during the run). First a 3-episode shakedown, because stream mode and the ladder have never run together. **Predictions, written before the run** (first 25 episodes against the last 25):
+
+    | Prediction | Pass if |
+    | --- | --- |
+    | Safety holds while it learns | fleet-to-fleet collisions per episode, last 25 no worse than first 25 |
+    | The ladder still resolves | L3 ≤ 0.4 per episode in both 25-episode blocks (run 2's worst block: 0.36) |
+    | Throughput holds | stream efficiency (deliveries ÷ the conflict-free ideal), last 25 at least 95% of the first 25 |
+    | Values stay honest | qval_safety within ±1 throughout |
+    | People always finish the job | in every episode, no debris expires and no human times out: the fleets always let them through |
+    | Retreats are not blocked by people | retreat timeouts ≤ 1% of retreat orders |
+
+    Reported, not predicted: completion (delivered ÷ issued), near misses (a fleet next to a human), human waiting steps, reroutes and give-ways, collisions per 100 deliveries. Fleet-to-human contact is zero by construction (the veto), and checked by the integration test, so it is not a prediction. *Why completion is not the throughput measure in stream mode:* orders keep arriving until the episode ends, so the last ones are still being carried when it stops. In Cold_Run25 (stream on, no ladder, one map, 60 fleets) completion was 79.6% and about 20% of issued orders were in flight at the end, so every undelivered order was still being carried: 79.6% was the ceiling, not a failure. Its efficiency, 44.8% of the conflict-free ideal, is the number that measures throughput. (Different maps and fleet counts, so not a baseline for run 5.)
+
 **Next.**
 
-1. **Stream mode on the champion.** A short run (50–60 episodes) with the ladder and stream on. Two possible questions, chosen before the run: cold, *can FLOWRRA learn in stream mode?*; warm from run 2's checkpoint, *does a good fleet stay good while it keeps learning on the job?* Predictions will compare early episodes with late ones, because stream mode never resets the density field or the fleet.
-2. **Obstacles.**
-3. **Two realistic maps** from the 3D MAPF warehouse generator: an Amazon-style single-floor layout that warehouse teams recognise, and a three-level layout to show the complexity.
+1. **Run 5, warm_stream1,** scored against the predictions above.
+2. **Two realistic maps** from the 3D MAPF warehouse generator: an Amazon-style single-floor layout that warehouse teams recognise, and a three-level layout to show the complexity.
 
 Later: L2 pull-over outside corridors (the "no room" case); anchoring for continual learning (L2-SP or EWC) with a champion/challenger gate, so nothing learned live reaches the floor untested; a sensitivity test of the density field's decay rate; the small-map diagnostic; corridor back-outs chosen by retreat cost; and a calibration test that hops stay hops.
 

@@ -695,10 +695,94 @@ Each step was built behind its own switch, tested, and run against the step befo
     - **Even so, efficient driving held up.** RULES and route by default kept about 70% (72.6% and 69.6%, a tie, p 0.36), against 57.8% for the champion and 51.1% for warm. One small-map shift (seed 2, 9 to 13 robots failed) shows it: RULES 92.5%, route 90%, the champion 30%, warm 32.5%. When the fleet is decimated, how well the survivors drive is what is left.
     - **This also re-reads entry 27.** Ten failures in a 13-minute shift on 25 to 60 robots is a stress test (17 to 40% of the fleet), far above any real rate. **For the redesign:** express failures as a rate per robot-hour, so the stress scales with fleet size and can be set to realistic values as well as stress values. This goes with reissue, technician retrieval and the battery protocol.
 
+29. **Design for approval (12 October): the intent guard, bubbles by kind, hops everywhere.** No code yet. Written after reading the current code (Rohit's `flowrra_code.zip`, identical to the working copies except an older `trace_fleet.py`).
+
+    **What already exists.**
+    - **Path awareness** (`conflict.path_warnings`, `conflict_warehouse.py`). Every pair within 3 hops is classified by its next 8 route cells: head-on, blocked, following, contested, sequential or none. It warns by kind: within 1 hop always; head-on, contested and blocked always; following only closer than `follow_gap` (1.5); sequential and none never. Each route is "what a fleet would broadcast to its neighbours". It is local intent-sharing, and nothing plans for anyone.
+    - **Directional braking.** A steady convoy at 1.5 hops or more does not brake.
+    - **Rays.** Each fleet casts six rays along the aisle axes, up to 25 cells, seeing peers and obstacles. Corridor entry already uses them ("as its ray would").
+
+    **The hole.** Braking reads distance only, and routes are predictions; the config itself keeps the 1-hop floor "because routes are predictions". In the step a robot actually takes, a ladder retreat reverses it, the network steps away (a third of its moves right after a move were reversals, entry 25), and holds and tabu swaps change moves. A pair labelled "following" can therefore be head-on this very step. That is why a 1.25-hop bubble is unsafe under distance-only braking.
+
+    **The proposal.**
+    1. **Intent for this step is the actual move.** All moves are already final before anyone moves (`step.simultaneous` is on), so the step is split into three passes: decide every fleet's move, brake, then move.
+    2. **Bubbles by kind, from path awareness.** The comfort braking ramp ends at a radius that depends on the pair: about 1.75 hops for meeting kinds (head-on, contested, blocked), about 1.25 for following, and the 1-hop floor for sequential and none. Unknown intent (no route, for example a dead radio) is treated as head-on. The rays still see such a robot.
+    3. **The intent guard: the last, exact check.** For every pair within 3 hops, it takes both robots' actual moves at their braked speeds and computes where each would land, using `reach_position`. If the gap after the step would fall below the minimum gap of **1 hop** (Rohit's "one hop"; a collision stays at 0.5), both are slowed just enough to stop at the minimum, down to standing still if needed. It repeats until no pair is short, since slowing one robot can change another pair. It is local: each robot needs only its neighbours' broadcast next moves, the way VDA 5050 robots publish their planned nodes.
+    4. **What it means.** A moving robot can no longer come within 1 hop of another moving robot, so collisions from movement go to about zero for every arm, the network included. The new safety measure becomes **guard interventions**: how often the safety layer had to step in, the simulator's version of a hardware safety stop. Collisions can still come from re-entries and recovery moves, and are still counted. This is the Simplex pattern from entry 23: a verified safety layer under a policy that only decides efficiency.
+
+    **Hops everywhere (the audit).**
+    - **Already in hops:** the collision and warning check; braking distance; the reward's closeness; the network's "robot nearby" input; path-warning radius, floor and follow gap; the attention graph; the density kernel. Rays are cells along an aisle, which are hops along that line.
+    - **Not in hops, to convert:**
+      - the reward's approach charge measures the closing gap in straight-line (Euclidean) distance;
+      - the convoy tests (`_is_following`, `_following_snap`) measure the gap change in Manhattan distance;
+      - recovery (its pair checks and Tier 1 to 3 placements) uses Manhattan distance. That is always on the safe side, since Manhattan never exceeds hops, but it is inconsistent.
+      - The config comments still call the collision and warning thresholds "Manhattan".
+    - Same-cell checks (pickup dwell, arrival) are fine as they are: within a cell the two agree.
+
+    **The other two switches.**
+    - **Reward:** drop the presence charge (−0.5 per step for being in any warned pair, which with path warnings reaches 3 hops for head-on routes). Keep the collision charge (−1) and the approach charge, the latter measured in hops.
+    - **Route by default as a core switch** (`conflict.route_by_default`), so training and evaluation use the same rule.
+
+    **Tests before any training.**
+    - **The two-robot sweep.** Every half-hop distance from 0.5 to 3, head-on, following, crossing and reversing, every pair of actions, with ladder orders and holds. With the guard on, no step may end with two moving robots under 1 hop apart, and none at 0.5.
+    - **Equivalence.** With the guard and bubbles off, the step must be identical to today's (the existing `test_loop_equivalence`, smoke and integration tests, plus a replay of the check instance).
+    - **A short shakedown** to see how often the guard steps in.
+
+30. **Built (12 October): the intent guard, bubbles by kind, hops everywhere, the presence switch, route by default in the core.** All approved in entry 29 (Rohit: "yes", "yes", "everything else as it has been", and the config comments corrected). Every new behaviour is a config switch, and **all of them off reproduces the step before them exactly**.
+    - **`guard_warehouse.py` (new).** It holds:
+      - `landing_position()`: where a move will put a fleet, through `reach_position`, the move's own computation.
+      - `HopMetric`: the graph distance between continuous positions, the same anchors and same-edge rule as `GraphProximity`.
+      - `crossed()`: two fleets on one line swapping order in a step.
+      - `guard_speeds()`: per pair, slow the fleets that are closing the gap (never one that is backing away) by bisection, just enough to stop at the minimum gap. It repeats in rounds, and whatever is still short stops outright. Pairs are taken in a canonical order, so the result never depends on a fleet's place in the list.
+    - **`test_intent_guard.py`, all pass here (no torch):**
+      - landing equals the real move in 19,670 cases;
+      - one aisle: every quarter-hop distance from 0.25 to 3.5, every pair of moves, speeds 0.1 to 1.1 (8,064 cases, the guard stepped in on 1,241);
+      - a junction (11,760 cases), chains of three, and 2,000 random crowds of 4 to 8 fleets on a sparse grid;
+      - no pair ever ended under 1 hop or drove through the other;
+      - no needless braking, and a fleet backing away was never slowed;
+      - the same result whatever the list order.
+
+      The test caught one gap on the way: a fleet overtaking another from 0.25 apart, or the Tier-3 winner's 1.1 bump, can land as far apart as it started while driving straight through. `crossed()` closes that.
+    - **`core_warehouse.py`:**
+      - **The guard.** With `safety.intent_guard`, phase A decides every move first, the guard sets speeds, then everyone moves. The apply and motion accounting are the same as before. A move the guard stops outright becomes a wait, and the wait is recorded as the executed action.
+      - **A live invariant check after every guarded step** (`guard_violations`, must stay 0). Every training run re-tests the guard.
+      - **Bubbles by kind** (`_kind_brake`): head-on, contested, unknown and the mover of a blocked pair brake from 1.75 hops, a follower from 1.25, the rest only at the 1-hop floor.
+      - **The presence switch** (`reward_decomposition.presence_charge`).
+      - **Route by default** (`conflict.route_by_default`): the network decides only for fleets in the step's warning or deadlock set, which with path warnings means a warned pair.
+      - **Hops for the approach charge and the convoy tests** (`safety.hops_everywhere`).
+      - **New counters:** `guard_*` and `route_*`, in the statistics, the training CSV and a new `safety |` line in the training log.
+    - **`recovery_warehouse.py`:** every fleet-to-fleet distance goes through `_gap()`, which is hops with `hops_everywhere` and otherwise exactly the old expression.
+    - **`config_warehouse.py`:** RUN 6 header; new `safety` section; `route_by_default`; `presence_charge` False; `eps_peak` 0.30 (cold, as run 2). Four comments that said "Manhattan" now say hops: the collision and warning thresholds, the density falloff and the attention radius. Everything else is as run 5.
+    - **`deploy_eval.py` and `trace_fleet.py`:** a `--safety config|on|off` option. `off` must reproduce the 11 October check exactly: champion 16 delivered with 1 collision, champion+route 31 and 0, RULES 33 and 0. `trace_fleet` labels "safety guard" and core "route default" decisions. **`main_runner_warehouse.py`:** the new CSV columns and log line.
+    - **Run on Rohit's machine (they need torch), 12 October:**
+      - `test_guard_integration.py`: real steps, 24 fleets, the order stream. The invariant must hold, the guard must engage, the same seed must give the same episode, and with the switches off nothing new may happen. **ALL PASS** (guard stepped in on 239 of 300 steps, 572 pairs too close, 711 slowed, 645 stopped, no fallback stops, route 28%, collisions 0).
+      - The existing suite: **ALL PASS** (after the two stale tests below were fixed).
+      - The `--safety off` check above: **reproduced exactly.** Champion 16 delivered with 1 collision, champion+route 31 and 0 (routed 89% of moves), RULES 33 and 0, both repeats IDENTICAL. With its switches off, the build changes nothing.
+      - The `--safety on` check (same map, 25 fleets, seed 0, 120 steps, failures and people on): **passed.**
+        - **Invariant 0 and repeat IDENTICAL** for champion (31 and 31 delivered, 0 and 0 collisions). Collisions 0 in both arms.
+        - **Route share 98% for champion and 97% for RULES**, higher than the outside rule's 89%. I had predicted lower, and was wrong. The outside rule handed a robot to the network whenever anyone was within 2 cells. Path awareness hands it over only when the two routes actually meet, follow or block within the next 8 cells. Robots near each other but on separate routes count as clear. For RULES the route never disagreed with the rule's own move (`route_network_differed` 0).
+        - **The guard never had to act on this map:** 14 candidate pairs checked over 120 steps for champion and 17 for RULES, none too close. Braking by kind kept everyone apart first. The brake duty cycle fell by more than half for champion (0.046 to 0.019) and by a third for RULES (0.039 to 0.026).
+        - **Deliveries:** champion 31, the same as champion+route with safety off; lead time 23.2 steps against 21.5. RULES 30 against 33. With one instance of 120 steps this cannot be told from timing. With less braking, RULES' fleet 21 left the floor at step 16 instead of 18, re-entered first and took order 1510. From there the book went to different robots, and the step-52 failure wave (the same three robots) caught different orders. The 5-seed, 800-step frozen evaluation with the guard on for every arm is what measures it.
+        - **What it means for the run.** On this map, at 25 fleets, the network chooses about 2% of moves; everything else is the route. Whether that is enough to learn from depends on how crowded the training floors are: read the route share at 40 and 60 fleets in the shakedown.
+      - Still to run: the 3-episode shakedown.
+    - **Two older tests were stale, and are fixed.** `test_conflict_rules.py` and `test_corridor_rules.py` treated "restore the config file" as "every component off", which stopped being true when run 2's config switched the components on. They failed on that, not on the build: `no_classifier`, `no_verdicts`, `no_brake_exemptions` and `off_throttles_the_convoy` on Rohit's machine. Both now spell out "off" (`CONFLICT_OFF`, `SAFETY_OFF`) and isolate the component each test is about. A second stale assumption: they were written when failures were off, and the config now has robot failures, failure waves and people switched on. In the corridor test that showed as `on_both_deliver` (one fleet failed, so only M delivered) and `forwards_equals_reversed` (4 differences). Both tests now also switch failures and people off (`NO_FAILURES`), as when they were written. `test_guard_integration.py`'s requirement that the route decide over half the moves was a guess about its crowded floor (route 28% there); it now requires only that both the route and the network decide some.
+    - **Note:** `benchmark_flowrra.py` and `benchmark_all.py` read the config, so with this config the shock benchmark runs with the guard on. Reproducing earlier benchmark numbers needs the safety switches off.
+
+    **Proposed predictions for run 6, ladder_run2 (to be agreed before the run).** 150 episodes, cold; first 25 against last 25 unless said otherwise.
+
+    | Prediction | Pass if |
+    | --- | --- |
+    | Safety by construction | `guard_violations` 0 in every episode; collisions per episode below 0.5 on average (only re-entries and recovery moves can still cause one) |
+    | The reward stops teaching retreat | among the network's own proposals near another robot (`choice_policy_*`), moves away from the goal fall below 20% in the last 25 episodes (run 2: 32%, run 5: 35%) |
+    | The ladder still resolves | L3 per episode in the last 25 no higher than run 5's 3.4 |
+    | Throughput | share of the book delivered in the last 25 at least 92% (run 5 learning on the job: 90.6%) |
+
+    **Then frozen, on the same seeded days** (`deploy_eval`, full condition, 5 seeds, guard on for every arm): ladder_run2 (route by default in the env) against champion+route, the decision rule of 3 of 5 measures (delivered, lead time, guard stops, L3, near misses); reported against RULES.
+
 **Next.**
 
 1. **`deploy_eval.py` runs** (entries 24 and 26 to 28): all scored.
-2. **ladder_run2, cold (proposed; to decide after the 15-fleet runs).** Train on the fixed movement (entry 25) with three changes, then measure on these same seeded days against RULES and champion+route:
+2. **ladder_run2, cold: built (entry 30); the tests, the checks and a shakedown on Rohit's machine, then the predictions agreed, then the run.** Train on the fixed movement (entry 25) with three changes, then measure on these same seeded days against RULES and champion+route:
    - the approach-aware safety bubble (item 3);
    - a reward that charges approach and collisions, but not presence;
    - route by default during training as well, so the network learns only where robots meet: the one place it still decides, and the place it currently costs collisions.
@@ -710,6 +794,8 @@ Each step was built behind its own switch, tested, and run against the step befo
    - **A margin above both.** A robot exactly on the edge of the bubble still drives at full speed, and robots often stand on half-hop marks. At exactly 1.0 (following) or 1.5 (head-on), a pair on the edge crashes in one step, so the minimums are about 1.25 and 1.75 hops. A test should prove it before any run: two robots at every half-hop distance, head-on and following, stepped forward, never crashing. Real robots need more again for reaction time and stopping distance.
 
    **Decided (12 October): the full, approach-aware version.** About 1.25 hops when the other robot is not closing head-on, and about 1.75 head-on, proved by the test before any training. A fixed 1.25 everywhere would let a head-on pair cross from 1.25 to 0.25 apart in one step. Built before the cold run, together with the reward switch (approach and collisions, not presence) and route by default as a core config switch. Reissue with technician retrieval, the low-battery protocol (finish or hand back the order, exit at the dock, charge, return), and failures as a rate per robot-hour (entry 28) are built while the cold run trains.
+
+   **Known issue, to fix with the per robot-hour failures (found 12 October by the corridor test).** Failure injection draws from Python's shared `random`, so which robot fails, and when, can depend on the order the robots are listed in and on anything else that drew from `random` earlier in the step. In the corridor test a failure wave fired at step 6 in the reversed run only. Training and evaluation always list the robots in the same order, so their results are repeatable (`deploy_eval --check` says IDENTICAL), but a failure is not tied to a robot. The fix is the one used for the tabu draws: seed each draw from the episode seed, the robot and the step.
 
    The warning distance sets four things at once: when braking starts, the presence and approach charges in the reward, the network's "peer nearby" input, and the ladder's warning set. Change it with a new training run, not under a frozen checkpoint. The cheap first test is route by default with a smaller radius only (1 to 1.5 hops).
 4. **Two realistic maps** from the 3D MAPF warehouse generator: an Amazon-style single-floor layout that warehouse teams recognise, and a three-level layout to show the complexity.

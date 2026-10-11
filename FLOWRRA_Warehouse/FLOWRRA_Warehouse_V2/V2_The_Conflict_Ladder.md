@@ -2,7 +2,7 @@
 
 Rohit Tamidapati · 5 October 2026 · updated 6 October 2026
 
-> **Status, 11 October 2026.** Steps 1–3 are built and tested, and runs 2–4 are complete. **The v2 champion is run 2's checkpoint: the ladder and rung costs, with no Learner.** In a seeded re-run of the shock benchmark it beat run 4 (the bounded Learner) on all five pre-registered small-map measures. On the large map it matches RULES alone and beats RHCR-PIBT + naive by 14 points of recovered orders, losing 60% fewer rescuers. The Learner stays in the code, switched off. The benchmark is now seeded per instance, after the same checkpoint scored 65.5% and 70.6% in two unseeded runs. People now share the floor (debris that a human comes to clear), and **run 5 (warm_stream1)** puts the champion back to work with the order stream and people on, still learning; its predictions are written below before its results. The build log at the end records each step and what its runs showed.
+> **Status, 11 October 2026.** Steps 1–3 are built and tested, and runs 2–4 are complete. **The v2 champion is run 2's checkpoint: the ladder and rung costs, with no Learner.** In a seeded re-run of the shock benchmark it beat run 4 (the bounded Learner) on all five pre-registered small-map measures. On the large map it matches RULES alone and beats RHCR-PIBT + naive by 14 points of recovered orders, losing 60% fewer rescuers. The Learner stays in the code, switched off. The benchmark is now seeded per instance, after the same checkpoint scored 65.5% and 70.6% in two unseeded runs. People now share the floor (debris that a human comes to clear), orders can come from a fixed order book (the same work every episode, whatever the fleet count), and **run 5 (warm_stream1)** put the champion back to work with both, still learning: 4 of 6 predictions passed. People finished every job in all 50 episodes and deliveries held, but learning on the job made the fleet faster and slightly less safe, so run 2's checkpoint stays the champion until a frozen, like-for-like test (`deploy_eval.py`) says otherwise. The build log at the end records each step and what its runs showed.
 
 ## Why
 
@@ -442,22 +442,58 @@ Each step was built behind its own switch, tested, and run against the step befo
     - *Also:* a human on a dock now delays a fleet's re-entry there; the obstacle stream is seeded per episode (it used an empty config seed, so placements differed on every rerun); a dead-end test caught the floor detection treating rows as floors on single-floor maps. With all of it in place: no fleet ever on an obstacle, no human ever on a fleet, identical obstacle histories on identical seeds (`test_obstacles_integration.py`).
     - *Left out on purpose:* a retreat checks its way back for fleets, not people. A human on a retreating fleet's trail delays the retreat until they walk on; the retreat-timeout counter will show whether that ever matters.
 
-    **Run 5, warm_stream1: the champion keeps learning on the job, with the order stream and people clearing debris** (50 episodes, warm from run 2's checkpoint, both maps, 25/40/60 fleets, 800 steps; every switch the network trained with is run 2's; new: stream, obstacles, gentle exploration peaking at 0.05; the order window fixed at 3 floors so the task does not change during the run). First a 3-episode shakedown, because stream mode and the ladder have never run together. **Predictions, written before the run** (first 25 episodes against the last 25):
+    **Run 5, warm_stream1: the champion keeps learning on the job, with the order stream and people clearing debris** (50 episodes, warm from run 2's checkpoint, both maps, 25/40/60 fleets, 800 steps; every switch the network trained with is run 2's; new: stream with a fixed order book, obstacles, gentle exploration peaking at 0.05). **Predictions, written before the run** (first 25 episodes against the last 25):
 
     | Prediction | Pass if |
     | --- | --- |
     | Safety holds while it learns | fleet-to-fleet collisions per episode, last 25 no worse than first 25 |
     | The ladder still resolves | L3 ≤ 0.4 per episode in both 25-episode blocks (run 2's worst block: 0.36) |
-    | Throughput holds | stream efficiency (deliveries ÷ the conflict-free ideal), last 25 at least 95% of the first 25 |
+    | Throughput holds | share of the order book delivered, last 25 at least 95% of the first 25 *(revised before the run; see below)* |
     | Values stay honest | qval_safety within ±1 throughout |
     | People always finish the job | in every episode, no debris expires and no human times out: the fleets always let them through |
     | Retreats are not blocked by people | retreat timeouts ≤ 1% of retreat orders |
 
-    Reported, not predicted: completion (delivered ÷ issued), near misses (a fleet next to a human), human waiting steps, reroutes and give-ways, collisions per 100 deliveries. Fleet-to-human contact is zero by construction (the veto), and checked by the integration test, so it is not a prediction. *Why completion is not the throughput measure in stream mode:* orders keep arriving until the episode ends, so the last ones are still being carried when it stops. In Cold_Run25 (stream on, no ladder, one map, 60 fleets) completion was 79.6% and about 20% of issued orders were in flight at the end, so every undelivered order was still being carried: 79.6% was the ceiling, not a failure. Its efficiency, 44.8% of the conflict-free ideal, is the number that measures throughput. (Different maps and fleet counts, so not a baseline for run 5.)
+    Reported, not predicted: order lead time (release to delivery), the step the whole book was delivered, near misses (a fleet next to a human), human waiting steps, reroutes and give-ways, collisions per 100 deliveries, and every comparison again within each map and fleet count (each episode's map and fleet count is drawn at random, and one small-map 60-fleet episode can outweigh several others, so a half can look worse from an unlucky draw). Fleet-to-human contact is zero by construction (the veto), and checked by the integration test, so it is not a prediction.
+
+    **The shakedown, and a change of workload made before the run.** The predictions above were first written for the *closed loop*, where every robot always has an order, and pushed before a 3-episode shakedown. The shakedown ran: no crash, people finished every job (one waited 273 steps and stepped aside 13 times in a crowded episode, but cleaned up and left), retreat timeouts 2 of 541 orders. Large map, 40 fleets: 0 collisions, efficiency 58%. Small map: 40 fleets delivered 95 orders per 800 steps and 60 fleets 94, with 61 and 157 collisions and 9 and 65 L3 fires. Twenty more robots added no deliveries, only congestion: in a closed loop nobody parks, so the small map (about 290 cells per floor) stays full all episode, which run 2 never saw. That also showed a flaw in the measure: the closed loop gives each robot an order, so the work grows with the fleet, and efficiency (deliveries ÷ fleets × steps × 0.5 ÷ cycle length) assumes every robot drives conflict-free all the time, so it falls whenever robots are added. **The workload was therefore changed, before the run, to a fixed order book** (`stream.order_book`, `test_order_book.py`): 80 orders per episode whatever the fleet count, the ones the fleets start with counting toward it and the rest released steadily over the first 400 steps; after a delivery a fleet exits and re-enters only when an order is waiting, otherwise it waits at its dock; the episode ends when the book is delivered. That is the operator's question, "this many orders this shift: how long, with how many robots?", and the same work every episode. Only the throughput prediction changed, from efficiency to the share of the book delivered. The L3 prediction stays as written, although the shakedown suggests it will fail. A second 3-episode shakedown checked the order book before the run, with releases spread over 500 steps:
+
+    | Shakedown 2 (order book of 80) | small map, 40 fleets | large map, 40 fleets | small map, 60 fleets |
+    | --- | --- | --- | --- |
+    | delivered | 71 (89%) | 76 (95%) | 77 (96%) |
+    | lead time, mean / 90th percentile (steps) | 127 / 292 | 189 / 314 | 93 / 206 |
+    | robots on the floor (busy) | 58% | 82% | 36% |
+    | collisions (closed-loop shakedown) | 26 (61) | 1 (0) | 16 (157) |
+    | L3 fires (closed-loop shakedown) | 7 (9) | 1 (1) | 0 (65) |
+
+    With the same work whatever the fleet size, 60 fleets on the small map went from 157 collisions and 65 L3 fires to 16 and 0: robots with no order wait at the docks instead of crowding the floor. People again finished every job (no debris expired, nobody timed out). No book finished within 800 steps: an order released near step 500 needs up to about 300 steps (the 90th percentile lead time), so **the release window was shortened to 400 steps**, before the run. Efficiency (deliveries ÷ the conflict-free ideal) is left blank under an order book, because its ideal assumes every robot always has work; the book reports instead the share delivered, lead time, the share of robot-steps on the floor, and deliveries per 1,000 robot-steps (× 3.6 ÷ seconds per step gives orders per robot per hour). *For scale:* if one step is one second (0.5 m/s, 1 m cells), 800 steps is 13.3 minutes, and the shakedown's 95 deliveries are about 430 orders per hour.
+
+23. **Run 5, warm_stream1: scored** (50 episodes, 5.2 hours, no errors; 10 robots failed per episode on average, people cleared 182 pieces of debris).
+
+    | Prediction | Pass if | first 25 | last 25 | |
+    | --- | --- | --- | --- | --- |
+    | Safety holds while it learns | collisions per episode, last 25 no worse than first 25 | 12.6 | 13.4 | ❌ narrowly |
+    | The ladder still resolves | L3 ≤ 0.4 per episode in both blocks | 2.96 | 3.36 | ❌ (the shakedown had suggested it) |
+    | Throughput holds | share of the book delivered, last 25 ≥ 95% of first 25 | 92.5% | 90.6% (97.9% of first) | ✅ |
+    | Values stay honest | qval_safety within ±1 | −0.045 → −0.164 | | ✅ (still drifting down) |
+    | People always finish the job | no debris expires, no human times out, in every episode | 0, 0 | 0, 0 | ✅ all 50 episodes |
+    | Retreats are not blocked by people | retreat timeouts ≤ 1% of orders | 4 of 2,364 (0.17%) | | ✅ |
+
+    **4 of 6 pass.** *Within each map and fleet count* (averaged over the six combinations, reported, not scored): collisions 11.0 → 14.1 per episode, L3 2.5 → 3.8, lead time 145 → 134 steps, book delivered 92.4% → 90.5%. **Learning on the job made the fleet faster but slightly less safe:** orders arrived about 8% sooner (lead time down in 5 of 6 combinations) while collisions and L3 rose. A midway look at 20 episodes had suggested the opposite; the full run did not bear it out. qval_safety fell steadily across the run without levelling off, so the values are still adjusting to stream traffic. People: near misses rose from 18 to 22 steps per episode and human waiting from 8 to 14 steps, with 0 → 0.36 give-ways; no debris ever expired. Only 2 of 50 books were finished within 800 steps; about 1.3 orders per episode were still waiting at a failed robot for a rescuer at the end.
+
+    **How many robots this much work needs** (the book allows at most 360 orders an hour, at one step ≈ one second):
+
+    | orders per hour (share of the book) | 25 robots | 40 robots | 60 robots |
+    | --- | --- | --- | --- |
+    | small map | 317 (88%) | 320 (89%) | **338 (94%)** |
+    | large map | 295 (82%) | **342 (95%)** | 345 (96%) |
+
+    Forty robots carry this workload on the large map; the small map needs sixty, and with forty its aisles are the most crowded (more robots on the floor at once, the most collisions); twenty-five is too few on both.
+
+    **Decision:** run 2's checkpoint stays the champion until a like-for-like test says otherwise. That test is next: both checkpoints frozen, on identical seeded instances.
 
 **Next.**
 
-1. **Run 5, warm_stream1,** scored against the predictions above.
+1. **`deploy_eval.py`:** evaluate frozen checkpoints on fixed, seeded stream instances (order book, each map × 25/40/60 fleets × several seeds), with failures and people switched on or off from the command line. First: run 2's checkpoint against warm_stream1's, which separates what learning on the job changed from the random mix of maps and fleet counts and from exploration. Then failures off, for FLOWRRA's clean throughput on our maps.
 2. **Two realistic maps** from the 3D MAPF warehouse generator: an Amazon-style single-floor layout that warehouse teams recognise, and a three-level layout to show the complexity.
 
 Later: L2 pull-over outside corridors (the "no room" case); anchoring for continual learning (L2-SP or EWC) with a champion/challenger gate, so nothing learned live reaches the floor untested; a sensitivity test of the density field's decay rate; the small-map diagnostic; corridor back-outs chosen by retreat cost; and a calibration test that hops stay hops.

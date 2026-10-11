@@ -2,7 +2,7 @@
 
 Rohit Tamidapati · 5 October 2026 · updated 6 October 2026
 
-> **Status, 11 October 2026.** Steps 1–3 are built and tested, and runs 2–4 are complete. **The v2 champion is run 2's checkpoint: the ladder and rung costs, with no Learner.** In a seeded re-run of the shock benchmark it beat run 4 (the bounded Learner) on all five pre-registered small-map measures. On the large map it matches RULES alone and beats RHCR-PIBT + naive by 14 points of recovered orders, losing 60% fewer rescuers. The Learner stays in the code, switched off. The benchmark is now seeded per instance, after the same checkpoint scored 65.5% and 70.6% in two unseeded runs. People now share the floor (debris that a human comes to clear), orders can come from a fixed order book (the same work every episode, whatever the fleet count), and **run 5 (warm_stream1)** put the champion back to work with both, still learning: 4 of 6 predictions passed. People finished every job in all 50 episodes and deliveries held, but learning on the job made the fleet faster and slightly less safe, so run 2's checkpoint stays the champion until a frozen, like-for-like test (`deploy_eval.py`) says otherwise. The build log at the end records each step and what its runs showed.
+> **Status, 11 October 2026.** Steps 1–3 are built and tested, and runs 2–4 are complete. **The v2 champion is run 2's checkpoint: the ladder and rung costs, with no Learner.** In a seeded re-run of the shock benchmark it beat run 4 (the bounded Learner) on all five pre-registered small-map measures. On the large map it matches RULES alone and beats RHCR-PIBT + naive by 14 points of recovered orders, losing 60% fewer rescuers. The Learner stays in the code, switched off. The benchmark is now seeded per instance, after the same checkpoint scored 65.5% and 70.6% in two unseeded runs. People now share the floor (debris that a human comes to clear), orders can come from a fixed order book (the same work every episode, whatever the fleet count), and **run 5 (warm_stream1)** put the champion back to work with both, still learning: 4 of 6 predictions passed. People finished every job in all 50 episodes and deliveries held, but learning on the job made the fleet faster and slightly less safe, so run 2's checkpoint stays the champion until a frozen, like-for-like test (`deploy_eval.py`; built, predictions written, running now) says otherwise. The build log at the end records each step and what its runs showed.
 
 ## Why
 
@@ -491,10 +491,228 @@ Each step was built behind its own switch, tested, and run against the step befo
 
     **Decision:** run 2's checkpoint stays the champion until a like-for-like test says otherwise. That test is next: both checkpoints frozen, on identical seeded instances.
 
+24. **The frozen, like-for-like test (`deploy_eval.py`).** Each instance is a map, a fleet count and a seed. It uses the seed-th scenario file of the held-out set (`all_scens_v2`), its first 25, 40 or 60 fleets, and a seeded order book: 80 orders released over 400 steps, with 800 steps to deliver them. Before every arm runs an instance, every random stream is reset, including those behind failure waves, single failures, debris and people. Every arm therefore starts the same day; once their choices differ, details drift apart, as they would on a real floor. Nothing learns. Exploration is fixed at 0.015 for the networks and 0 for RULES.
+
+    **Three arms:**
+    - **champion:** run 2's checkpoint.
+    - **warm:** run 5's checkpoint.
+    - **RULES:** the same orchestrator with shortest-path driving. Its rules are what the ladder falls back on at L3.
+
+    **Two conditions:**
+    - **Full:** failures and people on, 5 seeds. That is 2 maps × 3 fleet counts × 5 seeds = 30 instances, 90 runs.
+    - **Clean:** both off, 3 seeds: 54 runs.
+
+    Arms are compared in pairs over shared instances with the Wilcoxon signed-rank test. Here orders per hour equals the share of the book × 360 (80 orders, 800 steps, one step ≈ one second), so it is not a separate measure.
+
+    **Predictions, written before the runs:**
+
+    | Prediction | Pass if |
+    | --- | --- |
+    | The test is repeatable | `--check` runs one instance twice and reports IDENTICAL |
+    | A clean floor delivers the book | clean condition: every arm delivers at least 97% of the book (mean over instances) |
+    | RULES is the safest driver | RULES has fewer collisions per episode than both networks, in both conditions; a tie fails (in the shock benchmark, RULES had 0.10 per episode on the small map against the champion's 1.03) |
+    | Learning on the job traded safety for speed | full condition: warm's mean lead time is shorter than the champion's and its collisions are higher, as in run 5 |
+
+    **Decision rule, champion against warm (full condition):** warm becomes the champion for order-stream work only if it wins at least 3 of 5 measures. The five are share of the book delivered, lead time, collisions, L3 fires, and near misses (a fleet next to a human).
+
+    **Agreed in advance:** suppose RULES matches or beats both networks on share delivered and collisions in the full condition. Then the reading is that the architecture (rules, ladder, rescue) is what keeps the fleet whole, and the learned policy has not yet earned its place in deployment. That supports the view of FLOWRRA as a self-maintaining system and sets the policy a clear bar to clear.
+
+    **Amended before any runs (11 October).** The check and the trace (entry 25) found a movement bug. Both runs will use the fixed code, and a fourth arm is added. No clean or full run had been made.
+    - **The fix:** `node_warehouse.reach_position`, the line-end trap. It changes movement for every arm, the same way.
+    - **The fourth arm, champion+route:** run 2's network with route by default. A robot with no other robot within the warning distance takes its shortest-path move, and the network decides only near other robots.
+
+    The predictions above stand unchanged, and these are added:
+
+    | Prediction | Pass if |
+    | --- | --- |
+    | Route by default delivers more | full condition: champion+route delivers a larger share of the book than the champion (mean over instances) |
+    | ...at no cost in safety | full condition: champion+route has no more collisions per episode than the champion |
+
+    **Added before the full run (11 October, after the clean run):** 15 fleets, in both conditions (5 seeds full, 3 clean), in separate runs and CSVs. With 15 robots the book is beyond the fleet's capacity, so the share delivered measures driving efficiency directly. A failure wave of 3 robots is a fifth of the fleet. Reported only; not part of the predictions, which stay on 25, 40 and 60 fleets.
+
+    **Reported, not predicted:** champion+route against RULES on the five measures. That comparison is the real question. With routing taken away from the network, does it add anything over RULES where robots meet? If it wins none of the five, the network adds nothing yet, even in contention.
+
+25. **The detour habit (traced; open).** The check run for entry 24 (one instance, the first 120 steps) found the champion slow on the same orders RULES finished quickly. RULES delivered all 25 starting orders by step 37; the champion had delivered 16 by step 120. Fleet 22's trip took RULES 5 steps and the champion 87. It is not new: in the shock benchmark the champion drove 1,080 cells to RULES' 434 on the small map. The training records show the habit directly. These are the network's own proposals when another robot was within 2 cells:
+
+    | Network's proposals, another robot within 2 cells | toward its goal | wait | away from its goal |
+    | --- | --- | --- | --- |
+    | run 2, the champion (150 training episodes, 31,941 decisions) | 49.7% | 18.5% | 31.8% |
+    | run 5, warm (50 stream episodes, 106,377 decisions) | 46.4% | 17.6% | 35.3% |
+
+    One hop from its goal, it stepped in 69% of the time in run 2 and 36% in run 5. It waited 12% and 27% of the time, and stepped away 19% and 37%. Over all moves, it took the shortest-path direction 71% of the time in run 2 and 63% in run 5; RULES always does.
+
+    **Suspected cause, in the reward (to be tested).** Per unit of reward, the safety head weighs three times as much as progress (6:4:1 on value-normalised heads). It charges a robot −0.5 for every step it spends within 2 cells of another, whoever moved (the integrity part, `coh` in `_priority_rewards`). It adds an approach charge when the robot closes the gap. The approach-only switch (`approach_warning`) replaced the warning term, not this one. When the neighbour is in the way, the three choices compare like this:
+    - **Advance:** earns progress but keeps the charge and adds the approach charge.
+    - **Wait:** keeps the charge and adds the idle penalty.
+    - **Step back:** costs a little progress, which is won back later, and can end the charge.
+
+    Near another robot, then, a step back is often the cheapest move, and on a crowded floor each step back tends to put the robot next to someone else. RULES ignores all of this: it drives the shortest path and leaves conflicts to the ladder.
+
+    **The test:** `trace_fleet.py` replays the check instance. For every robot-step it records:
+    - what the network proposed and what ran;
+    - what decided it: rules order, ladder retreat, recovery hold, livelock escape, tabu swap, or its own choice;
+    - its speed;
+    - its Q-values for waiting, for the best move toward the goal, and for its choice.
+
+    If the reward is the cause, the detours will be the network's own choices, made near other robots, by small Q margins.
+
+    **What the trace found: the guess was mostly wrong.** The replay matched the check exactly (16 and 33 delivered, 3 and 0 collisions). The champion produced 2,796 robot-steps and RULES 1,292.
+    - **Most detours happen in the clear.** The table below counts only steps where a move toward the goal was available. The reward near other robots adds about 9 points of stepping away, so it is a minor cause. 82% of the champion's away proposals came with no robot within 2 cells.
+
+      | Champion's proposals, a move toward the goal available | toward | away | wait |
+      | --- | --- | --- | --- |
+      | no robot within 2 cells (2,201 steps) | 38% | 36% | 25% |
+      | another robot within 2 cells (393 steps) | 35% | 45% | 18% |
+
+      RULES proposed the move toward the goal 99.5% of the time.
+    - **Far from the goal, its choice is close to random among the moves open to it.** In the clear, more than 10 hops from the goal, it proposed toward 32%, away 37% and wait 31%. Within 1–2 hops, toward rose to 55%. In the seeded shock benchmark, its gradient agreement was 0.63 on the small map and 0.84 on the large one, so the habit is not specific to the stream.
+    - **Its Q-values are noisier than the differences between moves.** By its own numbers it is not torn: its chosen move beat the best move toward the goal by a median of 76% of the spread across its moves. But for the same robot, Q(wait) changed by a median 0.41 from one step to the next, more than the 0.29 median spread between moves. A third of its moves right after a move (34%) reversed it.
+    - **Why the signal is weak (reasoning, not measured).** Progress is paid as a change in distance, so a step away and a step back cancel out. What separates toward from away is the delivery bonus arriving a little later. That is worth roughly 0.1 in Q units near the goal, and less further away, which is below the network's noise. The gap is larger near the goal, and so is the share of moves toward it.
+    - **A bug, smaller but real: a trap at the end of a line.** The action mask and the goal gradient test the position a full step (0.5 cell) ahead. A robot braked to a fractional speed sits between nodes, for example 0.2 short of the last node on a line. From there a full step would pass the end of the line, so the move is marked impossible, although `apply_discrete_action` (NODE_ALIGNED) would stop on the node. The robot can only go back or wait, and the next move toward the goal brings it back to the same spot. This happened on 112 champion robot-steps (4%), to 9 robots. Fleet 22 spent about 40 of its 87 steps in this loop (steps 12–17, 22–26 and 47–81). The livelock escape reads the same gradient, so it cannot help: `trace_fleet` labels those steps "livelock escape", but the escape had no move to give. RULES rarely brakes (2.8% of its steps), so it rarely meets the trap. The mask's docstring promises that "valid for masking and valid when applied can never disagree"; turning NODE_ALIGNED on broke that promise for robots between nodes.
+
+    **What it means.** The goal gradient was added so the network would not have to solve routing ("not what FLOWRRA is about") and could concentrate on contention. In practice the network still decides every move, and away from conflicts its ranking barely follows the route. Options, cheapest first:
+    1. Fix the line-end check, so the mask and the gradient test the position the move would actually reach.
+    2. Route by default: execute the shortest-path move unless another robot is within the warning distance, and let the network decide only there. A frozen checkpoint can be tested this way as an extra arm in `deploy_eval`, with no training.
+    3. In training, a small cost for every step until delivery, so moving toward the goal is worth more than the noise everywhere.
+
+    **Built (11 October): options 1 and 2.**
+    - **The line-end fix.** `reach_position()` in `node_warehouse.py` is now the one computation the move, the action mask and the goal gradient share. `test_line_end.py` checks it in four ways:
+      - Fleet 22's spot, rebuilt: from z = 11.65 the old mask refused +Z; the fixed one allows it, the gradient points +Z, and the move lands exactly on z = 12, from where +X reaches the goal.
+      - On the half-cell lattice: every mask and gradient on a random sparse grid is identical to the old code.
+      - With NODE_ALIGNED off: identical everywhere.
+      - Off the lattice: 109 moves newly allowed and none newly refused, and every newly allowed move really moves the robot.
+
+      The obstacle-veto and cleanup tests still pass.
+    - **Route by default** (`deploy_eval.install_route_default`, `--route-arms`). It sits between the network's proposal and the env, so `core_warehouse.py` does not change. `trace_fleet.py` labels its decisions "route default". The share of moves it routed, and how often the network would have chosen differently, are written per run (`route_share`, `route_network_differed`).
+
+    **The trace after the fix** (same instance, 120 steps, all four test files passing on Rohit's machine):
+
+    | | delivered | collisions | first orders delivered by step 120 |
+    | --- | --- | --- | --- |
+    | champion | 16 | 1 (3 before the fix) | 16 of 25 |
+    | champion+route | 31 | 0 | 24 of 25 |
+    | RULES | 33 | 0 (unchanged) | 25 of 25 |
+
+    - **The trap is gone.** No champion steps were stranded at a line end, against 112 before. Fleet 22 delivered at step 21 instead of 87. The champion still delivered 16, because cause 1 (near-random choices in the clear) is untouched.
+    - **Route by default matches RULES wherever the robots are apart.** 24 of the 25 first orders were delivered at exactly the same step as under RULES.
+    - **Where robots meet, the network backs off.** It decided 154 steps for 13 robots, each time with another robot within 2 cells: 79 moves away, 55 toward, 20 waits. RULES, in the same situation, moved toward 51 times of 54.
+    - **Ping-pong at the 2-cell boundary.** The route moves a robot in and the network moves it straight back out: 25 times, for 8 robots. Fleet 5 shows the cost. RULES drove past the same robot and delivered at step 24. Under route by default, fleet 5 went back and forth between (4,9,6) and (5,9,6) from step 20 until the failure wave stopped it at step 52.
+    - **Reading.** The first guess (the reward near other robots) was wrong for the clear floor but right where robots meet. The presence charge teaches the network never to stay within 2 cells of anyone. RULES passes within 2 cells all the time without a collision. A training change to try later: charge approach and collisions, not presence. The arm itself is not changed before the runs; the ping-pong is part of what they measure.
+
+26. **deploy_eval, clean condition: scored.** No failures and no people. 2 maps × 25/40/60 fleets × 3 seeds gives 18 instances; with four arms that is 72 runs, 1.3 hours. The line-end fix is in place.
+
+    | | book delivered | lead time, mean / 90th pct (steps) | collisions per episode | L3 per episode | books finished in 800 steps |
+    | --- | --- | --- | --- | --- | --- |
+    | RULES | 99.2% | 71 / 151 | 0.44 | 2.2 | 13 of 18 |
+    | champion+route | 98.7% | 75 / 162 | 4.3 | 2.3 | 13 of 18 |
+    | champion | 96.7% | 120 / 260 | 10.9 | 4.4 | 2 of 18 |
+    | warm | 96.6% | 123 / 261 | 14.2 | 4.2 | 3 of 18 |
+
+    **Predictions, the clean parts:**
+
+    | Prediction | Result | |
+    | --- | --- | --- |
+    | The test is repeatable | IDENTICAL, champion and champion+route | ✅ |
+    | A clean floor delivers the book (every arm ≥ 97%) | champion 96.7%, warm 96.6%; champion+route 98.7%, RULES 99.2% | ❌ narrowly, for both networks |
+    | RULES is the safest driver (clean half) | RULES 0.44 against the champion's 10.9 (p 0.001) and warm's 14.2 | ✅ so far; the full condition decides |
+    | Learning on the job traded safety for speed; route by default; warm against the champion | full condition only | pending |
+
+    **Paired comparisons** (Wilcoxon, 18 instances):
+    - **champion+route against the champion:** it wins on every measure. Delivered 98.7% against 96.7% (p 0.017). Lead time 75 against 120 steps (p < 0.001). Collisions 4.3 against 10.9 (p 0.005). L3 2.3 against 4.4 (p 0.12).
+    - **warm against the champion:** no measure differs (p 0.42 to 0.94). Warm's collisions were 14.2 against 10.9, not significant. Learning on the job changed nothing measurable on a clean floor.
+    - **champion+route against RULES (the real question, reported):** delivered and L3 tie (p 0.57 and 0.90). RULES has shorter lead times, 71 against 75 steps (p 0.018), and fewer collisions, 0.44 against 4.3 (p 0.021).
+    - **By map.** On the large map, champion+route matches RULES: delivered 100% against 99%, lead time 104 against 104 steps, collisions 0.67 against 0.33, L3 0.8 against 1.3. On the small map, where robots meet far more often, its lead time is 47 against 38 steps and its collisions 7.9 against 0.56 per episode; 71 of its 77 collisions were there.
+
+    **Reading** (clean floor only; the full condition decides the pre-registered questions):
+    - Taking routing away from the network closes most of the gap to RULES, and on the large map nearly all of it.
+    - What is left is where robots meet. There the network's decisions cost collisions RULES does not have: on the small map, about 14 times as many. Its habit of backing away (entry 25) does not make it safer; RULES passes within 2 cells and collides less.
+    - Warm performs the same as the champion.
+    - Orders per hour are capped by the book (80 orders in 800 steps is 360 an hour), so on a clean floor every arm is near the cap (348 to 357). Lead time separates the arms better.
+
+27. **deploy_eval, full condition: scored.** Failures and people on, as in run 5. 2 maps × 25/40/60 fleets × 5 seeds gives 30 instances; with four arms that is 120 runs, 3.0 hours. About 9 to 10 robots failed per shift in every arm. In all 120 runs people cleared every piece of debris and nobody timed out.
+
+    | | book delivered | lead time, mean / 90th pct (steps) | collisions per episode | L3 per episode | near misses with people (median) |
+    | --- | --- | --- | --- | --- | --- |
+    | RULES | 95.3% | 80 / 181 | 0.87 | 3.9 | 3 |
+    | champion+route | 95.2% | 86 / 196 | 4.7 | 2.2 | 5 |
+    | champion | 90.9% | 131 / 298 | 11.0 | 3.5 | 8 |
+    | warm | 90.0% | 131 / 295 | 14.7 | 3.8 | 7 |
+
+    **Predictions, scored:**
+
+    | Prediction | Result | |
+    | --- | --- | --- |
+    | RULES is the safest driver (both conditions) | full: RULES 0.87 against the champion's 11.0 and warm's 14.7, both p < 0.001. Clean: 0.44 against 10.9 and 14.2 | ✅ |
+    | Learning on the job traded safety for speed | warm's lead time 131.2 against 131.0 steps (p 0.69), so not shorter; its collisions 14.7 against 11.0 (p 0.10) | ❌ |
+    | Route by default delivers more | 95.2% against 90.9% (p < 0.001; better in 25 of 30 instances) | ✅ |
+    | ...at no cost in safety | collisions 4.7 against 11.0 (p 0.009) | ✅ |
+    | Warm against the champion (3 of 5 measures to adopt) | warm wins 0 of 5, none significantly | run 2 stays the champion |
+
+    With the clean run's results (entry 26), that makes 4 of 6 pass: the test repeats, RULES is the safest, and both route predictions. A clean floor delivering the book and learning on the job trading safety for speed both fail.
+
+    **Agreed in advance: the condition is met.** RULES matches or beats both networks on share delivered (95.3% against 90.9% and 90.0%) and on collisions (0.87 against 11.0 and 14.7). The architecture (rules, ladder, rescue) is what keeps the fleet whole. The learned policy has not yet earned its place in deployment.
+
+    **Reported: champion+route against RULES.** Route by default wins one of the five measures by mean, and not significantly. The network adds nothing measurable even where robots meet, and costs collisions there.
+    - **Delivered:** tie, 95.2% against 95.3% (p 0.98).
+    - **Lead time:** RULES shorter, 80 against 86 steps (p 0.010).
+    - **Collisions:** RULES fewer, 0.87 against 4.7 (p < 0.001); route had fewer in only 3 of 30 instances.
+    - **L3:** route fewer, 2.2 against 3.9 (p 0.25, not significant).
+    - **Near misses:** tie, medians 5 and 3 (p 0.94). The means are pulled up by a few long standoffs next to people, which a trace should explain: one route instance had 498 near-miss steps, another 369.
+
+    **Clean against full, on the same 18 days (seeds 0 to 2).**
+    - **Delivered:** failures and people cost RULES 3.6 points of the book (99.2% to 95.6%) and route by default 3.4 (98.7% to 95.3%). The networks lost about 6 (96.7% to 90.7%, and 96.6% to 90.8%).
+    - **Lead time:** rose by 8 to 12 steps for every arm.
+    - **Collisions:** barely changed. They come from robots meeting each other, not from failures or people.
+    - **Books finished within 800 steps:** 13 of 18 for RULES and for route by default on the clean floor. In full conditions, 1 of 30 for RULES and none for the others. About 12 orders per shift were still out at the end, 16 for the networks.
+
+    **Reading.**
+    - The strongest result is not about the network. The architecture keeps the fleet whole through about ten robot failures a shift and people on the floor: rules, ladder, rescue and the hard veto on people. Under RULES driving, that is less than one collision a shift, and every human job finished.
+    - Route by default closes the gap to RULES on delivery and nearly on lead time. What the network still decides, where robots meet, costs collisions.
+    - Warm performs the same as the champion. Fifty episodes of learning on the stream did not change frozen behaviour.
+    - **The cost of a real floor (Rohit's note).** About ten robot failures a shift, about nine handovers, and people clearing debris cost RULES and route by default about 3.5 points of the book against a clean floor. There was no stop, no escalation and no human in the loop. What a conventional planner loses on the same days with the same failures is not measured yet; the lifelong RHCR comparison on these maps would give that baseline.
+
+28. **15 fleets (reported only, as registered).** Clean: 2 maps × 3 seeds, 6 instances. Full: 2 maps × 5 seeds, 10 instances. Four arms each, no errors in either run.
+
+    | Clean | book delivered | lead time (steps) | collisions | books finished |
+    | --- | --- | --- | --- | --- |
+    | RULES | 98.7% | 93 | 1.2 | 3 of 6 |
+    | champion+route | 98.3% | 97 | 4.0 | 3 of 6 |
+    | champion | 98.5% | 131 | 2.5 | 2 of 6 |
+    | warm | 96.9% | 161 | 2.2 | 0 of 6 |
+
+    | Full | book delivered | lead time (steps) | collisions | robots failed per shift (of 15) |
+    | --- | --- | --- | --- | --- |
+    | RULES | 69.6% | 99 | 1.2 | 10.7 |
+    | champion+route | 72.6% | 106 | 2.9 | 9.5 |
+    | champion | 57.8% | 133 | 3.2 | 9.5 |
+    | warm | 51.1% | 128 | 1.9 | 9.4 |
+
+    - **On a clean floor, 15 robots carry the whole book.** Every arm delivered 97 to 99%. The expectation in entry 24's amendment, that 15 would be beyond capacity, was wrong. Orders take longer: 93 steps under RULES, against 71 with 25 to 60 robots. With few meetings, the network's collision cost almost disappears (the champion's 2.5).
+    - **In full conditions the failure model decides the result.** Failures are counted per shift, not per robot: up to 5 single failures plus up to 3 waves of 2 to 4 robots, whatever the fleet size. The config itself calls this a "training rate, deliberately unrealistic". That gives about 10 failures a shift at every fleet size (15 fleets 9.8, 25 fleets 7.9, 40 and 60 fleets about 10).
+      - With 15 robots, that is two-thirds of the fleet. In 3 of the 10 shifts, 14 or 15 of the 15 failed.
+      - The share delivered falls with the share of the fleet lost (Spearman −0.6 to −0.8 in every arm).
+      - These shifts measure a fleet losing most of itself in 13 minutes.
+    - **Even so, efficient driving held up.** RULES and route by default kept about 70% (72.6% and 69.6%, a tie, p 0.36), against 57.8% for the champion and 51.1% for warm. One small-map shift (seed 2, 9 to 13 robots failed) shows it: RULES 92.5%, route 90%, the champion 30%, warm 32.5%. When the fleet is decimated, how well the survivors drive is what is left.
+    - **This also re-reads entry 27.** Ten failures in a 13-minute shift on 25 to 60 robots is a stress test (17 to 40% of the fleet), far above any real rate. **For the redesign:** express failures as a rate per robot-hour, so the stress scales with fleet size and can be set to realistic values as well as stress values. This goes with reissue, technician retrieval and the battery protocol.
+
 **Next.**
 
-1. **`deploy_eval.py`:** evaluate frozen checkpoints on fixed, seeded stream instances (order book, each map × 25/40/60 fleets × several seeds), with failures and people switched on or off from the command line. First: run 2's checkpoint against warm_stream1's, which separates what learning on the job changed from the random mix of maps and fleet counts and from exploration. Then failures off, for FLOWRRA's clean throughput on our maps.
-2. **Two realistic maps** from the 3D MAPF warehouse generator: an Amazon-style single-floor layout that warehouse teams recognise, and a three-level layout to show the complexity.
+1. **`deploy_eval.py` runs** (entries 24 and 26 to 28): all scored.
+2. **ladder_run2, cold (proposed; to decide after the 15-fleet runs).** Train on the fixed movement (entry 25) with three changes, then measure on these same seeded days against RULES and champion+route:
+   - the approach-aware safety bubble (item 3);
+   - a reward that charges approach and collisions, but not presence;
+   - route by default during training as well, so the network learns only where robots meet: the one place it still decides, and the place it currently costs collisions.
+
+   The bar to clear is RULES' 0.87 collisions per shift at RULES' delivery.
+3. **A smaller, approach-aware safety bubble** (Rohit's proposal, after the runs). Units in the code: one hop is one cell (a whole edge), a robot moves half a hop per step, and run 5's config counts a collision at 0.5 hops. The warning distance is 2 hops today, which is 4 steps of driving.
+   - **Closing on a still robot, or following one:** the gap shrinks at most half a hop per step: 0.5 hops to the crash, plus half a hop of braking, gives 1 hop.
+   - **Head-on:** the gap shrinks a whole hop per step, so it needs 1.5 hops.
+   - **A margin above both.** A robot exactly on the edge of the bubble still drives at full speed, and robots often stand on half-hop marks. At exactly 1.0 (following) or 1.5 (head-on), a pair on the edge crashes in one step, so the minimums are about 1.25 and 1.75 hops. A test should prove it before any run: two robots at every half-hop distance, head-on and following, stepped forward, never crashing. Real robots need more again for reaction time and stopping distance.
+
+   **Decided (12 October): the full, approach-aware version.** About 1.25 hops when the other robot is not closing head-on, and about 1.75 head-on, proved by the test before any training. A fixed 1.25 everywhere would let a head-on pair cross from 1.25 to 0.25 apart in one step. Built before the cold run, together with the reward switch (approach and collisions, not presence) and route by default as a core config switch. Reissue with technician retrieval, the low-battery protocol (finish or hand back the order, exit at the dock, charge, return), and failures as a rate per robot-hour (entry 28) are built while the cold run trains.
+
+   The warning distance sets four things at once: when braking starts, the presence and approach charges in the reward, the network's "peer nearby" input, and the ladder's warning set. Change it with a new training run, not under a frozen checkpoint. The cheap first test is route by default with a smaller radius only (1 to 1.5 hops).
+4. **Two realistic maps** from the 3D MAPF warehouse generator: an Amazon-style single-floor layout that warehouse teams recognise, and a three-level layout to show the complexity.
 
 Later: L2 pull-over outside corridors (the "no room" case); anchoring for continual learning (L2-SP or EWC) with a champion/challenger gate, so nothing learned live reaches the floor untested; a sensitivity test of the density field's decay rate; the small-map diagnostic; corridor back-outs chosen by retreat cost; and a calibration test that hops stay hops.
 

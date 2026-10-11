@@ -210,6 +210,7 @@ class GNNPolicy(nn.Module):
         encoder_mode: str = "flat",
         base_feature_dim: Optional[int] = None,
         density_diamond_mask: Optional[np.ndarray] = None,
+        learner: bool = False,
     ):
         super().__init__()
 
@@ -338,6 +339,14 @@ class GNNPolicy(nn.Module):
             for _ in self.reward_heads
         ])
 
+        # LEARNER HEAD (step 3a, V2_The_Conflict_Ladder.md). Learns RULES'
+        # judgement -- the action the ladder chose -- from every RULES-decided
+        # step. Built only when switched on, so older checkpoints still load.
+        self.learner_head = (nn.Sequential(nn.Linear(final_dim, hidden_dim), nn.ReLU(),
+                                           nn.Linear(hidden_dim, action_size))
+                             if learner else None)
+        self.last_learner_logits = None
+
         # Head weights used ONLY for action selection, never for the loss. Kept as
         # a buffer (not a parameter) so they are saved with the checkpoint but not
         # learned -- they express what you want prioritised, which is a design
@@ -412,6 +421,11 @@ class GNNPolicy(nn.Module):
         # Weighted sum over heads for action selection: [B, N, action_size]
         w = self.head_weights.view(1, 1, -1, 1)
         q_values = (q_per_head * w).sum(dim=2)
+        if self.learner_head is not None:
+            # h.detach(): the Learner READS the trunk but never trains it, so its
+            # lessons cannot move a Q-value (design principle 7, "values stay
+            # honest" -- the margin teacher broke exactly that).
+            self.last_learner_logits = self.learner_head(h.detach())
 
         # Decode Stability (Global)
         # Mean pool over nodes to get graph representation
@@ -861,6 +875,13 @@ class GNNAgent:
         teacher_margin: float = 0.2,
         teacher_weight: float = 0.0,
         train_recovery: bool = True,
+        learner_beta: float = 0.0,
+        learner_weight: float = 0.0,
+        learner_nudge: str = "logprob",
+        learner_beta_mode: str = "fixed",
+        learner_beta_scale: float = 1.0,
+        learner_gap_window: int = 5000,
+        learner_gap_min: int = 200,
         lr: float = 0.0003,
         gamma: float = 0.95,
         buffer_capacity: int = 15000,
@@ -920,6 +941,40 @@ class GNNAgent:
         # gradient and -- the point -- its drifting error signal no longer flows
         # into the trunk the fleet heads share. It still runs and is still logged.
         self.train_recovery = bool(train_recovery)
+        # LEARNER HEAD (step 3a). weight: its supervised loss (reaches only its
+        # own layers). beta: how strongly it nudges a choice, and ONLY for
+        # fleets inside a conflict; free traffic is decided by the three
+        # consequence heads alone. Both 0 = off, and no head is built.
+        self.learner_beta = float(learner_beta)
+        self.learner_weight = float(learner_weight)
+        self.last_learner_loss = 0.0
+        self.last_learner_agree = 0.0
+        self.last_learner_n = 0.0
+        # HOW the Learner nudges (learner_run1 lesson). "logprob": Q + beta x
+        # log-probability -- unbounded, so a confident Learner outweighed the
+        # heads and changed 82-89% of conflicted choices at beta 0.3. "prob":
+        # Q + beta x probability (0..1) -- its pull can never exceed beta, like a
+        # fourth head with a fixed weight beside the heads' 6:4:1.
+        self.learner_nudge = str(learner_nudge)
+        # Calibration data: for each conflicted greedy choice, the heads' own gap
+        # between their best and second-best option (combined Q). beta near the
+        # typical gap = the Learner decides near-ties, never clear preferences.
+        self.learner_q_gaps: List[float] = []
+        # BETA TIED TO THE HEADS' RUNNING GAP (learner_run2 lesson). A fixed beta
+        # calibrated on short runs (heads' gap ~0.1) was twice the gap of a
+        # trained network (~0.05), so the Learner flipped 25-37% of conflicted
+        # choices instead of <20%. "gap": beta = scale x the median of the last
+        # `window` best-vs-second-best gaps, so its full pull always equals the
+        # heads' TYPICAL gap -- it decides close calls only, however close the
+        # heads' preferences get. Until `min` gaps are seen, the fixed beta is
+        # used (warm start). "fixed": the old behaviour.
+        self.learner_beta_mode = str(learner_beta_mode)
+        self.learner_beta_scale = float(learner_beta_scale)
+        self.learner_gap_min = int(learner_gap_min)
+        self._gap_window = deque(maxlen=int(learner_gap_window))
+        self.last_beta_eff = float(self.learner_beta)
+        self.learner_used = 0        # greedy choices made inside a conflict
+        self.learner_changed = 0     # ...where the Learner changed the choice
         # Per-episode diagnostics (read by the runner): the value level of each
         # head -- mean Q of the actions taken, over active fleets -- and the
         # recovery head's mean Q. Losses hint at drift; these measure it.
@@ -951,6 +1006,7 @@ class GNNAgent:
             encoder_mode=encoder_mode,
             base_feature_dim=base_feature_dim,
             density_diamond_mask=density_diamond_mask,
+            learner=bool(learner_beta > 0 or learner_weight > 0),
         ).to(DEVICE)
 
         self.target_net = GNNPolicy(
@@ -965,6 +1021,7 @@ class GNNAgent:
             encoder_mode=encoder_mode,
             base_feature_dim=base_feature_dim,
             density_diamond_mask=density_diamond_mask,
+            learner=bool(learner_beta > 0 or learner_weight > 0),
         ).to(DEVICE)
 
         self.reward_heads = list(reward_heads) if reward_heads else ["total"]
@@ -1190,6 +1247,7 @@ class GNNAgent:
         eps_min: Optional[float] = None,
         eps_peak: Optional[float] = None,
         valid_action_masks: Optional[np.ndarray] = None,
+        conflict_mask: Optional[np.ndarray] = None,
     ) -> Optional[np.ndarray]:
         """
         Choose actions for all nodes.
@@ -1318,6 +1376,39 @@ class GNNAgent:
                     # edge, only a wasted step if it does.
                     q_values_np = np.where(valid_action_masks, q_values_np, -np.inf)
 
+                # LEARNER NUDGE (step 3a): only for fleets inside a conflict, add
+                # beta x the Learner's log-probability over valid actions. Free
+                # traffic is untouched. The nudged scores are what core reuses
+                # for a vetoed fleet's second choice, so they stay consistent.
+                lg_t = self.policy_net.last_learner_logits
+                if (self.learner_beta > 0 and conflict_mask is not None
+                        and lg_t is not None and np.any(conflict_mask)):
+                    lg = lg_t.squeeze(0).cpu().numpy()
+                    ok = (valid_action_masks if valid_action_masks is not None
+                          else np.ones_like(lg, dtype=bool))
+                    lgm = np.where(ok, lg, -1e9)
+                    mx = lgm.max(axis=1, keepdims=True)
+                    logp = lgm - (mx + np.log(np.exp(lgm - mx).sum(axis=1, keepdims=True)))
+                    q_only = q_values_np.argmax(axis=1)
+                    cm = np.asarray(conflict_mask, dtype=bool)
+                    greedy = np.zeros(len(cm), dtype=bool)
+                    greedy[np.asarray(greedy_indices, dtype=int)] = True
+                    used = cm & greedy
+                    if used.any():
+                        qs = np.sort(q_values_np[used], axis=1)
+                        self.learner_q_gaps.extend(
+                            float(g) for g in (qs[:, -1] - qs[:, -2]) if np.isfinite(g))
+                    bonus = np.exp(logp) if self.learner_nudge == "prob" else logp
+                    q_values_np = q_values_np.copy()
+                    if used.any():
+                        self._gap_window.extend(
+                            float(g) for g in (qs[:, -1] - qs[:, -2]) if np.isfinite(g))
+                    beta = self._effective_beta()
+                    self.last_beta_eff = beta
+                    q_values_np[cm] = q_values_np[cm] + beta * bonus[cm]
+                    self.learner_used += int(used.sum())
+                    self.learner_changed += int((used & (q_values_np.argmax(axis=1) != q_only)).sum())
+
                 all_actions = q_values_np.argmax(axis=1)
 
                 # Only update actions for active nodes that are EXPLOITING this
@@ -1345,6 +1436,13 @@ class GNNAgent:
             self.last_q_values = None
 
         return actions
+
+    def _effective_beta(self) -> float:
+        """The Learner's strength this step: the fixed beta, or (mode "gap") the
+        heads' running median gap x scale, once enough gaps have been seen."""
+        if self.learner_beta_mode == "gap" and len(self._gap_window) >= self.learner_gap_min:
+            return float(self.learner_beta_scale * np.median(self._gap_window))
+        return float(self.learner_beta)
 
     def learn(self, node_ids: Optional[List[int]] = None) -> float:
         """
@@ -1422,6 +1520,8 @@ class GNNAgent:
         # Current Q, per head: q_per_head is [B, N, K, A]
         q_values, curr_stability, q_per_head = self.policy_net(
             node_feats, adjs, node_mask=real_mask)
+        # Captured NOW: later forward passes (next states) overwrite it.
+        cur_learner_logits = self.policy_net.last_learner_logits
         actions_idx = actions.unsqueeze(-1).unsqueeze(-1).expand(B, N, K, 1)
         q_taken_per_head = q_per_head.gather(3, actions_idx).squeeze(-1)  # [B, N, K]
 
@@ -1614,6 +1714,30 @@ class GNNAgent:
             self.last_teacher_share = 0.0
             self.last_teacher_n = 0.0
 
+        # --- 1d. LEARNER HEAD (step 3a) ---
+        # Cross-entropy toward the action RULES chose, on RULES-decided fleets
+        # only (the teacher_mask the buffer already carries: L0 orders, retrace
+        # and corridor back-outs). Over valid actions, plus the chosen one so its
+        # probability is always defined. Trains the Learner's own layers only.
+        learner_loss = None
+        self.last_learner_loss = self.last_learner_agree = self.last_learner_n = 0.0
+        if (cur_learner_logits is not None and teacher_masks is not None
+                and valid_masks is not None):
+            taught = teacher_masks * active_mask
+            n_t = float(taught.sum().item())
+            if n_t > 0:
+                allowed = valid_masks.bool() | F.one_hot(
+                    actions, cur_learner_logits.shape[-1]).bool()
+                lg = torch.where(allowed, cur_learner_logits,
+                                 torch.full_like(cur_learner_logits, -1e4))
+                lp_a = F.log_softmax(lg, dim=2).gather(2, actions.unsqueeze(-1)).squeeze(-1)
+                learner_loss = -(lp_a * taught).sum() / n_t
+                with torch.no_grad():
+                    agree = float(((lg.argmax(dim=2) == actions).float() * taught).sum().item()) / n_t
+                self.last_learner_loss = float(learner_loss.item())
+                self.last_learner_agree = agree
+                self.last_learner_n = n_t
+
         # --- 1b. RECOVERY HEAD TD LOSS ---
         #
         # WITHOUT THIS THE HEAD IS NEVER TRAINED. It was built, wired into
@@ -1677,6 +1801,8 @@ class GNNAgent:
         loss = q_loss + (self.stability_coef * stability_loss)
         if self.train_recovery:
             loss = loss + recovery_loss
+        if learner_loss is not None and self.learner_weight > 0:
+            loss = loss + self.learner_weight * learner_loss
         # Teacher margin: added only when switched on and something was taught
         # in this batch. Off, `loss` is exactly the expression above.
         if teacher_loss is not None:
@@ -1700,8 +1826,20 @@ class GNNAgent:
         # per-transition active_mask on the Q-loss now does the job correctly and
         # at the right point in the pipeline.
 
-        # Gradient Clipping
-        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
+        # Gradient Clipping. The Learner head is clipped ON ITS OWN. One global
+        # norm across every parameter let the Learner's large supervised
+        # gradient shrink the trunk's and the Q-heads' updates -- it never pushed
+        # on a value, but it turned the volume down on them (caught by
+        # test_learner_head.py). Separate limits: no side door. Learner off:
+        # exactly the old single clip over the same parameters.
+        _lh = self.policy_net.learner_head
+        if _lh is None:
+            torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
+        else:
+            _lids = {id(p) for p in _lh.parameters()}
+            torch.nn.utils.clip_grad_norm_(
+                [p for p in self.policy_net.parameters() if id(p) not in _lids], 1.0)
+            torch.nn.utils.clip_grad_norm_(_lh.parameters(), 1.0)
 
         # Update weights (frozen nodes' don't change)
         self.optimizer.step()

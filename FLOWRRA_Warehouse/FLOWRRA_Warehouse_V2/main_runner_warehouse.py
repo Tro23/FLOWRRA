@@ -426,6 +426,12 @@ def main():
             f"('conv','channels') or ('flat','affordance').")
 
     _edim = int(CONFIG["gnn"].get("edge_feature_dim", 0))
+    _lad = (CONFIG.get("conflict", {}) or {}).get("ladder", {}) or {}
+    if _lad.get("enabled") and _lad.get("pair_relations"):
+        _edim += 6                     # 3c pair relations ride after the base edges
+    logger.info(f"edges: {_edim} per connection | pair_relations="
+                f"{bool(_lad.get('enabled') and _lad.get('pair_relations'))} | "
+                f"next_state_edge_features={bool(CONFIG['gnn'].get('next_state_edge_features', False))}")
     logger.info(
         f"flags | encoder={_enc} output_mode={_omode} edge_dim={_edim} "
         f"adjacency={CONFIG['proximity'].get('adjacency_metric')} "
@@ -437,6 +443,7 @@ def main():
     # TEACHER MARGIN (agent_warehouse.py, learn() section 1c). Absent from the
     # config = off, exactly as before; the diagnostics are logged either way.
     _tmc = CONFIG["training"].get("teacher_margin", {}) or {}
+    _lrn = CONFIG["training"].get("learner", {}) or {}
     _teacher_on = bool(_tmc.get("enabled", False))
     agent = GNNAgent(
         node_feature_dim=input_dim, edge_feature_dim=_edim,
@@ -453,6 +460,13 @@ def main():
         teacher_margin=float(_tmc.get("margin", 0.2)),
         teacher_weight=(float(_tmc.get("weight", 0.01)) if _teacher_on else 0.0),
         # The ladder parks the learned recovery head: frozen, not trained.
+        learner_beta=(float(_lrn.get("beta", 0.3)) if _lrn.get("enabled") else 0.0),
+        learner_weight=(float(_lrn.get("weight", 1.0)) if _lrn.get("enabled") else 0.0),
+        learner_nudge=str(_lrn.get("nudge", "logprob")),
+        learner_beta_mode=str(_lrn.get("beta_mode", "fixed")),
+        learner_beta_scale=float(_lrn.get("beta_scale", 1.0)),
+        learner_gap_window=int(_lrn.get("gap_window", 5000)),
+        learner_gap_min=int(_lrn.get("gap_min", 200)),
         train_recovery=not bool(((CONFIG.get("conflict", {}) or {}).get("ladder", {}) or {}).get("enabled", False)),
         dropout=CONFIG["gnn"]["dropout"], lr=CONFIG["gnn"]["learning_rate"],
         gamma=CONFIG["training"]["gamma"],
@@ -509,6 +523,11 @@ def main():
                 + f" | shadow={bool(_lc.get('shadow', False))}"
                 + f" | retrace={bool(_lc.get('retrace', False))}"
                   f" (grace={_lc.get('grace_checks', 1)}, trail={_lc.get('trail_length', 8)})")
+    logger.info(f"learner head: enabled={bool(_lrn.get('enabled', False))} "
+                f"beta={_lrn.get('beta')} weight={_lrn.get('weight')} nudge={_lrn.get('nudge', 'logprob')} "
+                f"beta_mode={_lrn.get('beta_mode', 'fixed')} beta_scale={_lrn.get('beta_scale', 1.0)}"
+                + (" | nudges conflicted fleets only, never trains the trunk"
+                   if _lrn.get("enabled") else ""))
     _rcc = CONFIG["training"].get("rung_costs", {}) or {}
     logger.info(f"rung costs: enabled={bool(_rcc.get('enabled', False))} "
                 f"c1={_rcc.get('c1_per_hop')}/hop c2={_rcc.get('c2_pullover')} "
@@ -551,6 +570,8 @@ def main():
         agent.reset_episode_state()
 
         ep_reward, hl, dg = 0.0, [], []
+        _lu0, _lc0 = agent.learner_used, agent.learner_changed
+        agent.learner_q_gaps.clear()
         for _ in range(args.max_steps):
             ep_reward += env.step(episode_step=ep, total_episodes=args.episodes)
             if len(agent.memory) >= agent.batch_size:
@@ -568,7 +589,10 @@ def main():
                            "loss_teacher": agent.last_teacher_loss,
                            "teacher_agree": agent.last_teacher_agree,
                            "teacher_share": agent.last_teacher_share,
-                           "teacher_n": agent.last_teacher_n})
+                           "teacher_n": agent.last_teacher_n,
+                           "learner_loss": agent.last_learner_loss,
+                           "learner_agree": agent.last_learner_agree,
+                           "learner_n": agent.last_learner_n})
             if env.is_episode_over():
                 break
 
@@ -632,6 +656,17 @@ def main():
                 f"{100.0 * env.loop.total_collisions / max(1, est['stream_deliveries']):.1f} "
                 f"| orders within ±{est['stream_order_window']} floors (mean gap {est['stream_order_floor_gap_mean']:.2f}) "
                 f"| by quarter {est['stream_deliv_q1']}/{est['stream_deliv_q2']}/{est['stream_deliv_q3']}/{est['stream_deliv_q4']}")
+        if "stream_book_orders" in est:
+            # ORDER BOOK: the fixed workload's own measures (efficiency is not
+            # defined here: robots wait at the docks for work by design).
+            _done = est["stream_book_done_step"]
+            logger.info(
+                f"          book | delivered {est['stream_book_delivered']} of {est['stream_book_orders']} "
+                f"({est['stream_book_fill'] * 100:.0f}%) "
+                + (f"| all done at step {_done} " if _done >= 0 else "| not all done ")
+                + f"| lead mean {est['stream_book_lead_mean']:.0f} / p90 {est['stream_book_lead_p90']:.0f} steps "
+                f"| robots busy {est['stream_book_busy'] * 100:.0f}% "
+                f"| {est['stream_book_per_robot']:.2f} per 1,000 robot-steps")
         if "path_views" in est:
             logger.info(
                 f"         paths | contested {est['path_contested_pct']:.1f}% of views "
@@ -673,7 +708,7 @@ def main():
         row.update({k: v for k, v in est.items()
                     if k.startswith(("incomplete_", "hops_", "sep_", "orders_",
                                      "tier1_", "tier2_", "recurrence_", "doorstep_", "start_hops_",
-                                     "steps_held_", "steps_waiting_", "wave_", "ladder_",
+                                     "steps_held_", "steps_waiting_", "wave_", "ladder_", "obstacle_",
                                      "convoy_", "held_pair_", "rwd_", "path_", "stream_", "choice_",
                                      "preempt_", "conflict_", "watch_", "corridor_"))})
         row.update({f"loss_{h}": mean_hl[h] for h in heads})
@@ -684,6 +719,22 @@ def main():
         # Teacher margin: agreement and loss are averaged over TAUGHT fleets, so
         # a learning step whose batch held none does not drag them toward 0.
         row.update(_tsum)
+        # Learner head (step 3a): loss and agreement weighted by taught fleets;
+        # used = conflicted greedy choices it nudged, changed = where it won.
+        _ln = sum(x.get("learner_n", 0.0) for x in dg)
+        row.update({
+            "learner_loss": (sum(x["learner_loss"] * x["learner_n"] for x in dg) / _ln) if _ln else 0.0,
+            "learner_agree": (sum(x["learner_agree"] * x["learner_n"] for x in dg) / _ln) if _ln else 0.0,
+            "learner_n": _ln,
+            "learner_used": agent.learner_used - _lu0,
+            "learner_changed": agent.learner_changed - _lc0,
+            "learner_beta_eff": float(getattr(agent, "last_beta_eff", 0.0)),
+            # The heads' best-vs-second-best gap in conflicted choices: what
+            # beta is calibrated against (bounded nudge).
+            **({f"learner_qgap_p{q}": float(np.percentile(agent.learner_q_gaps, q))
+                for q in (25, 50, 75)} if agent.learner_q_gaps else
+               {f"learner_qgap_p{q}": 0.0 for q in (25, 50, 75)}),
+        })
         logs.append(row)
 
         if ep % 5 == 0:

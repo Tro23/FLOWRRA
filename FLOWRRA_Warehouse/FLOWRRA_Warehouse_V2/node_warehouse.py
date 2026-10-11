@@ -168,6 +168,16 @@ def assign_goals_optimally(
 # carries the same width. Appended LAST so no existing feature moves.
 HOLON_PERCEPTION = False
 
+# LADDER CONTEXT (step 3b, V2_The_Conflict_Ladder.md): seven values that let a
+# fleet SEE the conflict ladder -- in a wait-for cycle (0/1), how long it has
+# been in conflict (steps / T, capped at 1), its group's rung (one-hot L0..L3,
+# all zero outside any conflict), and whether its side is the cheaper one to
+# back out (my retreat / (mine + theirs); below 0.5 = mine is cheaper, 0.5 =
+# no cycle or no information). Set by FLOWRRA at construction, like
+# HOLON_PERCEPTION, so the probe that measures the state width sees it too.
+# Appended LAST so no existing feature moves.
+LADDER_CONTEXT = False
+
 # NODE-ALIGNED MOVES (CONFLICT_DESIGN.md; set by core from
 # conflict.node_aligned_moves). Braking makes step sizes uneven, which leaves
 # fleets out of phase with the grid, and two things then go wrong:
@@ -366,6 +376,11 @@ class FleetNode:
     sf_battery: float = 1.0
     sf_local_entropy: float = 1.0
     sf_throughput_t: float = 1.0
+    # Ladder context (step 3b), written by FLOWRRA each step; see LADDER_CONTEXT.
+    lc_in_cycle: float = 0.0
+    lc_conflict_frac: float = 0.0
+    lc_rung: int = -1
+    lc_cheaper: float = 0.5
     ray_origin_recovered: int = 0
     ray_origin_blind: int = 0
     # Ray information content, accumulated per cast. The question these answer:
@@ -805,12 +820,29 @@ class FleetNode:
             proposed_pos = self.current_pos + (ACTION_DELTAS[action] * reference_speed)
             if not self.is_structurally_valid(proposed_pos, action):
                 continue
-            if obstacles:
-                cell = tuple(int(round(float(v))) for v in proposed_pos)
-                if cell in obstacles:
-                    continue          # hard veto: never drive into a human
+            if obstacles and self._entering_cell(action) in obstacles:
+                continue              # hard veto: never drive into a human
             mask[action] = True
         return mask
+
+    def _entering_cell(self, action: int) -> Tuple[int, int, int]:
+        """The grid cell a move heads INTO: the next node along the move's axis.
+
+        FIXED 2026-10-11 (found by test_obstacles_integration.py). The veto used
+        to round the half-step position, and Python rounds halves to EVEN:
+        from x = 2, half a step toward 3 is 2.5, and round(2.5) = 2, the fleet's
+        OWN cell. So from every even coordinate (moving up) or odd one (moving
+        down) the veto checked the wrong cell and let a fleet drive halfway into
+        a human. Obstacles had never been switched on in a run, so it never
+        showed. Now: the next whole node in the direction of travel, whatever
+        the fleet's position along the edge or its speed."""
+        d = ACTION_DELTAS[action]
+        ax = int(np.argmax(np.abs(d)))
+        c = float(self.current_pos[ax])
+        nxt = math.floor(c + 1e-9) + 1 if d[ax] > 0 else math.ceil(c - 1e-9) - 1
+        cell = [int(math.floor(float(v) + 0.5)) for v in self.current_pos]
+        cell[ax] = int(nxt)
+        return tuple(cell)
 
     def sense_6_axis_rays(self, all_fleets: List["FleetNode"]) -> Tuple[
             np.ndarray, np.ndarray, np.ndarray,
@@ -1232,7 +1264,16 @@ class FleetNode:
         if HOLON_PERCEPTION:
             state_components.append(np.array(
                 [float(getattr(self, "sf_holon_integrity", 1.0))], dtype=np.float32))
-
+        if LADDER_CONTEXT:
+            rung = np.zeros(4, dtype=np.float32)
+            r = int(getattr(self, "lc_rung", -1))
+            if 0 <= r <= 3:
+                rung[r] = 1.0
+            state_components.append(np.concatenate([
+                np.array([float(getattr(self, "lc_in_cycle", 0.0)),
+                          float(getattr(self, "lc_conflict_frac", 0.0))], dtype=np.float32),
+                rung,
+                np.array([float(getattr(self, "lc_cheaper", 0.5))], dtype=np.float32)]))
         return np.concatenate(state_components).astype(np.float32)
 
     def state_layout(self) -> Dict[str, Tuple[int, int]]:
@@ -1267,6 +1308,12 @@ class FleetNode:
         ]
         if self.use_orientation:
             widths.append(("heading", 1))
+        # In get_state_vector()'s order. The holon value was appended there but
+        # missing here, so any block after it would have been misplaced.
+        if HOLON_PERCEPTION:
+            widths.append(("holon_integrity", 1))
+        if LADDER_CONTEXT:
+            widths.append(("ladder_context", 7))
 
         layout: Dict[str, Tuple[int, int]] = {}
         cursor = 0

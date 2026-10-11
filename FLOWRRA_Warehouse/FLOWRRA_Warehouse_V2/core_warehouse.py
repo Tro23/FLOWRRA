@@ -32,6 +32,9 @@ import node_warehouse as _node_module
 # each episode's own wave RNG (errors.waves.seed, count), so every episode gets
 # a different wave schedule while a rerun with the same seed gets the same ones.
 _WAVE_EPISODES = 0
+# OBSTACLES: the same idea for humans and debris (obstacles.seed, count). Was
+# CONFIG.get("seed"), which is None, so placements differed on every rerun.
+_OBSTACLE_EPISODES = 0
 
 class FLOWRRA:
     """
@@ -543,16 +546,30 @@ class FLOWRRA:
         # Optional population of humans and debris. None when the feature is
         # off, which is the default. See obstacles_warehouse.py.
         from obstacles_warehouse import from_config as _obstacles_from_config
+        _ocfg = CONFIG.get("obstacles", {}) or {}
+        _oseed = None
+        if _ocfg.get("enabled", False):
+            global _OBSTACLE_EPISODES
+            _OBSTACLE_EPISODES += 1
+            _oseed = int(_ocfg.get("seed", 0)) * 1_000_003 + _OBSTACLE_EPISODES
         self.obstacle_field = _obstacles_from_config(
-            self.G, self.grid_pos_dict, CONFIG, seed=CONFIG.get("seed"))
+            self.G, self.grid_pos_dict, CONFIG, seed=_oseed)
         if self.obstacle_field is not None:
             # Keep clear of fleet starts and every goal in the pool: an episode
             # must not begin with a fleet standing inside a human, or with a
-            # goal nobody can reach.
+            # goal nobody can reach. In "cleanup" mode this is also where debris
+            # may never appear, so it adds every stream order and every dock with
+            # its neighbours (the re-entry gate needs those free).
             _avoid = {tuple(np.round(m["start_pos"]).astype(int))
                       for m in fleet_missions if "start_pos" in m}
             _avoid |= {tuple(np.round(p).astype(int))
                        for p in (goal_pool or {}).values()}
+            _inv = {v: tuple(k) for k, v in self.grid_pos_dict.items()}
+            _keep = set(getattr(self, "_order_bank", []) or [])
+            for _d in getattr(self, "_exit_set", set()) or set():
+                _keep.add(_d)
+                _keep.update(self.G.neighbors(_d))
+            _avoid |= {_inv[i] for i in _keep if i in _inv}
             self.obstacle_field.reset(avoid=_avoid)
             self.static_obstacles = self.obstacle_field.occupied_cells()
         self.static_obstacle_severity = float(
@@ -918,6 +935,36 @@ class FLOWRRA:
         self.rung_heading_in = float(_rc.get("heading_in_weight", 0.25))
         self._rung_pending: Dict[str, float] = {}
         self._seen_corridor_orders: Set[str] = set()
+        # SELF-INITIATED BACK-OFFS (step 3a measurement): a fleet inside a
+        # conflict, moving on its OWN policy (no RULES or ladder order, no hold),
+        # whose move took it further from its goal. The reflex the Learner and
+        # the rung costs are meant to grow; RULES-ordered retreats should fall.
+        self._backoff_watch: Dict[str, Tuple[float, Any]] = {}
+        self.rule_orders_vetoed = 0     # RULES/ladder orders refused: not a valid move
+        # 3b LADDER CONTEXT (ladder.context): what each fleet SEES of the
+        # ladder, in its state. Computed at the start of a step (for the choice)
+        # and again after the move (for the stored next state, from the same
+        # after-move verdicts the reward uses), so a next state never carries
+        # the previous step's context.
+        self.ladder_context = self.ladder_on and bool(_lcfg.get("context", False))
+        _node_module.LADDER_CONTEXT = self.ladder_context
+        self._conflict_steps: Dict[str, int] = {}
+        self._l3_recent: Dict[str, int] = {}
+        self._verdicts_after: Optional[Tuple[int, Any]] = None
+        # 3c PAIR RELATIONS (ladder.pair_relations): six more numbers on every
+        # attention connection, from the path verdicts -- head-on, contested,
+        # blocked, following (one-hot), "I wait for this neighbour", "it waits
+        # for me". The two wait channels swap when seen from the other side.
+        self.pair_relations = self.ladder_on and bool(_lcfg.get("pair_relations", False))
+        self.pair_rel_dim = 6 if self.pair_relations else 0
+        # NEXT-STATE EDGE FEATURES (gnn.next_state_edge_features), found while
+        # building 3c: the stored NEXT state kept only the bare adjacency mask,
+        # so every value target was computed on a graph with no pairwise numbers
+        # while every choice used them. On: the next state gets the same edge
+        # features, from the after-move verdicts. Off: exactly the old storage.
+        self.next_state_edges = bool(CONFIG["gnn"].get("next_state_edge_features", False))
+        self.ladder_self_backoffs = 0
+        self.ladder_backoff_watched = 0
         self.rung_stats = {k: 0.0 for k in (
             "l1_events", "l2_events", "l3_events",
             "l1_charged", "l2_charged", "l3_charged")}
@@ -1236,6 +1283,25 @@ class FLOWRRA:
                         "reentry_blocked": 0, "reentry_moved": 0, "reentry_deferred": 0,
                         "cycle_sum": 0, "cycle_n": 0}
         self._deliv_steps: List[int] = []     # step of every delivery (jam detector)
+        # ORDER BOOK (stream.order_book; added 2026-10-11). A FIXED number of
+        # orders per episode, whatever the fleet count: the orders the fleets
+        # start with count toward it, the rest are released at a steady rate
+        # over release_steps, a fleet re-enters only when an order is waiting
+        # (otherwise it waits at its dock), and the episode ends when the whole
+        # book is delivered. The operator's question -- "this many orders this
+        # shift: how long, with how many robots?" -- instead of the closed loop,
+        # where every robot always has an order and the work grows with the fleet.
+        _ob = (self._stream_cfg.get("order_book") or {})
+        self._book = bool(_ob.get("enabled", False))
+        if self._book:
+            self._book_initial = len(self.goal_pool)
+            self._book_total = max(int(_ob.get("orders", 100)), self._book_initial)
+            self._book_release_steps = max(1, int(_ob.get("release_steps", 500)))
+            self._book_released = self._book_initial
+            self._book_release_at: Dict[str, int] = {g: 0 for g in self.goal_pool}
+            self._book_lead: List[int] = []
+            self._book_done_step: Optional[int] = None
+            self._book_idle_steps = 0
         self._init_stream_exits(self._stream_cfg)
         # Floor of every bank goal (goals inside a shaft count as the nearest floor).
         self._goal_floor = {g: self._floor_of(g) for g in self._order_bank}
@@ -1315,6 +1381,18 @@ class FLOWRRA:
               f"{len(exits)} dock(s) ({k} per floor), "
               f"{len(dist)}/{self.G.number_of_nodes()} cells reach a dock.")
 
+    def _book_target(self, step: int) -> int:
+        """Orders released by the end of `step`: the initial ones, then a
+        steady share of the rest, all of them by step release_steps - 1."""
+        extra = self._book_total - self._book_initial
+        frac = min(1.0, (step + 1) / float(self._book_release_steps))
+        return self._book_initial + int(extra * frac)
+
+    def _book_order_waiting(self) -> bool:
+        """An order released and not yet taken by any fleet."""
+        return any(g not in self.claimed_goals and g not in self.targeted_goals
+                   for g in self.goal_pool)
+
     def _floor_of(self, node_id: str) -> int:
         """Index of the floor nearest this node along the vertical axis."""
         z = self._coords_by_id[node_id][self._stream_va]
@@ -1339,6 +1417,13 @@ class FLOWRRA:
                 self._order_queue.pop(i)
                 self.goal_pool[g] = np.array(self._coords_by_id[g], dtype=np.float32)
                 self._sstats["orders"] += 1
+                if dock is None and getattr(self, "_book", False):
+                    # A book order belongs to no dock: its conflict-free cycle
+                    # is nearest dock -> goal -> nearest dock.
+                    _back = self._exit_dist.get(g)
+                    if _back is not None:
+                        self._sstats["cycle_sum"] += 2 * int(_back)
+                        self._sstats["cycle_n"] += 1
                 if dock is not None:
                     self._sstats["gap_sum"] += abs(self._goal_floor[g] - self._floor_of(dock))
                     self._sstats["gap_n"] += 1
@@ -1375,6 +1460,24 @@ class FLOWRRA:
             coords_by_id=self.coords_by_id,
         )
 
+    def _fleet_cell_ids(self) -> Set[str]:
+        """Node ids every fleet on the floor stands on: both cells for a fleet
+        between two (the rules' anchors), else the cell it is rounded to."""
+        out: Set[str] = set()
+        for n in self.nodes:
+            if self.rules is not None:
+                try:
+                    an = self.rules._anchors(n)
+                except Exception:
+                    an = []
+                if an:
+                    out.update(an)
+                    continue
+            nid = self.grid_pos_dict.get(self.density._fleet_cell(n))
+            if nid is not None:
+                out.add(nid)
+        return out
+
     def _stream_left(self, node: FleetNode) -> None:
         """Book-keeping for a fleet leaving the floor at a dock."""
         nid = self.grid_pos_dict.get(self.density._fleet_cell(node))
@@ -1399,8 +1502,17 @@ class FLOWRRA:
                 if n.id not in self._despawning and n.current_goal_id in gone:
                     self._retarget(n)
         self._stream_fulfilled = []
+        if getattr(self, "_book", False):
+            while self._book_released < self._book_target(self.step_count):
+                _g = self._issue_order(None)
+                if _g is None:
+                    break
+                self._book_released += 1
+                self._book_release_at[_g] = self.step_count
         delay = int(self._stream_cfg.get("respawn_delay", 0))
         occupied = {self.density._fleet_cell(n) for n in self.nodes}
+        # A human or debris on a dock blocks re-entry there, like a fleet does.
+        occupied |= {tuple(c) for c in getattr(self, "static_obstacles", set())}
         # DOCK GATE (STREAM_DESIGN.md). Every dock sits inside a two-way
         # corridor, so a fleet re-entering onto a dock beside other traffic
         # starts a head-on standoff there. With the gate, a fleet re-enters
@@ -1426,9 +1538,13 @@ class FLOWRRA:
                        for v in self.G.neighbors(d) if v in self._coords_by_id)
 
         waiting = []
+        _book = getattr(self, "_book", False)
         for rec in self._offfloor:
             if self.step_count - rec["left"] < delay:
                 waiting.append(rec)
+                continue
+            if _book and not self._book_order_waiting():
+                waiting.append(rec)            # no work: wait at the dock
                 continue
             cands = [rec["dock"]]
             if any_dock:
@@ -1457,7 +1573,8 @@ class FLOWRRA:
             self._life[base] = self._life.get(base, 1) + 1
             node = self._new_fleet(f"{base}#{self._life[base]}",
                                    np.array(cell, dtype=np.float32))
-            self._issue_order(rec["dock"])
+            if not _book:                       # the book releases on its own clock
+                self._issue_order(rec["dock"])
             self.nodes.append(node)
             if not self._retarget(node):
                 self.nodes.remove(node)
@@ -1473,6 +1590,8 @@ class FLOWRRA:
                   f"heading for {node.current_goal_id} "
                   f"({self._sstats['orders']} orders issued so far).")
         self._offfloor = waiting
+        if _book:
+            self._book_idle_steps += len(waiting)
         self._sstats["floor_sum"] += len(self.nodes)
         self._sstats["floor_steps"] += 1
 
@@ -1513,6 +1632,37 @@ class FLOWRRA:
                                              if min(3, 4 * t // max(1, self.step_count)) == q)
                for q in range(4)},
             **self._stream_efficiency(),
+            **(self._book_stats() if getattr(self, "_book", False) else {}),
+        }
+
+    def _book_stats(self) -> Dict[str, float]:
+        """stream_book_*: the order book's measures.
+          fill       delivered / book
+          lead       release -> delivery, in steps (mean and 90th percentile)
+          done_step  when the last order of the book was delivered (-1: not all
+                     of it within the episode)
+          busy       share of robot-steps spent on the floor (the rest waiting
+                     at a dock for work)
+          per_robot  deliveries per 1,000 robot-steps, the fleet-size measure:
+                     x 3.6 / seconds-per-step gives orders per robot per hour
+        """
+        lead = self._book_lead
+        d = self._sstats["deliveries"]
+        fleets = int(getattr(self, "_stream_fleets", len(self.nodes)))
+        robot_steps = max(1, fleets * max(1, self.step_count))
+        return {
+            "stream_book_busy": self._sstats["floor_sum"] / robot_steps,
+            "stream_book_per_robot": 1000.0 * d / robot_steps,
+            "stream_book_orders": self._book_total,
+            "stream_book_initial": self._book_initial,
+            "stream_book_released": self._book_released,
+            "stream_book_delivered": d,
+            "stream_book_fill": d / max(1, self._book_total),
+            "stream_book_lead_mean": float(np.mean(lead)) if lead else float("nan"),
+            "stream_book_lead_p90": float(np.percentile(lead, 90)) if lead else float("nan"),
+            "stream_book_done_step": (-1 if self._book_done_step is None
+                                      else int(self._book_done_step)),
+            "stream_book_idle_fleet_steps": self._book_idle_steps,
         }
 
     def _stream_efficiency(self) -> Dict[str, float]:
@@ -1536,6 +1686,14 @@ class FLOWRRA:
         s = self._sstats
         fleets = int(getattr(self, "_stream_fleets", len(self.nodes)))
         speed = float(CONFIG["warehouse"]["base_speed"])
+        if getattr(self, "_book", False):
+            # Not defined under an order book: the ideal assumes every robot
+            # always has work, and with a fixed book robots wait at the docks
+            # by design. The book's own measures replace it (_book_stats).
+            return {"stream_ideal_cycle_hops": float("nan"),
+                    "stream_ideal_deliveries": float("nan"),
+                    "stream_efficiency": float("nan"),
+                    "stream_fleets": fleets}
         if s["cycle_n"] == 0 or self.step_count == 0:
             cyc, ideal, eff = float("nan"), float("nan"), float("nan")
         else:
@@ -1807,7 +1965,7 @@ class FLOWRRA:
                         cells[coords] = (t, float(w))
         return cells
 
-    def _build_edge_features(self, adj: np.ndarray) -> np.ndarray:
+    def _build_edge_features(self, adj: np.ndarray, verdicts=None) -> np.ndarray:
         """
         Turn the binary adjacency into [N, N, 1 + E].
 
@@ -1858,9 +2016,10 @@ class FLOWRRA:
         nearest-peer distance cannot give you.
         """
         n = len(self.nodes)
-        out = np.zeros((n, n, 1 + self.edge_feature_dim), dtype=np.float32)
+        out = np.zeros((n, n, 1 + self.edge_feature_dim + self.pair_rel_dim),
+                       dtype=np.float32)
         out[:, :, 0] = adj
-        if self.edge_feature_dim == 0 or n <= 1:
+        if (self.edge_feature_dim == 0 and self.pair_rel_dim == 0) or n <= 1:
             return out
 
         paths = [self._path_cells(node) for node in self.nodes]
@@ -1918,6 +2077,26 @@ class FLOWRRA:
                     out[i, j, k] = v
                     # Channels 1-3 symmetric; arrival order ANTISYMMETRIC.
                     out[j, i, k] = -v if k == 4 else v
+        if self.pair_rel_dim and verdicts:
+            # 3c: the path verdicts' relation for every warned pair.
+            base = 1 + self.edge_feature_dim
+            kinds = {"head_on": 0, "contested": 1, "blocked": 2, "following": 3}
+            for v in verdicts:
+                k = kinds.get(v.kind)
+                i, j = index.get(v.a), index.get(v.b)
+                if not v.warn or k is None or i is None or j is None:
+                    continue
+                out[i, j, base + k] = out[j, i, base + k] = 1.0
+                waits = []
+                if v.kind == "head_on":
+                    waits = [(v.a, v.b), (v.b, v.a)]
+                elif v.kind == "blocked" and v.blocker:
+                    waits = [(v.a if v.blocker == v.b else v.b, v.blocker)]
+                elif v.kind == "following" and v.follower:
+                    waits = [(v.follower, v.b if v.follower == v.a else v.a)]
+                for x, y in waits:
+                    out[index[x], index[y], base + 4] = 1.0   # x waits for y
+                    out[index[y], index[x], base + 5] = 1.0   # y: "x waits for me"
         return out
 
     def _build_adjacency_graph(self) -> np.ndarray:
@@ -2553,8 +2732,10 @@ class FLOWRRA:
         exactly the old call."""
         if not self.path_warnings:
             return self.loop.peek_conflicts(self.proximity)
+        _v = self._evaluate_conflicts()
+        self._verdicts_after = (self.step_count, _v)   # reused by the ladder context
         return self.loop.peek_conflicts(
-            self.proximity, warn_pairs=self._warn_set(self._evaluate_conflicts()),
+            self.proximity, warn_pairs=self._warn_set(_v),
             radius=self.conflict_settings.radius)
 
     def _warned_pairs(self, radius: float):
@@ -3333,6 +3514,103 @@ class FLOWRRA:
                               self.rung_c1 * max(1, hops) + self.rung_c2)
         self._seen_corridor_orders = set(orders)
 
+    def _ladder_context_update(self, verdicts, advance: bool) -> None:
+        """
+        Write the seven ladder-context values onto every fleet (step 3b).
+          in a cycle   member of a wait-for cycle in these verdicts
+          conflict     steps in conflict / T (capped at 1). advance=True (start of
+                       a step) moves the counter on; advance=False (after the
+                       move, for the stored next state) previews what the next
+                       step will count, without moving it.
+          rung         L3 if the safety net hit it within T steps, else L2 if it
+                       is in a RULES corridor back-out (retreating or a winner),
+                       else L1 if in a retrace order (retreating or the other
+                       side), else L0 if in conflict, else none
+          cheaper      my retreat / (mine + the cheapest other's), from the
+                       trails; 0.5 outside a cycle or without trails
+        T is the L3 window (l3_stuck_steps).
+        """
+        import networkx as nx              # local, as elsewhere in this file
+        T = max(1, int(self.ladder_stuck_steps))
+        W = nx.DiGraph()
+        for v in verdicts:
+            if not v.warn or v.kind not in ("head_on", "blocked", "following", "contested"):
+                continue
+            W.add_node(v.a)
+            W.add_node(v.b)
+            if v.kind == "head_on":
+                W.add_edge(v.a, v.b)
+                W.add_edge(v.b, v.a)
+            elif v.kind == "blocked" and v.blocker:
+                W.add_edge(v.a if v.blocker == v.b else v.b, v.blocker)
+            elif v.kind == "following" and v.follower:
+                W.add_edge(v.follower, v.b if v.follower == v.a else v.a)
+        cyc_of: Dict[str, Set[str]] = {}
+        for c in nx.strongly_connected_components(W):
+            if len(c) >= 2:
+                for f in c:
+                    cyc_of[f] = set(c)
+        inconf = set(W.nodes) | set(self.loop.deadlocked_nodes)
+        corridor: Set[str] = set()
+        for f, od in (getattr(self.rules, "orders", {}) or {}).items():
+            corridor.add(f)
+            corridor |= set(od.get("winners", ()) or ())
+        retrace: Set[str] = set()
+        for f, od in self._retrace.items():
+            retrace.add(f)
+            retrace |= set(od.get("others", ()) or ())
+        by_id = {n.id: n for n in self.nodes}
+        can_cost = self.ladder_retrace and self.rules is not None
+        for n in self.nodes:
+            f = n.id
+            if advance:
+                self._conflict_steps[f] = (self._conflict_steps.get(f, 0) + 1
+                                           if f in inconf else 0)
+                steps = self._conflict_steps[f]
+            else:
+                steps = self._conflict_steps.get(f, 0) + 1 if f in inconf else 0
+            n.lc_conflict_frac = min(1.0, steps / T)
+            n.lc_in_cycle = 1.0 if f in cyc_of else 0.0
+            if self.step_count - self._l3_recent.get(f, -10 ** 9) <= T:
+                n.lc_rung = 3
+            elif f in corridor:
+                n.lc_rung = 2
+            elif f in retrace:
+                n.lc_rung = 1
+            elif f in inconf:
+                n.lc_rung = 0
+            else:
+                n.lc_rung = -1
+            n.lc_cheaper = 0.5
+            if f in cyc_of and can_cost:
+                others = cyc_of[f] - {f}
+                mine = self._retreat_cost(n, others)[0]
+                theirs = min((self._retreat_cost(by_id[g], cyc_of[f] - {g})[0]
+                              for g in others if g in by_id), default=float("inf"))
+                if np.isfinite(mine) and np.isfinite(theirs):
+                    n.lc_cheaper = mine / max(1e-9, mine + theirs)
+                elif np.isfinite(mine):
+                    n.lc_cheaper = 0.0
+                elif np.isfinite(theirs):
+                    n.lc_cheaper = 1.0
+
+    def _ladder_watch_backoffs(self) -> None:
+        """Score last step's watch (positions have moved since), then set this
+        step's: conflicted fleets choosing on their own policy, with their
+        distance to goal and their goal (a new goal is not a back-off)."""
+        by_id = {n.id: n for n in self.nodes}
+        for f, (h0, g0) in self._backoff_watch.items():
+            n = by_id.get(f)
+            if n is not None and n.current_goal_id == g0 and self._hops_to_goal(n) > h0:
+                self.ladder_self_backoffs += 1
+        inconf = set(self.loop.warning_nodes) | set(self.loop.deadlocked_nodes)
+        ordered = set(self._rule_actions) | set(self._retrace)
+        self._backoff_watch = {
+            n.id: (self._hops_to_goal(n), n.current_goal_id) for n in self.nodes
+            if n.id in inconf and n.id not in ordered and n.id not in self.immobile_nodes
+            and self.step_count >= self._yield_until.get(n.id, -1)}
+        self.ladder_backoff_watched += len(self._backoff_watch)
+
     def _rung_vector(self) -> np.ndarray:
         """This step's rung costs per fleet, in node order; clears them."""
         v = np.array([self._rung_pending.get(n.id, 0.0) for n in self.nodes],
@@ -3509,6 +3787,8 @@ class FLOWRRA:
                 mode = 1
                 self._ladder_l3_set = stuck
                 self.ladder_l3_fired += 1
+                for _f in stuck:
+                    self._l3_recent[_f] = self.step_count
                 self._charge_rung("l3", set(stuck), self.rung_c3)
                 self.ladder_l3_fleets += len(stuck)
         elif self.gnn is not None and hasattr(self.gnn, "choose_recovery"):
@@ -3614,6 +3894,8 @@ class FLOWRRA:
         main_runner logs completion off frozen_nodes, so success reporting is
         unaffected by this.
         """
+        if getattr(self, "_book", False) and self._book_done_step is not None:
+            return True                     # the whole order book is delivered
         if getattr(self, "stream", False) or getattr(self, "lifelong", False):
             return False                    # a stream / lifelong run ends only at the horizon
         # If there are open pickups waiting for a rescuer, keep running.
@@ -3681,6 +3963,9 @@ class FLOWRRA:
             **{f"ladder_retrace_{k}": v for k, v in self.ladder_retrace_stats.items()},
             "ladder_retrace_open": len(self._retrace),
             **{f"ladder_rung_{k}": v for k, v in self.rung_stats.items()},
+            "ladder_self_backoffs": self.ladder_self_backoffs,
+            "ladder_rule_orders_vetoed": self.rule_orders_vetoed,
+            "ladder_backoff_watched": self.ladder_backoff_watched,
             "ladder_shadow_cycles_needing_retreat": (
                 self.ladder_shadow_stats["cycles_needing_retreat"]
                 + sum(1 for n in self._shadow_cycles.values() if n >= 2)),
@@ -4055,7 +4340,9 @@ class FLOWRRA:
         # Advance humans BEFORE perception, so the cell set a fleet reacts to is
         # the one it is actually standing next to this step, not last step's.
         if self.obstacle_field is not None:
-            self.obstacle_field.step()
+            # Where the fleets stand (both cells for one between two), so a
+            # human in "cleanup" mode never steps onto a robot.
+            self.obstacle_field.step(fleet_cells=self._fleet_cell_ids())
             self.static_obstacles = self.obstacle_field.occupied_cells()
 
         for _n in self.nodes:
@@ -4093,6 +4380,8 @@ class FLOWRRA:
                 self._ladder_update_trails()
             if self.ladder_shadow or self.ladder_retrace:
                 self._ladder_shadow_step(self._verdicts_start)
+            if self.ladder_context:
+                self._ladder_context_update(self._verdicts_start, advance=True)
             current_integrity = self.loop.check_integrity(
                 self.nodes, self.step_count, self.immobile_nodes, proximity=self.proximity,
                 warn_pairs=self._warn_set(self._verdicts_start),
@@ -4427,10 +4716,15 @@ class FLOWRRA:
         adj_mat = (self._build_adjacency_graph()
                    if self.adjacency_metric == "graph"
                    else self._build_adjacency())
-        if self.edge_feature_dim > 0:
-            adj_mat = self._build_edge_features(adj_mat)
+        if self.edge_feature_dim > 0 or self.pair_rel_dim > 0:
+            adj_mat = self._build_edge_features(
+                adj_mat, verdicts=getattr(self, "_verdicts_start", None))
         
         # GNN Action Selection
+        # Fleets inside a conflict this step: the only ones the Learner head may
+        # nudge (step 3a). Off the ladder, nobody.
+        _inconf = (set(self.loop.warning_nodes) | set(self.loop.deadlocked_nodes)
+                   if self.ladder_on else set())
         actions = self.gnn.choose_actions(
             node_features=node_features_array,
             adj_matrix=adj_mat,
@@ -4438,6 +4732,8 @@ class FLOWRRA:
             total_episodes=total_episodes,
             node_ids=node_ids,
             valid_action_masks=valid_action_masks_array,
+            conflict_mask=(np.array([n.id in _inconf for n in self.nodes])
+                           if _inconf else None),
         )
 
         # The network's masked Q-values for THIS step, [num_nodes, 7], or None
@@ -4484,6 +4780,8 @@ class FLOWRRA:
                               if self.rules is not None and actions is not None else {})
         if self.rules is not None and actions is not None:
             self._charge_corridor_orders()
+        if self.ladder_on and actions is not None:
+            self._ladder_watch_backoffs()
         if self.ladder_retrace and actions is not None:
             # L1 retrace orders outrank RULES' L0 waits. They ride in the same
             # dict, so they execute last, reach held fleets, and are recorded as
@@ -4553,8 +4851,16 @@ class FLOWRRA:
 
             if self.step_count < self._override_until.get(node.id, -1):
                 _gl = node.get_goal_gradient()
-                if np.any(_gl > 0):
-                    action_id = int(np.argmax(_gl)) + 1
+                # Never through an obstacle (FIXED 2026-10-11, found by
+                # test_obstacles_integration.py): a fleet waiting behind a human
+                # counts as stalled, and the gradient points straight through
+                # them. Moves into an obstacle cell are dropped; with none on
+                # the floor this is the same argmax as before, ties included.
+                _obs = node.static_obstacles
+                _up = [a for a in range(1, 7) if _gl[a - 1] > 0
+                       and not (_obs and node._entering_cell(a) in _obs)]
+                if _up:
+                    action_id = int(max(_up, key=lambda a: _gl[a - 1]))
                     self.livelock_overrides += 1
 
             if self.step_count < self._yield_until.get(node.id, -1):
@@ -4812,7 +5118,19 @@ class FLOWRRA:
             # holds overrode the policy 5-12x more often than RULES and kept
             # RULES from ordering the very pairs that looped. Off: holds win.
             if node.id in self._rule_actions and (not _held or self.ladder_on):
-                action_id = self._rule_actions[node.id]
+                _ra = int(self._rule_actions[node.id])
+                # OBSTACLES (found by test_smoke_integration with RULES on).
+                # The obstacle veto lives in the valid-action mask, which only
+                # ever filtered the POLICY's choice; RULES and ladder orders,
+                # applied last, skipped it and could drive a fleet onto an
+                # obstacle. An order that is not a valid move from here becomes
+                # a one-step hold; RULES re-plan next step. Waiting is always
+                # valid. Applies with the ladder off too: no exceptions.
+                if (valid_action_masks_array is not None
+                        and not bool(valid_action_masks_array[i][_ra])):
+                    _ra = 0
+                    self.rule_orders_vetoed += 1
+                action_id = _ra
                 if _held:
                     self.ladder_rules_while_held += 1
                 if "rules" in self.teacher_sources:
@@ -5184,6 +5502,13 @@ class FLOWRRA:
                                     self._stream_fulfilled.append(node.current_goal_id)
                                     self._sstats["deliveries"] += 1
                                     self._deliv_steps.append(self.step_count)
+                                    if getattr(self, "_book", False):
+                                        # Release -> delivery, the order's lead time.
+                                        self._book_lead.append(self.step_count - self._book_release_at.pop(
+                                            node.current_goal_id, self.step_count))
+                                        if (self._book_done_step is None
+                                                and self._sstats["deliveries"] >= self._book_total):
+                                            self._book_done_step = self.step_count
                                     self._leg_started[node.id] = self.step_count
                                 node.current_goal_id = exit_node
                                 node.goal_pos = np.array(
@@ -5531,11 +5856,25 @@ class FLOWRRA:
         # whatever fraction of actions epsilon made random that episode.
         if self.gnn is not None and hasattr(self.gnn, "memory") and actions is not None:
             self._stamp_holon()
+            # ONE after-move evaluation, shared by the ladder context (3b) and the
+            # next state's pair relations (3c): the one _peek() cached for the
+            # reward, or a fresh one if it did not run this step.
+            _va = self._verdicts_after
+            _after_v = None
+            if _va is not None and _va[0] == self.step_count:
+                _after_v = _va[1]
+            elif (self.ladder_context or self.pair_rel_dim) and self.path_warnings:
+                _after_v = self._evaluate_conflicts()
+                self._verdicts_after = (self.step_count, _after_v)
+            if self.ladder_context and _after_v is not None:
+                self._ladder_context_update(_after_v, advance=False)
             next_node_features = []
             for node in self.nodes:
                 next_node_features.append(self._perceive(node))
             next_node_features_array = np.array(next_node_features, dtype=np.float32)
             next_adj_mat = self._build_adjacency()
+            if self.next_state_edges and (self.edge_feature_dim > 0 or self.pair_rel_dim > 0):
+                next_adj_mat = self._build_edge_features(next_adj_mat, verdicts=_after_v)
 
             # TERMINAL means "no fleet can still act", which with error stops is
             # NOT the same as "every fleet succeeded". A permanently stopped

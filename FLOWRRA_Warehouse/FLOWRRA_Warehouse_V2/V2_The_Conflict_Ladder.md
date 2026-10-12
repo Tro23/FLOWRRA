@@ -764,25 +764,167 @@ Each step was built behind its own switch, tested, and run against the step befo
         - **The guard never had to act on this map:** 14 candidate pairs checked over 120 steps for champion and 17 for RULES, none too close. Braking by kind kept everyone apart first. The brake duty cycle fell by more than half for champion (0.046 to 0.019) and by a third for RULES (0.039 to 0.026).
         - **Deliveries:** champion 31, the same as champion+route with safety off; lead time 23.2 steps against 21.5. RULES 30 against 33. With one instance of 120 steps this cannot be told from timing. With less braking, RULES' fleet 21 left the floor at step 16 instead of 18, re-entered first and took order 1510. From there the book went to different robots, and the step-52 failure wave (the same three robots) caught different orders. The 5-seed, 800-step frozen evaluation with the guard on for every arm is what measures it.
         - **What it means for the run.** On this map, at 25 fleets, the network chooses about 2% of moves; everything else is the route. Whether that is enough to learn from depends on how crowded the training floors are: read the route share at 40 and 60 fleets in the shakedown.
-      - Still to run: the 3-episode shakedown.
+      - **The 3-episode shakedown** (`ladder_run2_shake`, cold, 9.8 minutes, no errors, losses small and finite). With 3 episodes the exploration schedule was squeezed: epsilon 0.19, 0.05, 0.01.
+
+        | | Ep 1 | Ep 2 | Ep 3 |
+        | --- | --- | --- | --- |
+        | Map, robots | small, 40 | large, 40 | small, 60 |
+        | Book delivered | 78 of 80 | 80 (all done at step 648) | 80 (all done at step 466) |
+        | Collisions | 0 | 0 | 0 |
+        | Guard: steps stepped in, robots stopped | 51, 46 | 0, 0 | 26, 30 |
+        | Fallback stops, invariant violations | 0, 0 | 0, 0 | 0, 0 |
+        | Route decided | 90% | 98% | 81% |
+        | Lead time, mean (p90), steps | 43 (97) | 119 (257) | 31 (64) |
+        | L3 | 1 | 0 | 3 |
+        | Network proposes moving away near another robot | 63% | 69% | 46% |
+
+        For scale, run 5 (warm, learning on the job) averaged about 13 collisions and 3.4 L3 fires per episode, with a lead time of about 140 steps, 91% of the book, and no book finished within 800 steps. This is 3 episodes on different scenario files, but the gap is far larger than the choice of scenario.
+
+        **What it means.** A network with almost no training already delivers 99% of the book with no collisions, so the route, the bubbles and the guard do most of the work. Two of the proposed predictions (book ≥ 92%, L3 ≤ 3.4) would pass whether or not the network learns anything. What the network still controls is where robots meet: 2 to 19% of moves, a few hundred to a thousand decisions an episode. There, the cold network proposes moving away from its goal half the time or more. The guard and the rules catch that, at the cost of stops and time. So the question for the frozen evaluation becomes: does ladder_run2 beat this barely trained network? The shakedown saved it as `ladder_run2_shake/flowrra_curriculum.pth`. Revised predictions below, agreed before the run.
     - **Two older tests were stale, and are fixed.** `test_conflict_rules.py` and `test_corridor_rules.py` treated "restore the config file" as "every component off", which stopped being true when run 2's config switched the components on. They failed on that, not on the build: `no_classifier`, `no_verdicts`, `no_brake_exemptions` and `off_throttles_the_convoy` on Rohit's machine. Both now spell out "off" (`CONFLICT_OFF`, `SAFETY_OFF`) and isolate the component each test is about. A second stale assumption: they were written when failures were off, and the config now has robot failures, failure waves and people switched on. In the corridor test that showed as `on_both_deliver` (one fleet failed, so only M delivered) and `forwards_equals_reversed` (4 differences). Both tests now also switch failures and people off (`NO_FAILURES`), as when they were written. `test_guard_integration.py`'s requirement that the route decide over half the moves was a guess about its crowded floor (route 28% there); it now requires only that both the route and the network decide some.
     - **Note:** `benchmark_flowrra.py` and `benchmark_all.py` read the config, so with this config the shock benchmark runs with the guard on. Reproducing earlier benchmark numbers needs the safety switches off.
 
-    **Proposed predictions for run 6, ladder_run2 (to be agreed before the run).** 150 episodes, cold; first 25 against last 25 unless said otherwise.
+    **Predictions for run 6, ladder_run2: agreed 12 October, before the run** (revised after the shakedown showed that a barely trained network already meets the old throughput and L3 bars). 150 episodes, cold, started 12 October.
+
+    *During the run.* A cold start opens at the exploration peak: the random-move rate is 0.30 in episode 1, about 0.19 by episode 50, 0.10 by 75 and 0.05 by 100, and 0.01 to 0.02 in the last 25 (a half-Gaussian of width 50 episodes; an earlier draft of this entry said it climbs to 0.30 around episode 37, which was wrong). So first-against-last comparisons mix learning with exploration. These are process checks; the frozen test below is the decision.
 
     | Prediction | Pass if |
     | --- | --- |
-    | Safety by construction | `guard_violations` 0 in every episode; collisions per episode below 0.5 on average (only re-entries and recovery moves can still cause one) |
-    | The reward stops teaching retreat | among the network's own proposals near another robot (`choice_policy_*`), moves away from the goal fall below 20% in the last 25 episodes (run 2: 32%, run 5: 35%) |
-    | The ladder still resolves | L3 per episode in the last 25 no higher than run 5's 3.4 |
-    | Throughput | share of the book delivered in the last 25 at least 92% (run 5 learning on the job: 90.6%) |
+    | Safety by construction | `guard_violations` 0 in every episode, including the first ones at the exploration peak; collisions per episode below 0.5 on average (only re-entries and recovery moves can still cause one) |
+    | The reward stops teaching retreat | among the network's own proposals near another robot (`choice_policy_*`), moves away from the goal fall below 20% in the last 25 episodes (shakedown: 46 to 69%; run 2: 32%; run 5: 35%) |
+    | Nothing gets worse (no-harm, not a claim of learning) | in the last 25: book delivered at least 95% and L3 per episode no higher than run 5's 3.4 |
 
-    **Then frozen, on the same seeded days** (`deploy_eval`, full condition, 5 seeds, guard on for every arm): ladder_run2 (route by default in the env) against champion+route, the decision rule of 3 of 5 measures (delivered, lead time, guard stops, L3, near misses); reported against RULES.
+    Reported, not scored: how often the network's own choice in the clear would differ from the route (shakedown 55 to 61%). It should fall as the network learns from the routed moves, but it cannot reach 0, because the route takes one of several equally short moves.
+
+    **Then frozen, on the same seeded days** (`deploy_eval`, full condition, 2 maps × 25/40/60 fleets × 5 seeds, `--safety on` for every arm, about 3 hours). Arms:
+    - ladder_run2;
+    - **shake3**, the 3-episode network (`ladder_run2_shake/flowrra_curriculum.pth`, kept for this);
+    - the champion (ladder_run1);
+    - RULES.
+
+    Decision rule, 3 of 5 measures (delivered, lead time, guard stops, L3, near misses):
+    - **ladder_run2 against shake3:** did training add anything over the safety layer?
+    - **ladder_run2 against the champion:** did the new reward and conditions beat run 2's?
+    - **RULES** is reported alongside both.
+
+    This separates what the safety layer gives (shake3) from what learning adds on top.
+
+31. **Run 6, ladder_run2: scored (12 October).** 150 episodes, cold, 12.2 hours, no errors. Both maps, 25/40/60 fleets, failures and people on, the order book (80 orders over 400 steps).
+
+    | Prediction | Pass if | Result |
+    | --- | --- | --- |
+    | Safety by construction | `guard_violations` 0 in every episode; collisions below 0.5 per episode | ✅ 0 violations in all 150 episodes and no fallback stops; 2 collisions in 150 episodes (0.013 per episode; run 5: about 13 per episode) |
+    | The reward stops teaching retreat | the network's "move away" proposals near another robot below 20% in the last 25 | ❌ 48% (first 25: 41%) |
+    | Nothing gets worse | book ≥ 95% and L3 ≤ 3.4 in the last 25 | ❌ / ✅ book 93.4%; L3 2.8 |
+
+    **1 pass, 1 fail, 1 split.** The book figure is partly the mix: the last 25 drew 15 episodes with 25 robots, the hardest setting under this failure model. Weighting every map and fleet count equally, deliveries were flat across the run (95.1% in episodes 1–50, 94.8% in 101–150). L3 rose for real, from about 1.0 to 2.5 per episode on the same equal weighting.
+
+    **The safety layer worked; the learning did not.** By 25-episode block:
+
+    | Block | 1 | 2 | 3 | 4 | 5 | 6 |
+    | --- | --- | --- | --- | --- | --- | --- |
+    | Exploration (start of block) | 0.30 | 0.27 | 0.19 | 0.10 | 0.05 | 0.02 |
+    | L3 per episode | 1.08 | 0.84 | 1.44 | 1.48 | 2.20 | 2.80 |
+    | Guard stops per episode | 75 | 73 | 86 | 70 | 117 | 95 |
+    | Network differs from the route in the clear | 54% | 63% | 60% | 62% | 64% | 60% |
+    | "Move away" proposals near another robot | 41% | 41% | 45% | 50% | 41% | 48% |
+    | Delivery head, mean value | 0.29 | 0.96 | 1.40 | 1.68 | 1.82 | 1.99 |
+    | Loss, delivery / efficiency | 0.012 / 0.003 | 0.019 / 0.007 | 0.023 / 0.014 | 0.024 / 0.016 | 0.022 / 0.015 | 0.027 / 0.016 |
+
+    **Diagnosis (survived its first check, not yet proven): the values inflated through moves that experience never corrects.**
+    - **The evidence.** The delivery head pays one delivery, 100 / 70.4 = 1.42 in its units, so its mean value should stay below 1.42 (cold_run22's ceiling). It climbed all run, through 1.42 around episode 70, to 2.13 at episode 150. The reward earned per step stayed flat throughout (delivery about 0.008 per fleet-step in every block). The losses rose with it; Rohit saw this as "gradients more intense than previous runs".
+    - **The proposed mechanism.** It is the one the code documents for impossible moves (cold_run5, warm_run7). Route by default made a new set of never-corrected moves: in the clear, about 85% of moves, the route always takes the one shortest move. The other valid moves are never executed there, so no experience pulls their values back. The learning target takes the network's best move in the next state, which in the clear can be one of those drifted moves. Inflated targets raise the values, which raise the targets. Double DQN does not stop it, because the online and target networks share the drift.
+    - **What fits.** The network's own choice in the clear disagreed with the route more after the first block, although nearly everything it learned from was route moves. Its choices where robots meet stayed close to random. As exploration fell, stand-offs that random moves used to break lasted longer (L3 up).
+    - **What it means for the design.** Principle 7 (values stay honest) was not carried through to route by default. The target should value the policy actually run: the route's move where the route will drive, and the network's best move only where the network decides. That was missed in entry 29.
+    - **Falsification check: the diagnosis survived it (12 October).** If ladder_run1 (run 2, no route by default) had also pushed the delivery value above 1.42, the diagnosis would be wrong. It did not:
+
+      | Run | Route by default | Delivery value, first block → last block (max) | Delivery loss, first → last | Efficiency value, last block |
+      | --- | --- | --- | --- | --- |
+      | Run 2, ladder_run1 (cold, 150 episodes) | off | 0.22 → 0.91 (0.93), levelling off | 0.006 → 0.002 | 0.87 |
+      | Run 5, warm_stream1 (warm, 50 episodes, order stream) | off | 0.89 → 0.90 (1.03) | 0.006 → 0.007 | 0.95 |
+      | Run 6, ladder_run2 (cold, 150 episodes, order stream) | **on** | 0.29 → 1.99 (2.13), still rising | 0.012 → 0.027 | 3.35 |
+
+      Run 2 is the like-for-like comparison: cold, 150 episodes, the same maps. Its values levelled off under the ceiling and its loss fell. Run 5 had the order stream too, so the stream (exits, each robot's own terminal) is not the cause. Of run 6's new switches, route by default is the one that leaves moves untried; the guard stores what was executed, and the presence switch changes only the safety reward. Proof would be a run with the target fixed whose values stay under the ceiling.
+
+    **The harsh episodes.** The worst 8 by deliveries are almost all the large map with 25 robots. 11 to 15 failures in one shift, 40 to 60% of the fleet: episode 39 delivered 53 of 80 with 15 failures. The share of the fleet that failed tracks deliveries (r = −0.62). This is the stress model as designed (about 10 failures a shift whatever the fleet size, 2.5 per robot-hour on the floor), far above a real site; see Next item 5.
+
+    **Predictions for the frozen tests, written before they run.** Every arm has the guard on.
+    - Collisions near zero in every arm, RULES included.
+    - ladder_run2 does **not** beat shake3 on 3 of 5 measures: training added little over the safety layer.
+    - Against the champion, no prediction.
+
+32. **Frozen test, clean condition, guard on for every arm: scored (12 October).** No failures and no people. The same 18 seeded days as entry 26 (2 maps × 25/40/60 fleets × 3 seeds), four arms, 72 runs.
+
+    | | book delivered | lead time, mean / 90th pct (steps) | collisions, all 18 days | L3 per day | guard stops per day | books finished | network differs from the route in the clear |
+    | --- | --- | --- | --- | --- | --- | --- | --- |
+    | RULES | 99.3% | 72 / 154 | 0 | 3.5 | 23 | 14 of 18 | (rules: 0%) |
+    | champion | 99.4% | 75 / 161 | 0 | 3.3 | 143 | 16 of 18 | 14% |
+    | ladder2 | 99.9% | 78 / 169 | 0 | 2.6 | 130 | 16 of 18 | 62% |
+    | shake3 | 99.6% | 76 / 162 | 0 | 2.4 | 141 | 16 of 18 | 58% |
+
+    0 invariant violations and 0 fallback stops in all 72 runs.
+
+    **Prediction: ladder2 does not beat shake3: ✅ confirmed.** No measure differs (p 0.42 to 0.92). 150 episodes of training added nothing measurable over a network trained for 3.
+
+    **The safety layer, against entry 26 on the same days** (guard off then, on now):
+    - **Collisions are gone.** RULES went from 0.44 a day to 0. The champion with route by default went from 4.3 to 0, and without it from 10.9.
+    - **Throughput did not move.** RULES delivered 99.2% then and 99.3% now, at a lead time of 71 then and 72 now. The champion with the route delivered 98.7% at 75 steps, and 99.4% at 75 now.
+    - **The cost is stand-offs.** L3 rose: RULES 2.2 to 3.5, the champion with the route 2.3 to 3.3.
+
+    **Supporting evidence for entry 31's diagnosis.** In the clear, the champion's own choice matches the route 86% of the time: trained without the route, it had to learn to head for its goal. ladder2's matches 38%, no better than shake3's 42%. Its values never learned the way to the goal, even though nearly all it trained on was route moves.
+
+    **RULES is still the best driver where robots meet.**
+    - **Lead time:** 72 steps against ladder2's 78 (p 0.003). On the small map it is 39 against 46 to 47 for every network. On the large map the champion ties it, 104.5 against 105.
+    - **Guard stops:** 23 a day against the networks' 130 to 143 (against ladder2, p 0.016). Its moves rarely need the guard: on the small map 46 a day against 197 to 267.
+
+    **Where the networks beat RULES.** Credit where it is due (Rohit's correction, 12 October):
+    - **Fewer stand-offs.** L3 is 2.4 to 3.3 a day for the networks against 3.5 for RULES. RULES makes the same polite choice on both sides of a head-on meeting and waits for the ladder; the networks' choices break some stand-offs themselves.
+    - **More finished books.** Every network finished the whole book on 16 of 18 days; RULES on 14.
+    - **Slightly more delivered.** ladder2 delivered 99.9% against RULES' 99.3% (p 0.078, not yet firm).
+    - This is the network acting at meetings, from its .pth file. It is shared by all three networks, so it is the contribution of the learned approach; what run 6's training failed to add on top of it is a fault of the training target (entry 31), not of the network.
+    - Its instrumentation found that fault: the per-head values, the agreement with the route, and the choices near other robots.
+
+    **For a run 7.** The champion is the better starting point: honest values, it heads for its goal, it finishes as many books, and its lead time is within 3 steps of RULES. What remains to learn is the meeting itself, and the target is RULES there: lead time on the small map, and moves that do not need the guard.
+
+33. **Frozen test, full condition, guard on for every arm: scored (12 October).** Failures and people on. The same 30 seeded days as entry 27 (2 maps × 25/40/60 fleets × 5 seeds), four arms, 120 runs, about 9.5 failures per shift in every arm.
+
+    | | book delivered | lead time, mean / 90th pct (steps) | collisions, all 30 days | L3 per day | guard stops per day | near misses with people (median) | books finished |
+    | --- | --- | --- | --- | --- | --- | --- | --- |
+    | RULES | 96.2% | 81 / 186 | 0 | 3.6 | 28 | 4.5 | 4 of 30 |
+    | champion | 95.9% | 82 / 191 | 0 | 2.2 | 123 | 4.5 | 2 of 30 |
+    | ladder2 | 95.8% | 85 / 194 | 1 | 3.7 | 127 | 4.0 | 3 of 30 |
+    | shake3 | 95.8% | 86 / 197 | 0 | 2.4 | 160 | 5.5 | 4 of 30 |
+
+    **The safety layer under full stress, against entry 27 on the same days:**
+    - **Collisions:** 1 in 120 shifts, against 0.87 per shift for RULES, 4.7 for the champion with the route and 11.0 without it.
+    - **Deliveries went up for every arm:** RULES from 95.3% to 96.2%, the champion with the route from 95.2% to 95.9%.
+    - **Lead time held or improved:** RULES 80 to 81, the champion with the route 86 to 82.
+
+    **ladder2 against shake3:** no measure differs (p 0.16 to 0.86). The prediction is confirmed in both conditions.
+
+    **The champion ties RULES under full stress:**
+
+    | Measure | Champion | RULES | p |
+    | --- | --- | --- | --- |
+    | Delivered | 95.9% | 96.2% | 0.51 |
+    | Lead time (steps) | 82 | 81 | 0.42 |
+    | Near misses with people | 36.6 | 33.3 | 0.74 |
+    | L3 per day | 2.2 | 3.6 | 0.051 |
+    | Guard stops per day | 123 | 28 | < 0.001 |
+
+    The champion has 40% fewer stand-offs, which is just short of firm, and on the large map it is slightly the faster (115 against 117 steps). RULES still needs the guard about four times less.
+
+    **The one collision, and both of run 6's: a gap in the safety layer.** All three have the same cause:
+    - A robot left with no order mid-floor is parked in place ("frozen, pool exhausted while retargeting").
+    - Parked robots are outside both the guard and the collision check: the guard pairs only robots that are moving this step, and the loop's collision sweep skips parked robots.
+    - Another robot drove onto the parked robot's cell. The collision registered only when the parked robot was recalled for a rescue. This is the sequence in all three cases: run 6, episodes with fleets 192#2/70#2 and 15#2/86#2; deploy, fleets 27#2/37#2.
+
+    So the invariant held for every pair the guard checked, but parked robots were never among them. **The fix:** treat a parked robot as a stationary obstacle in the guard, in the move mask and in the collision check. In the stream, a robot with no work should arguably head for a dock rather than park in an aisle.
 
 **Next.**
 
 1. **`deploy_eval.py` runs** (entries 24 and 26 to 28): all scored.
-2. **ladder_run2, cold: built (entry 30); the tests, the checks and a shakedown on Rohit's machine, then the predictions agreed, then the run.** Train on the fixed movement (entry 25) with three changes, then measure on these same seeded days against RULES and champion+route:
+2. **ladder_run2, cold: done and scored (entry 31).** Safety by construction held for 150 episodes; the network did not learn its job, most likely through value inflation in routed states (ladder_run1's metrics agree: its values stayed under the ceiling). Frozen tests scored (entries 32 and 33): the safety layer took collisions to about zero at no cost in throughput, and the champion ties RULES under full stress. Then, to design and check before any build: ladder_run3, warm from the champion, with two fixes, the honest target (entry 31) and parked robots as obstacles (entry 33), plus lower exploration and possibly fewer failures in training. The heavier-day test (no training needed) can run while that is designed. Next, in this order (Rohit, 12 October): score it; then the frozen test against shake3, the champion and RULES, run as before in two conditions, clean (no failures, no people) and full (both on), with `--safety on` for every arm; then a heavier-day test: the frozen networks on 120 and 160 orders over 400 steps (`deploy_eval --book`), to find where each one breaks. Train on the fixed movement (entry 25) with three changes, then measure on these same seeded days against RULES and champion+route:
    - the approach-aware safety bubble (item 3);
    - a reward that charges approach and collisions, but not presence;
    - route by default during training as well, so the network learns only where robots meet: the one place it still decides, and the place it currently costs collisions.
@@ -793,12 +935,18 @@ Each step was built behind its own switch, tested, and run against the step befo
    - **Head-on:** the gap shrinks a whole hop per step, so it needs 1.5 hops.
    - **A margin above both.** A robot exactly on the edge of the bubble still drives at full speed, and robots often stand on half-hop marks. At exactly 1.0 (following) or 1.5 (head-on), a pair on the edge crashes in one step, so the minimums are about 1.25 and 1.75 hops. A test should prove it before any run: two robots at every half-hop distance, head-on and following, stepped forward, never crashing. Real robots need more again for reaction time and stopping distance.
 
-   **Decided (12 October): the full, approach-aware version.** About 1.25 hops when the other robot is not closing head-on, and about 1.75 head-on, proved by the test before any training. A fixed 1.25 everywhere would let a head-on pair cross from 1.25 to 0.25 apart in one step. Built before the cold run, together with the reward switch (approach and collisions, not presence) and route by default as a core config switch. Reissue with technician retrieval, the low-battery protocol (finish or hand back the order, exit at the dock, charge, return), and failures as a rate per robot-hour (entry 28) are built while the cold run trains.
+   **Decided (12 October): the full, approach-aware version.** About 1.25 hops when the other robot is not closing head-on, and about 1.75 head-on, proved by the test before any training. A fixed 1.25 everywhere would let a head-on pair cross from 1.25 to 0.25 apart in one step. Built before the cold run, together with the reward switch (approach and collisions, not presence) and route by default as a core config switch. Reissue with technician retrieval, the low-battery protocol and failures as a rate per robot-hour (entry 28) were to be built while the cold run trains; on 12 October they were held instead, as deploy-time conditions only (item 5).
 
    **Known issue, to fix with the per robot-hour failures (found 12 October by the corridor test).** Failure injection draws from Python's shared `random`, so which robot fails, and when, can depend on the order the robots are listed in and on anything else that drew from `random` earlier in the step. In the corridor test a failure wave fired at step 6 in the reversed run only. Training and evaluation always list the robots in the same order, so their results are repeatable (`deploy_eval --check` says IDENTICAL), but a failure is not tied to a robot. The fix is the one used for the tabu draws: seed each draw from the episode seed, the robot and the step.
 
    The warning distance sets four things at once: when braking starts, the presence and approach charges in the reward, the network's "peer nearby" input, and the ladder's warning set. Change it with a new training run, not under a frozen checkpoint. The cheap first test is route by default with a smaller radius only (1 to 1.5 hops).
 4. **Two realistic maps** from the 3D MAPF warehouse generator: an Amazon-style single-floor layout that warehouse teams recognise, and a three-level layout to show the complexity.
+5. **Failures, technicians and batteries: held, not built (decided 12 October).** None of this is for training. Training keeps the stress failures, harsher on ourselves on purpose. If time allows, these become deploy-time conditions for a final comparison of the frozen networks against RULES. The network needs nothing new for them: dispatch, exits and re-entries are rules, and a technician on the floor is a person, which it already trains with.
+   - **Failures as a rate per robot-hour**, with two settings: realistic (from published figures for warehouse robots, to be looked up) and stress (today's). A shift is 800 steps, about 13 minutes, so at realistic rates a shift sees almost no failures, which is why the stress setting stays. Each draw is seeded from the episode, the robot and the step, which also fixes the known issue in item 3.
+   - **A technician for every dead robot.** The people model, sent to a dead robot instead of to debris. Half the time the robot is reset in place and goes back into service; half the time it is towed out at the nearest dock (Rohit: 50-50). Either way its cell is freed. Today a dead robot stays on the floor as an obstacle for the rest of the shift: in episode 19 of run 6, 12 of 25 robots failed on the small map, and the floor jammed (10 recoveries, 10 L3, no collisions).
+   - **Human-assisted handover, not reissue** (Rohit). Reissuing an order means re-picking and repacking the goods, which is extra load on production. Instead the technician walks to the dead robot and lifts its load onto the next robot, which FLOWRRA has already sent there. That is all the person does, and no new robot hardware is needed. The measure is the time from failure to the load moving again, against the manual sequence (the technician arrives first, then a replacement is called).
+   - **Low battery, and the dying robot** (Rohit). Robots start the shift at mixed charge levels, as on a real floor mid-shift. Below a threshold, a robot finishes its order if the charge left covers the order plus the trip to a dock. Otherwise it hands the order back to the book and heads for the dock now, charges off the floor, and comes back. A failure can be read the same way: a robot that knows its battery is dying heads for the nearest transfer point, where a person or a machine moves its load to a fresh robot.
+   - **Real-site practice to compare against:** how warehouses handle robot faults today (who responds, how long it takes, how loads are recovered), so the comparison shows what FLOWRRA automates.
 
 Later: L2 pull-over outside corridors (the "no room" case); anchoring for continual learning (L2-SP or EWC) with a champion/challenger gate, so nothing learned live reaches the floor untested; a sensitivity test of the density field's decay rate; the small-map diagnostic; corridor back-outs chosen by retreat cost; and a calibration test that hops stay hops.
 

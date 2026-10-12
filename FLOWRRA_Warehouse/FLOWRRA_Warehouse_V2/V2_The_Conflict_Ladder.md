@@ -921,10 +921,87 @@ Each step was built behind its own switch, tested, and run against the step befo
 
     So the invariant held for every pair the guard checked, but parked robots were never among them. **The fix:** treat a parked robot as a stationary obstacle in the guard, in the move mask and in the collision check. In the stream, a robot with no work should arguably head for a dock rather than park in an aisle.
 
+    **Traced in the code (Rohit's question: a mismatch in information flow between the modules?). Yes, one path is out of date.** Each part has its own idea of what "frozen" means:
+    - **"Frozen" is a pre-stream state.** It was designed to mean "arrived at its goal and parked for good". On that meaning, the collision check, the proximity index (and so the guard and path awareness) and the GNN (`freeze_node`, "a static landmark") all treat a frozen robot as furniture: a density stamp, no hard block.
+    - **The stream already removed it on the delivery path.** When a robot delivers, it now drives out at the nearest dock instead of parking. The comment there names the problem: a parked fleet "leaves only a static density stamp, forever, on a cell somebody wanted"; "this will never move again" is false of a parked robot that might be recalled; "despawning deletes the ambiguous case".
+    - **The retarget path was never updated.** When a robot's order is taken by another robot while it is en route and nothing is left in the pool, it still freezes where it stands, mid-aisle: 131 times in the full test.
+    - **Rescue dispatch can recall a frozen robot** ("RECALLED from retirement"). The furniture comes back to life, and whatever drove onto its cell in the meantime is in a collision.
+    - **The fix, for the run 7 design:** in the stream, the retarget path does what the delivery path does and sends the robot out at the nearest dock. No new state, no change to the guard; the ambiguous case goes away.
+
+34. **Design for run 7, ladder_run3 (13 October): two fixes, then a warm run. Approved in part; open points marked.**
+
+    **Fix 1: honest values (approved).** Value the policy that actually runs.
+    - **The rule.** When a lesson asks "how good is the next state?", it uses, for each robot in that next state:
+      - the network's best move, if the network actually drove that robot (the route did not take it, and no rule, ladder hold or guard stop changed its move);
+      - otherwise the move that was actually made.
+    - **Plumbing.** The move made in the next state is known only when the next step has run. So each step's transition is held one step, completed with the next step's real moves, matched by robot ID (robots leave and enter between steps), and then stored. When a step ends the episode, it is stored at once. After the last step the runner flushes the held transition.
+    - **Storage and learning.** The replay buffer gains one field per robot, "the move made next, or −1 if the network chose". The learning step uses that move wherever it is set, after the masked double-DQN choice.
+    - **Switch.** `training.honest_target`; off is exactly today's code.
+
+    **Fix 2: no frozen robots in the stream (approved).**
+    - **Where.** Three places still freeze a robot mid-aisle: "pool exhausted while retargeting", and two silent ones where a robot's goal is taken as it arrives (the in-loop retarget and the deferred retarget).
+    - **The change.** In the stream they send the robot out at the nearest dock, as the delivery path already does, without counting a delivery. A robot with no reachable dock still parks, and is counted (`stream_parked_no_exit`); no-work exits are counted too.
+    - **Switch.** `stream.no_work_exit`; off is exactly today's code.
+
+    **Tests before any training.**
+    - `test_honest_target.py`:
+      - switch off: targets bit-identical to today's;
+      - a route-driven robot is valued at the route's move, a network-driven robot at the network's best, a guard-stopped robot at waiting;
+      - robots are matched across a roster change;
+      - every transition is stored exactly once.
+    - `test_stream_no_work.py`: the pool runs out mid-stream; the robot drives to a dock and leaves, is never frozen, and counts no delivery.
+    - The existing suite, and `deploy_eval --check` with both switches off, which must reproduce the 12 October check exactly (champion 31 delivered, 0 collisions; RULES 30, 0).
+
+    **Decisions (Rohit, 13 October).**
+    - **A. Start from the champion (ladder_run1).** Yes.
+    - **B. A short dry run first,** to see whether the losses or values blow up. Warm (no `--cold-start`), so the exploration follows the warm Gaussian and the losses can be read against it. Then the run.
+    - **C. Exploration peak 0.05, as run 5.** Yes. Rohit asked whether to raise the floor of 0.01: every time exploration neared it, L3 rose. Answer:
+      - `recovery_policy.exploration_scale` is not the cause. It scales only the recovery head's exploration, and that head is frozen under the ladder.
+      - Fleet exploration is per robot, everywhere, with no exception near conflicts.
+      - The observation is right, though. Near 0.01 the network's choices at a meeting become fully deterministic, so two robots can mirror each other. RULES, fully deterministic, has the most L3 of all (entries 32 and 33), and run 6's L3 rose as exploration fell.
+      - Randomness breaking stand-offs is a crutch: every arm is evaluated at 0.015. The dry run keeps run 5's floor, and its L3 against exploration shows whether the network has learned to break ties itself. If not, the floor or the Learner (below) is the next lever.
+    - **D. Failures at run 5's level.** Yes, so run 5 is the like-for-like comparison.
+    - **E. Book 80 for training.** Yes. Rohit's addition, a top-up, is an open point below.
+
+    **Open point 1: learn RULES' and the guard's judgement directly? (Rohit.)** Rohit's idea: optimise the network towards what RULES and the guard recommend at meetings, since they are now known to be better there.
+    - **The project already has this, built to respect principle 7: the Learner head (step 3a).** A small head reads the shared trunk but never trains it, and learns by plain supervision the move RULES chose; no Q-value moves. At choice time it nudges only robots inside a conflict: score = Q + β × its log-probability.
+    - **Its first form broke principle 7.** The margin teacher pushed Q-values towards RULES, and the values drifted (entry "What happens to the teacher").
+    - **The Learner head lost before, and the reason is now gone.** It lost to the champion in run 4 (5–0 on the small map, entry 21). The note at the time: the Learner speaks only inside conflicts, while the small-map gap looked like routing in free traffic. Route by default now handles free traffic, and the remaining gap to RULES is exactly at meetings (lead time, guard stops), which is where the Learner speaks.
+    - **The guard as a second teacher** is new: a guard stop marks a proposal as unsafe. To consider after the first test.
+    - **It complements Fix 1, it does not replace it.** The Q heads still bootstrap, so without Fix 1 their values inflate whether or not the Learner is on.
+    - **Proposal:** dry run B, the same as dry run A with the Learner on (β 0.1), paired with A, before choosing run 7's settings.
+    - **Decided (Rohit, 13 October): held until the end.** The Learner would also need to learn from the guard and the route to be a fair test, so it comes after run 7. Dry run B is dropped from this plan.
+
+    **Open point 2: a top-up book (Rohit).** When the fleet finishes its 80 orders early, give it more work to use the rest of the shift. Proposed rule, to confirm: whenever everything released so far has been delivered before step 600, release 10 more orders. Orders delivered in 800 steps then measures capacity, uncapped (today 80 orders cap every arm at 360 an hour). Proposed use: the capacity test in `deploy_eval`, in place of the fixed 120- and 160-order days; training keeps the fixed 80. A switch, off by default.
+    - **Decided (Rohit, 13 October): approved as worded,** for the capacity test.
+
+    **Idea for after run 7 (Rohit, 13 October): work from the future.** Now that each transition waits a step, why not decide the present from the future, since path awareness, the route and the guard already look ahead? Recorded with the answer given:
+    - **At decision time, FLOWRRA already decides from predicted futures.**
+      - The route reads the distance to the destination.
+      - Path awareness reads each robot's next 8 route cells.
+      - The guard lets every robot declare its move first, computes where all of them would land, and only then lets anyone move (decide, guard, move).
+      - That is look-ahead, or predictive control. Only predictions are available at that point, never the future itself.
+    - **In learning, information from the actual future flowing back is legitimate and standard.** Every value is learned from what came after (bootstrapping). The honest target goes one step further: it waits to see what the system actually did. "Retrocausality" is fair as a metaphor for this, if the claims use the technical name: hindsight credit assignment. Decisions are made from predicted futures; learning is done from actual futures.
+    - **Two natural extensions, both using the hold:**
+      1. **n-step hindsight.** Hold a transition n steps, use the n real rewards and the moves actually made, and only then bootstrap. Less reliance on estimated values; more variance under exploration.
+      2. **A Learner trained on what the whole system executed** (route, rules, ladder and guard together), not on RULES alone. The labels are the corrected moves, so the Learner learns to propose moves that need no correcting: the "fight" between the nudge and the values (run 4) should not arise. Imitation is capped at the system's level; the Q heads are what can go beyond it.
+
+    **Run 7, step by step** (ticked off here as each is done):
+    1. [x] Build Fix 1 and its test (13 October). Changed: `agent_warehouse.py` (the optional 15th field in push, padding with −1, sampling, and the bootstrap in learn), `core_warehouse.py` (the hold, `_honest_complete_pending`, `flush_pending_transition`, counters `honest_*`), `main_runner_warehouse.py` (the flush after each episode, `honest_` CSV columns, the log line), `config_warehouse.py` (`training.honest_target`, False). New: `test_honest_target.py`. Checked here without torch: the hold-and-complete rule on a stand-in (route move kept, network move −1, guard stop 0, a fleet that left −1, counts only active fleets) and the storage layout (14 fields with it off, 15 with it on, padding −1). The torch parts run on Rohit's machine (step 3).
+    2. [x] Build Fix 2 and its test (13 October). `core_warehouse.py`: `_exit_without_work`, used at the three freeze sites ("pool exhausted while retargeting", the in-loop and the deferred retarget) and at a fourth path found while building. In stream maintenance, a fleet whose order was delivered by someone else and that finds nothing to retarget to used to drive on to the old goal cell and only freeze on arrival; it now heads for a dock at once. The delivery path's own no-dock park is counted too. Counters `stream_no_work_exits` and `stream_parked_no_exit`. `config_warehouse.py`: `stream.no_work_exit`, False. New: `test_stream_no_work.py`. Checked here without torch: the helper on a stand-in (sent out with the dock as its target and its exit leg timed; no dock: parks and is counted; switch off or outside the stream: nothing happens).
+    3. [x] Rohit's machine: both new tests, the existing suite, and the `--check` with both switches off. All done, 13 October.
+       - [x] `test_honest_target.py` ALL PASS, after one fix to the test itself: its hand-built tensors were on the CPU while the agent was on the GPU. `test_stream_no_work.py` ALL PASS.
+       - [x] `--check` with both switches off (`deploy_check5`): reproduces 12 October exactly. Champion 31 delivered, 0 collisions, lead time 23.16; RULES 30, 0, 19.5; the repeat IDENTICAL. The new columns read 0. The log still shows "Fleet 25#2 frozen, pool exhausted", as it should with the switch off.
+       - [x] The existing suite: all 13 pass (test_teacher_margin, test_phase_3, test_graph_pooling, test_learner_head, test_stream_failures, test_smoke_integration, test_line_end, test_intent_guard, test_conflict_rules, test_corridor_rules, test_ladder_retrace, test_ladder_authority, test_guard_integration). First pass: `test_teacher_margin.py` and `test_graph_pooling.py` failed `sample_returns_16`. Both are stale checks on the number of parts in a sampled batch: Fix 1 appends a 17th, last, so every index they read is unchanged. Both now expect 17, plus a check that the 17th is None when no transition carried the field. I missed these two when I searched for `sample()` callers: I checked which indexes they read, not the length they assert.
+    4. [ ] (config ready: RUN 7 header, `honest_target` and `no_work_exit` on, `eps_peak` 0.05; command in the header) Dry run A: 10 episodes, warm from the champion, peak 0.05 / floor 0.01, run 5's failures, book 80, both fixes on. Read the delivery value (below 1.42, not climbing), the losses against exploration, and L3 against exploration.
+    5. [x] ~~Dry run B with the Learner on~~: held until after run 7 (decided 13 October).
+    6. [ ] Agree run 7's settings and predictions; then the run (50 episodes, about 4 hours).
+    7. [ ] Frozen tests, clean and full, guard on for every arm (ladder_run3, champion, RULES); then the capacity test with the top-up book (approved).
+
 **Next.**
 
 1. **`deploy_eval.py` runs** (entries 24 and 26 to 28): all scored.
-2. **ladder_run2, cold: done and scored (entry 31).** Safety by construction held for 150 episodes; the network did not learn its job, most likely through value inflation in routed states (ladder_run1's metrics agree: its values stayed under the ceiling). Frozen tests scored (entries 32 and 33): the safety layer took collisions to about zero at no cost in throughput, and the champion ties RULES under full stress. Then, to design and check before any build: ladder_run3, warm from the champion, with two fixes, the honest target (entry 31) and parked robots as obstacles (entry 33), plus lower exploration and possibly fewer failures in training. The heavier-day test (no training needed) can run while that is designed. Next, in this order (Rohit, 12 October): score it; then the frozen test against shake3, the champion and RULES, run as before in two conditions, clean (no failures, no people) and full (both on), with `--safety on` for every arm; then a heavier-day test: the frozen networks on 120 and 160 orders over 400 steps (`deploy_eval --book`), to find where each one breaks. Train on the fixed movement (entry 25) with three changes, then measure on these same seeded days against RULES and champion+route:
+2. **ladder_run2, cold: done and scored (entry 31).** Safety by construction held for 150 episodes; the network did not learn its job, most likely through value inflation in routed states (ladder_run1's metrics agree: its values stayed under the ceiling). Frozen tests scored (entries 32 and 33): the safety layer took collisions to about zero at no cost in throughput, and the champion ties RULES under full stress. Then, to design and check before any build: ladder_run3, warm from the champion, with two fixes, the honest target (entry 31) and parked robots as obstacles (entry 33), plus lower exploration and possibly fewer failures in training. The heavier-day test (no training needed) can run while that is designed. **Designed in entry 34, with a step-by-step checklist; that checklist is the plan of record.** Next, in this order (Rohit, 12 October): score it; then the frozen test against shake3, the champion and RULES, run as before in two conditions, clean (no failures, no people) and full (both on), with `--safety on` for every arm; then a heavier-day test: the frozen networks on 120 and 160 orders over 400 steps (`deploy_eval --book`), to find where each one breaks. Train on the fixed movement (entry 25) with three changes, then measure on these same seeded days against RULES and champion+route:
    - the approach-aware safety bubble (item 3);
    - a reward that charges approach and collisions, but not presence;
    - route by default during training as well, so the network learns only where robots meet: the one place it still decides, and the place it currently costs collisions.

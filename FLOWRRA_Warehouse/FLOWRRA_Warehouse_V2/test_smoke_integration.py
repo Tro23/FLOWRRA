@@ -130,6 +130,9 @@ _CONFIGURED_SLOW = CONFIG["density"].get("slow_channel", False)
 _CONFIGURED_HOLON = CONFIG.get("perception", {}).get("holon_integrity", False)
 # Paths-ahead channels (two more density channels) and the entropy fix.
 _CONFIGURED_PATHS = CONFIG["density"].get("paths_channels", False)
+# The ladder context (step 3b): seven base features, only when the ladder is on.
+_LADDER = CONFIG.get("conflict", {}).get("ladder", {}) or {}
+_CONFIGURED_CONTEXT = bool(_LADDER.get("enabled", False) and _LADDER.get("context", False))
 
 
 def set_flags(on: bool):
@@ -152,6 +155,9 @@ def set_flags(on: bool):
     CONFIG["gnn"]["encoder"] = "conv" if on else "flat"
     CONFIG["waiting"]["enabled"] = bool(on)
     CONFIG["perception"]["idle_mode"] = "full"
+    # "Flags off" means the OLD widths, so the ladder context (+7) is off too.
+    CONFIG.setdefault("conflict", {}).setdefault("ladder", {})["context"] = (
+        _CONFIGURED_CONTEXT if on else False)
 
 
 def run_episode(on: bool, steps=60, n_fleets=24, obstacles=None):
@@ -242,7 +248,8 @@ def test_flags_on_runs_end_to_end():
     _ch = (2 + (1 if CONFIG["density"].get("slow_channel", False) else 0)
            + (2 if CONFIG["density"].get("paths_channels", False) else 0))
     check("on_density_dim", dens, _ch * 231)
-    _base = 83 + (1 if CONFIG.get("perception", {}).get("holon_integrity", False) else 0)
+    _base = (83 + (1 if CONFIG.get("perception", {}).get("holon_integrity", False) else 0)
+             + (7 if _CONFIGURED_CONTEXT else 0))
     check("on_total_width", base + dens, _base + _ch * 231)
     check("on_no_nonfinite_states", nf, 0)
     check("on_buffer_filled", mem > 0, True)

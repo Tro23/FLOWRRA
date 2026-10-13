@@ -481,8 +481,18 @@ class GraphReplayBuffer:
         next_active_mask: Optional[np.ndarray] = None,
         valid_mask: Optional[np.ndarray] = None,
         teacher_mask: Optional[np.ndarray] = None,
+        next_policy_action: Optional[np.ndarray] = None,
     ):
         """
+        next_policy_action: the HONEST TARGET (build log entry 34; switch
+        training.honest_target). [N'] int, one per fleet in the NEXT state: the
+        move that fleet actually made there when something other than the
+        network drove it (route by default, a rule, a ladder hold, the guard),
+        or -1 where the network's own choice was executed. learn() bootstraps
+        from that move instead of the network's best, so no target is built on
+        a move that never happens. None (the switch off, or an old caller):
+        the field is not stored at all and the transition keeps the 14-field
+        layout, so storage and learning are exactly as before.
         Store a transition.
 
         `rewards` may be either [N] (a single scalar per fleet, the old form) or
@@ -514,37 +524,40 @@ class GraphReplayBuffer:
         if rewards.ndim == 1:
             rewards = rewards.reshape(-1, 1)
 
-        self.buffer.append(
-            (
-                node_features.copy(),
-                adj_matrix.copy(),
-                actions.copy(),
-                rewards.copy(),
-                next_node_features.copy(),
-                next_adj_matrix.copy(),
-                bool(done),
-                integrity,
-                np.asarray(active_mask, dtype=np.float32).copy(),
-                int(recovery_action),
-                # Structural validity of each action in the NEXT state, so the
-                # bootstrap cannot max over moves the fleet could never make.
-                # None means "unknown", and learn() then falls back to the old
-                # unmasked behaviour rather than inventing a mask.
-                (np.asarray(next_valid_mask, dtype=bool).copy()
-                 if next_valid_mask is not None else None),
-                # 1.0 for each fleet still able to act in the NEXT state, 0.0 for
-                # one that retired or stopped during this step: its own life ends
-                # with this transition (learn()'s per-fleet terminal). None means
-                # unknown (an old caller), and learn() then ignores it.
-                (np.asarray(next_active_mask, dtype=np.float32).copy()
-                 if next_active_mask is not None else None),
-                # TEACHER SIGNAL -- see the docstring.
-                (np.asarray(valid_mask, dtype=bool).copy()
-                 if valid_mask is not None else None),
-                (np.asarray(teacher_mask, dtype=np.float32).copy()
-                 if teacher_mask is not None else None),
-            )
+        exp = (
+            node_features.copy(),
+            adj_matrix.copy(),
+            actions.copy(),
+            rewards.copy(),
+            next_node_features.copy(),
+            next_adj_matrix.copy(),
+            bool(done),
+            integrity,
+            np.asarray(active_mask, dtype=np.float32).copy(),
+            int(recovery_action),
+            # Structural validity of each action in the NEXT state, so the
+            # bootstrap cannot max over moves the fleet could never make.
+            # None means "unknown", and learn() then falls back to the old
+            # unmasked behaviour rather than inventing a mask.
+            (np.asarray(next_valid_mask, dtype=bool).copy()
+             if next_valid_mask is not None else None),
+            # 1.0 for each fleet still able to act in the NEXT state, 0.0 for
+            # one that retired or stopped during this step: its own life ends
+            # with this transition (learn()'s per-fleet terminal). None means
+            # unknown (an old caller), and learn() then ignores it.
+            (np.asarray(next_active_mask, dtype=np.float32).copy()
+             if next_active_mask is not None else None),
+            # TEACHER SIGNAL -- see the docstring.
+            (np.asarray(valid_mask, dtype=bool).copy()
+             if valid_mask is not None else None),
+            (np.asarray(teacher_mask, dtype=np.float32).copy()
+             if teacher_mask is not None else None),
         )
+        # HONEST TARGET: a 15th field only when given, so the switch off
+        # stores exactly the 14-field layout it always has.
+        if next_policy_action is not None:
+            exp = exp + (np.asarray(next_policy_action, dtype=np.int64).copy(),)
+        self.buffer.append(exp)
 
     @staticmethod
     def _pad_transition(exp, n_max: int):
@@ -569,8 +582,13 @@ class GraphReplayBuffer:
         # invented -- so transitions stored by older code still pad and train.
         if len(exp) < 14:
             exp = tuple(exp) + (None,) * (14 - len(exp))
+        # HONEST TARGET: a 15th field (next_policy_action) exists only when the
+        # switch stored one. A 14-field transition pads to exactly the 14-field
+        # form it always has; a 15-field one keeps its 15th, padded with -1.
+        npa = exp[14] if len(exp) > 14 else None
+        has_npa = len(exp) > 14
         (nf, adj, act, rew, nnf, nadj, done, integ, amask, rec, nvm, nam,
-         vm, tm) = exp
+         vm, tm) = exp[:14]
         n = nf.shape[0]
         if n == n_max:
             return exp
@@ -607,7 +625,7 @@ class GraphReplayBuffer:
             out[n:, 0] = True          # idle is always structurally valid
             return out
 
-        return (
+        out = (
             pad_rows(nf),
             pad_adj(adj),
             pad_rows(act),
@@ -631,6 +649,13 @@ class GraphReplayBuffer:
             _pad_valid(vm),
             (pad_rows(tm) if tm is not None else None),
         )
+        if has_npa:
+            # Padded fleets: -1, "the network chose" -- inert, since their
+            # active mask is 0 and nothing they bootstrap reaches the loss.
+            out = out + ((np.concatenate([np.asarray(npa, dtype=np.int64),
+                                          np.full(pad, -1, dtype=np.int64)])
+                          if npa is not None else None),)
+        return out
 
     def sample(self, batch_size: int) -> Optional[Tuple[torch.Tensor, ...]]:
         """
@@ -690,6 +715,10 @@ class GraphReplayBuffer:
         real_n = np.array([exp[0].shape[0] for exp in raw_batch])
         next_real_n = np.array([exp[4].shape[0] for exp in raw_batch])
         batch = [self._pad_transition(exp, n_max) for exp in raw_batch]
+        # HONEST TARGET: the optional 15th field, split off so the 14 classic
+        # fields unzip exactly as before.
+        next_policy_actions = [b[14] if len(b) > 14 else None for b in batch]
+        batch = [b[:14] for b in batch]
 
         (
             node_feats,
@@ -762,6 +791,18 @@ class GraphReplayBuffer:
         integrity_target = (
             torch.FloatTensor(np.array(integrity)).unsqueeze(-1).to(DEVICE)
         )
+        # HONEST TARGET: [B, N'] int, -1 = "the network chose" (bootstrap from
+        # its best move, as always). A transition stored without the field (the
+        # switch off, or older code) reads as all -1, which is exactly the old
+        # behaviour for it. None when no transition in the batch has the field,
+        # and learn() then does nothing new at all.
+        if any(m is not None for m in next_policy_actions):
+            _nn = next_node_feats_t.shape[1]
+            next_policy_actions_t = torch.from_numpy(np.array(
+                [m if m is not None else np.full(_nn, -1, dtype=np.int64)
+                 for m in next_policy_actions], dtype=np.int64)).to(DEVICE)
+        else:
+            next_policy_actions_t = None
 
         return (
             node_feats_t,
@@ -783,6 +824,9 @@ class GraphReplayBuffer:
                               < real_n[:, None]).astype(np.float32)).to(DEVICE),
             torch.from_numpy((np.arange(next_node_feats_t.shape[1])[None, :]
                               < next_real_n[:, None]).astype(np.float32)).to(DEVICE),
+            # [B, N'] or None -- the honest target's moves; appended LAST so
+            # every earlier index (e.g. b[14] = real mask) is unchanged.
+            next_policy_actions_t,
         )
 
     def __len__(self) -> int:
@@ -1070,6 +1114,9 @@ class GNNAgent:
         # Populated by learn() -- see there for why these are exposed separately.
         self.last_q_loss = 0.0
         self.last_stability_loss = 0.0
+        # Honest target (entry 34): share of the batch's active next-state
+        # fleets bootstrapped from the move actually made. 0.0 with it off.
+        self.last_honest_share = 0.0
 
     def choose_recovery(self) -> int:
         """
@@ -1290,6 +1337,10 @@ class GNNAgent:
 
         # Initialize with no-op action
         actions = np.zeros(num_nodes, dtype=np.int64)  # Start with all zeros
+        # Which fleets took an EXPLORING (random) move this call -- read by
+        # core_warehouse's route by default when conflict.route_explore is on
+        # (build log entry 34, Fix 3), so the route does not override them.
+        self.last_explore_mask = np.zeros(num_nodes, dtype=bool)
 
         # Get epsilon for this episode. Only forward eps_min/eps_peak if the
         # caller actually provided an override -- otherwise let epsilon_gaussian
@@ -1336,6 +1387,8 @@ class GNNAgent:
 
         explore_indices = active_indices[explore[active_indices]]
         greedy_indices = active_indices[~explore[active_indices]]
+        self.last_explore_mask = np.zeros(num_nodes, dtype=bool)
+        self.last_explore_mask[explore_indices] = True
 
         for idx in explore_indices:
             if valid_action_masks is not None:
@@ -1483,6 +1536,7 @@ class GNNAgent:
             teacher_masks,
             real_mask,
             next_real_mask,
+            next_policy_actions,
         ) = batch
 
         B, N, _ = node_feats.shape
@@ -1599,6 +1653,24 @@ class GNNAgent:
                 next_q_sum = torch.where(next_valid_masks, next_q_sum,
                                          torch.full_like(next_q_sum, _NEG))
             next_a = next_q_sum.argmax(dim=2)                         # [B, N]
+            # HONEST TARGET (build log entry 34; principle 7, values stay
+            # honest). Where something other than the network drove a fleet in
+            # the next state -- route by default, a rule, a ladder hold, the
+            # guard -- bootstrap from the move it actually made there, not from
+            # the network's best guess. In run 6 the route drove ~85% of moves;
+            # the network's other moves in those states were never executed, so
+            # nothing ever corrected their values, the max picked the most
+            # drifted one, and the delivery head climbed to 2.13 against a
+            # ceiling of 1.42 (entry 31). -1 keeps the argmax: where the network
+            # actually drives, it is still Q-learning on its own best move.
+            self.last_honest_share = 0.0
+            if next_policy_actions is not None:
+                _given = next_policy_actions >= 0
+                next_a = torch.where(_given, next_policy_actions, next_a)
+                if next_active_masks is not None:
+                    _act = next_active_masks > 0
+                    self.last_honest_share = float(
+                        (_given & _act).sum().item()) / max(1, int(_act.sum().item()))
             gather_idx = next_a.unsqueeze(-1).unsqueeze(-1).expand(B, N, K, 1)
             next_q_taken = next_q_per_head.gather(3, gather_idx).squeeze(-1)  # [B,N,K]
 

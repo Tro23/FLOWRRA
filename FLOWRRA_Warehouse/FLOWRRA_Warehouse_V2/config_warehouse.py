@@ -1,23 +1,67 @@
 """
-config_warehouse.py -- THE TEACHER-MARGIN RUN (2026-10-04).
+config_warehouse.py -- RUN 7: ladder_run3, WARM from the champion (2026-10-13).
 
-Built from config_benchmark_rules.py, unchanged except for TWO added blocks:
-training.teacher_margin (enabled) and errors.waves (enabled). Everything below
-this paragraph is that file's own description, kept as it was.
+Run 6 (ladder_run2, cold) showed the safety layer works -- collisions near zero
+at no cost in throughput, in training and in the frozen tests -- and that its
+network learned nothing over a 3-episode one: its values inflated through moves
+that route by default never executes (delivery head 2.13 against a ceiling of
+1.42). Two fixes, then a warm run from the champion, which with the safety
+layer already ties RULES under full stress (build log 31-34; the checklist in
+entry 34 is the plan of record).
 
-    all six conflict switches ON, stream OFF, errors ON (single random
-    failures), recovery_policy.reward_mode "collision_cost",
-    recovery.yield_escalation_per_repeat 0, buffer 20,000.
+NEW IN THIS RUN (both switches; off reproduces run 6's step exactly -- checked,
+deploy_check5 = deploy_check4):
+  training.honest_target ON: where something other than the network drove a
+                         fleet in the next state (route, rule, hold, guard),
+                         bootstrap from the move it actually made; each
+                         transition is held one step to learn it
+                         (test_honest_target.py).
+  stream.no_work_exit    ON: a fleet left with no order drives out at the
+                         nearest dock instead of freezing mid-aisle, outside
+                         the guard (all three guard-era collisions);
+                         test_stream_no_work.py.
+  conflict.route_explore ON (after dry run A): a fleet that explores is not
+                         overridden by the route, so the network explores in
+                         the clear too and its other moves there are corrected
+                         by experience; valued at the route's move. Training
+                         only (deploy_eval, trace_fleet force it off).
+                         test_route_explore.py.
 
-Failure waves stop several fleets AT ONCE, a few times an episode, at random --
-the shock benchmark's regime (9 vehicles in 3 waves), which single random
-failures never produce. See core_warehouse.py, _maybe_inject_wave(), and
-test_failure_waves.py.
+KEPT FROM RUN 6: the guard, bubbles by kind, hops everywhere, route by default,
+presence_charge OFF, the stream with the fixed order book (80 orders over 400
+steps), people ("cleanup"), failures with waves (run 5's level), the ladder,
+rung costs, learner OFF, max_steps 800.
 
-The teacher margin trains the policy on every step where the RULES overrode it:
-see agent_warehouse.py, learn() section 1c, and test_teacher_margin.py. It needs
-the conflict switches ON -- with them off nothing is ever overridden and there
-is nothing to teach.
+EXPLORATION: warm, as run 5: eps_peak 0.05, eps_min 0.01, peak at T/4, width
+T/8. No --cold-start.
+
+RUN 7. Dry run A (honest target and no-work exit) was stable; dry run B adds
+route_explore (10 episodes, about 45 minutes, --out ladder_run3_dryB); then,
+once agreed, the run (50 episodes):
+  nohup python -u main_runner_warehouse.py --seed 0 \
+      --maps 25_5_2_5_2_1,50_20_5_10_5_2 --scens-dir all_scens_v5 \
+      --episodes 10 --agent-sets 25,40,60 --max-steps 800 \
+      --resume ladder_run1/flowrra_curriculum.pth --out ladder_run3_dryB \
+      > ladder_run3_dryB.log 2>&1 &
+
+  nohup python -u main_runner_warehouse.py --seed 0 \
+      --maps 25_5_2_5_2_1,50_20_5_10_5_2 --scens-dir all_scens_v5 \
+      --episodes 50 --agent-sets 25,40,60 --max-steps 800 \
+      --resume ladder_run1/flowrra_curriculum.pth --out ladder_run3 \
+      > ladder_run3.log 2>&1 &
+
+EARLIER RUNS, reproducible from this file by switches alone:
+  run 6, ladder_run2   honest_target OFF, no_work_exit OFF, eps_peak 0.30,
+                       --cold-start, 150 episodes
+  run 5, warm_stream1  safety all OFF, route_by_default OFF, presence_charge ON,
+                       eps_peak 0.05, --resume ladder_run1/flowrra_curriculum.pth,
+                       50 episodes
+  run 2, ladder_run1   run 5's switches with stream OFF, obstacles OFF,
+                       eps_peak 0.30, --cold-start, 150 episodes
+  run 4, learner_run2  run 2 + learner ON (prob, beta 0.1), ladder.context ON,
+                       next_state_edge_features ON
+  teacher_run1         ladder OFF, rung_costs OFF, learner OFF,
+                       teacher_margin ON (weight 0.01)
 
 -------------------------------------------------------------------------------
 config_benchmark_rules.py -- the cold_run23 benchmark, re-run with everything since.
@@ -107,7 +151,9 @@ CONFIG = {
                                            # in POGEMA (a whole cell or stay put) --
                                            # for comparisons on their protocol.
         "max_vision_range": 10,            # Edges an AGV can see down an aisle
-        "collision_threshold": 0.5,        # Manhattan distance triggering a fatal crash.
+        "collision_threshold": 0.5,        # HOPS (graph distance; proximity.metric "graph" --
+                                            # Manhattan only if that is switched back). Two
+                                            # fleets this close have collided.
                                             # Was 1.0 -- but every edge in the real graph
                                             # is exactly 1.0 long (confirmed: 11230/11230),
                                             # so a threshold of 1.0 meant "same cell" (dist=0,
@@ -115,7 +161,13 @@ CONFIG = {
                                             # aisle over) were scored identically as fatal.
                                             # 0.5 makes only true overlaps fatal; adjacent-node
                                             # proximity now falls into the warning zone instead.
-        "warning_threshold": 2.0,          # Manhattan distance triggering safety yield
+        "warning_threshold": 2.0,          # HOPS (graph distance, as above). The distance-
+                                            # only warning and braking distance, used when
+                                            # path warnings / safety.bubbles_by_kind are off;
+                                            # with path warnings on, pairs warn by KIND
+                                            # (conflict.*) and this is the fallback for an
+                                            # "unknown" pair. Also scales the network's
+                                            # "peer nearby" input (0 at or beyond it).
 
         # Final-approach override: many fleets in this dataset have NEARBY goals
         # (confirmed by inspecting the missions), so it's common and expected --
@@ -179,8 +231,9 @@ CONFIG = {
         # ACCEPTS them (so an un-updated caller constructs without error) but
         # ignores them entirely.
 
-        "falloff_radius": 3.0,             # Repulsion reaches zero at this Manhattan
-                                            # distance. k(d) = max(0, 1 - d/r), so at 3.0
+        "falloff_radius": 3.0,             # Repulsion reaches zero at this distance, in
+                                            # HOPS with kernel_metric "graph" (below).
+                                            # k(d) = max(0, 1 - d/r), so at 3.0
                                             # the curve is [1.0, 0.67, 0.33, 0.0]. Replaces
                                             # lambda_severity. Bigger = wider, softer
                                             # bubbles; smaller = tighter, more local.
@@ -440,11 +493,32 @@ CONFIG = {
     # One category to the policy: a human and a piece of debris are the same
     # fact, something is there and it is not a fleet. They differ only in how
     # they arrive and how long they last.
+    #
+    # TWO MODES (obstacles_warehouse.py; test_obstacles_cleanup.py,
+    # test_obstacles_integration.py):
+    #   "wander"   the original: n_humans wander at random, n_debris never move.
+    #   "cleanup"  debris APPEARS during the episode, and a human enters at the
+    #              edge of that floor, walks to it, clears it and walks out.
+    #              Humans never step onto a fleet: they wait, then go around.
+    #              Nothing is permanent. Humans have absolute priority; the
+    #              ladder (fleet to fleet) never asks one to move.
     "obstacles": {
-        "enabled": False,
+        "enabled": True,
+        "mode": "cleanup",
+        "seed": 0,                         # per-episode streams: seed x 1,000,003 + episode
+        "human_move_period": 3,            # steps per cell; fleets take 2 (base_speed 0.5)
+        # "cleanup" mode
+        "debris_interval": 200,            # average steps between new debris
+        "max_debris": 2,                   # at most this many on the floor at once
+        "response_delay": 10,              # steps before a human is sent
+        "cleanup_steps": 5,                # steps to clear it, standing next to it
+        "human_patience": 2,               # blocked moves before looking for a way round
+        "human_give_way": 6,               # blocked moves with no way round before stepping aside
+        "max_debris_life": 1000,           # unreachable debris is cleared after this
+        "max_human_life": 2000,            # a human boxed in this long leaves
+        # "wander" mode
         "n_humans": 0,                     # move, slowly, and wander
         "n_debris": 0,                     # do not move
-        "human_move_period": 4,            # steps between moves; slower than a fleet
         "fixed_cells": None,               # place by hand instead of sampling, for
                                             # constructing a specific situation
     },
@@ -571,6 +645,10 @@ CONFIG = {
         # ANTISYMMETRIC and is what lets a fleet know IT is the one that should
         # hold: conflict alone is symmetric, so both fleets read the same number
         # and have no basis to behave differently.
+        # Give the stored NEXT state the same edge features as the state the
+        # choice was made in (found while building 3c: it kept only the bare
+        # mask, so value targets never saw a pairwise number). Off = old storage.
+        "next_state_edge_features": False,
         "edge_feature_dim": 4,             # 0 | 1 | 2 | 3 | 4
 
         # Channel widths of the gated 3D conv stack. THIS IS A MEMORY KNOB.
@@ -594,7 +672,9 @@ CONFIG = {
         "num_heads": 4,                    # Multi-head attention count
         "dropout": 0.1,                    # Prevents overfitting
         "learning_rate": 0.0003,
-        "interaction_radius": 10.0,        # Manhattan distance within which two fleets are
+        "interaction_radius": 10.0,        # HOPS with proximity.adjacency_metric "graph"
+                                            # (Manhattan only if switched back): the distance
+                                            # within which two fleets are
                                             # linked in the GAT's adjacency matrix. Was
                                             # effectively INFINITE: core built the adjacency as
                                             # np.ones((N, N)), a complete graph, so every fleet
@@ -623,12 +703,18 @@ CONFIG = {
     # seeded queue drawn from the goal bank. Absent or enabled=False: the fixed
     # 46-mission behaviour, exactly (config_benchmark_cold_run23.py).
     "stream": {
-        "enabled": False,
+        "enabled": True,
         "exit_floors": "all",          # "all": docks on every floor; "ground": lowest floor only
         "exits_per_floor": 12,         # spread evenly around each floor's perimeter (was 6: catchments up to 236 cells)
         "vertical_axis": "auto",       # the axis with the fewest edges (lifts), or "X"/"Y"/"Z"
         "full_floor_fraction": 0.5,    # a level is a floor if it holds >= this share of the largest
         "respawn_delay": 0,            # steps off the floor before re-entering
+        # NO-WORK EXIT (build log entries 33-34). A fleet left with no order --
+        # its order taken by a peer en route, nothing left to retarget to --
+        # drives out at the nearest dock instead of freezing mid-aisle, where it
+        # was outside the guard and the collision check (all three guard-era
+        # collisions, entry 33). False: it freezes, exactly as before.
+        "no_work_exit": True,            # RUN 7 (entries 33-34)
         # DOCK GATE: every dock sits inside a two-way corridor, so re-entering
         # beside other traffic starts a head-on standoff. Re-enter only where the
         # dock and all its neighbours are free and no fleet driving out is within
@@ -640,7 +726,15 @@ CONFIG = {
         # widening to ±3 by half-way, so the task stops changing before the
         # near-greedy episodes. Unlimited cross-floor orders jammed the 5-cell
         # single-lane shaft segments (STREAM_DESIGN.md). Remove for no limit.
-        "order_floor_window": {"start": 1, "end": 3, "reach_frac": 0.5},
+        "order_floor_window": {"start": 3, "end": 3, "reach_frac": 0.5},   # unused with order_book on
+        # ORDER BOOK (core_warehouse.py; test_order_book.py). A FIXED number of
+        # orders per episode, whatever the fleet count: the orders the fleets
+        # start with count toward it, the rest are released at a steady rate
+        # over release_steps; a fleet re-enters only when an order is waiting
+        # (otherwise it waits at its dock); the episode ends once the whole
+        # book is delivered. Off: the closed loop (every robot always has an
+        # order, so the work grows with the fleet).
+        "order_book": {"enabled": True, "orders": 80, "release_steps": 400},   # 500 left no time to finish (shakedown 2)
     },
     # EXPLORATION SCHEDULE (cold_run23). Gaussian, per-fleet epsilon-greedy.
     # Historical (absent keys): peak 0.95 at T/2, width T/6, min 0.01 -- which
@@ -651,7 +745,7 @@ CONFIG = {
     # turnover plus six) are near-greedy. Buffer randomness at ep 50: 2.8%.
     # The recovery head keeps exploration_scale 0.25: its peak falls 0.24 -> 0.075.
     "exploration": {
-        "eps_peak": 0.30,
+        "eps_peak": 0.05,                  # ladder_run3, warm, as run 5 (ladder_run2 cold: 0.30)
         "eps_min": 0.01,
         "mu_frac": 0.25,       # peak at episode T/4
         "sigma_frac": 0.125,   # width T/8
@@ -679,6 +773,14 @@ CONFIG = {
         # DOUBLE DQN: the online net picks the bootstrap action, the target
         # net scores it. False: plain DQN, exactly as before.
         "double_dqn": True,
+        # HONEST TARGET (build log entry 34; principle 7). Where something
+        # other than the network drove a fleet in the next state (route by
+        # default, a rule, a ladder hold, the guard), bootstrap from the move it
+        # actually made, not the network's best guess. Each step's transition
+        # is held one step to learn that move. Run 6 without it: the delivery
+        # value climbed to 2.13 against a ceiling of 1.42 (entry 31). False:
+        # transitions pushed at once, in the old layout, exactly as before.
+        "honest_target": True,           # RUN 7 (entry 34)
         # SOFT TARGET UPDATES: blend the target network toward the online one on
         # every learning step instead of copying it every --target-sync (1000)
         # steps. 0.002 keeps the same AVERAGE lag (~500 steps) as the hard copy,
@@ -731,6 +833,31 @@ CONFIG = {
         # 2 x -1.2: backing off a hop costs what lingering in the worst warning
         # would for the same time. Weights: conflict group 1.0, a fleet heading
         # into the group's cells heading_in_weight, everyone else 0.
+        # STEP 3a, THE LEARNER HEAD (V2_The_Conflict_Ladder.md). Learns RULES'
+        # choice from every RULES-decided step, on its own layers only (it reads
+        # the trunk but never trains it, so no Q-value moves). At choice time it
+        # nudges ONLY fleets inside a conflict: score = Q + beta x its log-prob.
+        #   beta    how strong the nudge is; set by a paired dry run
+        #   weight  its supervised loss (reaches only its own layers)
+        # Off = no head is built, so older checkpoints still load.
+        "learner": {
+            "enabled": False,
+            "beta": 0.1,
+            "weight": 1.0,
+            # "prob": Q + beta x probability (0..1), so the pull never exceeds
+            # beta -- the Learner as a fourth, normalised signal beside 6:4:1.
+            # "logprob": unbounded, reproduces learner_run1. Set beta from the
+            # CSV's learner_qgap_p50 (the heads' typical near-tie gap).
+            "nudge": "prob",
+            # How strong the nudge is. "fixed": beta above, always. "gap": beta
+            # follows the heads' own running median gap x beta_scale (learner_run2
+            # showed a fixed beta drifts relative to a trained network's gaps);
+            # the fixed beta is the warm start until gap_min gaps are seen.
+            "beta_mode": "fixed",
+            "beta_scale": 1.0,
+            "gap_window": 5000,
+            "gap_min": 200,
+        },
         "rung_costs": {
             "enabled": True,
             "c1_per_hop": -2.4,      # L1 retrace, and L2 per hop to the pull-over cell
@@ -741,7 +868,7 @@ CONFIG = {
         "buffer_capacity": 20000,   # 60 fleets: the same memory as 20,000 at 46 (STREAM_DESIGN.md)
         "batch_size": 64,                  # <--- Bumped for smoother gradient averaging  (# Experiences sampled per learn step)
         "total_episodes": 11,             # Total benchmark runs
-        "max_steps_per_episode": 780,      # Timeout limit for a single run
+        "max_steps_per_episode": 800,      # Timeout limit for a single run
     },
     
     "recovery": {
@@ -1143,6 +1270,14 @@ CONFIG = {
         # (PATH_AWARENESS.md); switch on together with it for the joint run.
         # False: presence-based warning, as in every run so far.
         "approach_warning": True,
+        # PRESENCE CHARGE (build log entries 25-29). True in every run so far:
+        # the safety head charged -0.5 for every step a fleet ended in a warned
+        # pair, whoever moved -- with path warnings, a head-on route up to 3
+        # hops away. The trace showed what that teaches: back away from anyone
+        # near (79 of 154 network decisions near a peer were moves away; RULES
+        # moved toward its goal 51 times of 54 and collided less). False: only
+        # collisions (-1) and approach (closing the gap, in hops) are charged.
+        "presence_charge": False,
     },
 
     # ==========================================
@@ -1238,9 +1373,87 @@ CONFIG = {
             # there until the routes no longer meet. Fleets RULES is backing out
             # of a corridor are left to RULES. 3-fleet cycles: the same rule.
             "retrace": True,
+            # 3b LADDER CONTEXT (needs enabled): seven values in every fleet's
+            # state -- in a cycle, time in conflict, its group's rung (one-hot),
+            # cheaper side to back out. CHANGES THE STATE WIDTH (+7): a run with
+            # it on starts cold; its checkpoints need it on to load.
+            "context": False,
+            # 3c PAIR RELATIONS (needs enabled): six more numbers on each attention
+            # connection -- head-on / contested / blocked / following (one-hot),
+            # "I wait for it", "it waits for me". CHANGES THE EDGE WIDTH (+6): a
+            # run with it on starts cold. Pair with gnn.next_state_edge_features.
+            "pair_relations": False,
             "grace_checks": 1,
             "trail_length": 8,
         },
+        # ROUTE BY DEFAULT (build log entries 25-29). The network decides only
+        # where a fleet is in contention -- in this step's warning or deadlock
+        # set, which with path_warnings means a warned pair: a meeting route
+        # within `radius`, a follower closer than `follow_gap`, anyone within
+        # the 1-hop `floor` -- and everywhere else the fleet takes its
+        # shortest-path move (the goal gradient's best move, if the action mask
+        # allows it). The ladder, rules, holds and the safety guard all still
+        # apply afterwards. Measured frozen in deploy_eval (champion+route):
+        # 95.2% of the book against the champion's 90.9%, collisions 4.7
+        # against 11.0 (entry 27). False: the network decides every move.
+        "route_by_default": True,
+        # Also hand the decision to the network when any live peer is within
+        # this many hops. 0.0: the warning set alone decides (path awareness).
+        "route_network_radius": 0.0,
+        # ROUTE EXPLORE (build log entry 34, Fix 3; RUN 7). A fleet whose move
+        # this step is an exploring one is not overridden by the route, so the
+        # network explores in the clear at its own epsilon (0.01-0.05 warm) and
+        # the moves the route never makes get corrected by real experience; the
+        # honest target values such a fleet at the route's move. The guard keeps
+        # it safe. Training only: deploy_eval and trace_fleet force it off.
+        # Dry run without it: disagreement with the route in the clear jumped
+        # from the champion's 7-23% to 35-55% as soon as learning started.
+        "route_explore": True,
+    },
+
+    # ==========================================
+    # SAFETY (build log entry 29) -- all distances in HOPS.
+    # ==========================================
+    # THE INTENT GUARD. Every fleet's move is decided before any fleet moves
+    # (step.simultaneous). For each pair of moving fleets that could meet this
+    # step, the guard takes both actual moves -- what each would broadcast to
+    # its neighbours -- and works out where both land (node_warehouse.
+    # reach_position, the move's own computation). If they would end closer
+    # than min_gap hops, or drive through each other, the fleets closing the
+    # gap are slowed just enough to stop at min_gap, down to standing still (a
+    # wait); a fleet backing away is never slowed. Repeated until no pair is
+    # short (rounds), then anything still short stops. Parked and stopped
+    # fleets are not threats (as in check_integrity); people are vetoed by the
+    # action mask. guard_warehouse.py; test_intent_guard.py.
+    # WITH IT ON, collisions from movement do not happen, whatever the network
+    # chose, and the guard_* counters (how often it stepped in) are the safety
+    # measure.
+    #
+    # BUBBLES BY KIND. The comfort braking ramp ends at a distance set by what
+    # the pair is doing (path awareness, conflict.path_warnings): head-on,
+    # contested, unknown, and the moving fleet of a blocked pair from
+    # bubble_meeting; the follower of a convoy from bubble_following; the
+    # leader, the blocker, sequential and none only at bubble_other. The ramp's
+    # near end is min_gap. Why these numbers: a fleet moves at most half a hop
+    # per step, so a head-on pair closes a whole hop per step and a follower
+    # half a hop; a pair exactly at a bubble's edge still drives at full speed,
+    # so each bubble sits a quarter hop above min_gap + that closing.
+    #
+    # HOPS EVERYWHERE. The last distances not measured through the graph --
+    # the reward's approach charge (straight-line closing), the convoy tests
+    # (Manhattan gap change) and recovery's pair checks and placements
+    # (Manhattan) -- in hops, like every other consumer.
+    #
+    # All three False: exactly the step before this change.
+    "safety": {
+        "intent_guard": True,
+        "min_gap": 1.0,             # hops; collisions stay at warehouse.collision_threshold (0.5)
+        "rounds": 8,
+        "bubbles_by_kind": True,
+        "bubble_meeting": 1.75,     # hops
+        "bubble_following": 1.25,   # hops
+        "bubble_other": 1.0,        # hops (= min_gap: no ramp)
+        "hops_everywhere": True,
     },
 
     "recovery_policy": {

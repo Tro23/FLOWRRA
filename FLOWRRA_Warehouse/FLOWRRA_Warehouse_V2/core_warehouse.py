@@ -390,6 +390,85 @@ class FLOWRRA:
         # computed from the committed configuration. See SIMULTANEOUS_STEP.md.
         self.simultaneous_step = bool(
             CONFIG.get("step", {}).get("simultaneous", False))
+
+        # ---- SAFETY (build log entry 29). All OFF by default: a config without
+        # a "safety" section reproduces the step exactly as before. -----------
+        # intent_guard    : the last, exact check (guard_warehouse.py). Needs
+        #                   step.simultaneous, where every move is decided before
+        #                   any fleet moves.
+        # bubbles_by_kind : the braking ramp's far end by pair kind, from path
+        #                   awareness. Needs conflict.path_warnings.
+        # hops_everywhere : the last distances not in graph hops -- the approach
+        #                   charge's closing, the convoy tests, recovery -- in hops.
+        _sfcfg = CONFIG.get("safety", {}) or {}
+        self.intent_guard = bool(_sfcfg.get("intent_guard", False))
+        if self.intent_guard and not self.simultaneous_step:
+            print("[Core] safety.intent_guard needs step.simultaneous = True; guard OFF.")
+            self.intent_guard = False
+        self.guard_min_gap = float(_sfcfg.get("min_gap", 1.0))
+        self.guard_rounds = int(_sfcfg.get("rounds", 8))
+        self.bubbles_by_kind = bool(_sfcfg.get("bubbles_by_kind", False))
+        if self.bubbles_by_kind and not self.path_warnings:
+            print("[Core] safety.bubbles_by_kind needs conflict.path_warnings = True; bubbles OFF.")
+            self.bubbles_by_kind = False
+        self.bubble_meeting = float(_sfcfg.get("bubble_meeting", 1.75))
+        self.bubble_following = float(_sfcfg.get("bubble_following", 1.25))
+        self.bubble_other = float(_sfcfg.get("bubble_other", 1.0))
+        self.hops_everywhere = bool(_sfcfg.get("hops_everywhere", False))
+        # ROUTE BY DEFAULT (conflict.route_by_default). Off by default.
+        _rcfg = CONFIG.get("conflict", {}) or {}
+        self.route_by_default = bool(_rcfg.get("route_by_default", False))
+        self.route_network_radius = float(_rcfg.get("route_network_radius", 0.0) or 0.0)
+        self.route_steps = 0              # mobile fleet-steps seen
+        self.route_routed = 0             # of which the route decided
+        self.route_network_differed = 0   # ...and the network would have chosen otherwise
+        self.route_no_move = 0            # not in contention, but no route move to take
+        self._route_raw = None
+        self._route_mask = None
+        # ROUTE EXPLORE (conflict.route_explore; build log entry 34, Fix 3).
+        # Off by default. On: a fleet whose move this step is an EXPLORING one
+        # is not overridden by the route, so the network also explores in the
+        # clear at its own epsilon, and the moves the route never makes there
+        # get their values corrected by real experience (principle 7). The
+        # guard keeps those moves safe. Training only: deploy_eval and
+        # trace_fleet force it off -- a deployed system never explores
+        # through the route.
+        self.route_explore = bool(_rcfg.get("route_explore", False))
+        self.route_explore_kept = 0       # exploring fleets in the clear left to explore
+        self._route_eligible = None       # this step: the route would have driven it
+        self._route_moves = None          # ...and the move it would have made (-1: none)
+        # HONEST TARGET (training.honest_target; build log entry 34). Off by
+        # default: then every transition is pushed at the end of its own step,
+        # in the 14-field layout, exactly as before. On: each step's transition
+        # is HELD for one step and pushed once the next step has run, carrying
+        # for every fleet in its next state the move that fleet actually made
+        # there -- or -1 where the network's own choice was executed -- so
+        # learn() bootstraps from the policy actually run (principle 7).
+        self.honest_target = bool((CONFIG.get("training", {}) or {}).get("honest_target", False))
+        self._honest_pending = None       # (push kwargs, next-state roster ids)
+        self._honest_raw = None           # the network's own choices this step
+        self._honest_ids = None           # the roster those choices index
+        self.honest_pushed = 0            # transitions pushed through the hold
+        self.honest_flushed = 0           # ...of which pushed by the end-of-episode flush
+        self.honest_exec = 0              # next-state fleets valued at the move actually made
+        self.honest_net = 0               # ...valued at the network's best (it drove)
+        if self.intent_guard or self.hops_everywhere:
+            from guard_warehouse import HopMetric
+            self.hop_metric = HopMetric(self.G, self.grid_pos_dict,
+                                        cutoff=max(6.0, self.proximity.search_radius + 2.0))
+        else:
+            self.hop_metric = None
+        self.recovery.hop_metric = self.hop_metric if self.hops_everywhere else None
+        # Guard counters (per episode: the env is rebuilt every episode).
+        self.guard_steps_active = 0       # steps on which the guard slowed someone
+        self.guard_pairs_checked = 0
+        self.guard_pairs_short = 0        # pairs whose decided moves were too close
+        self.guard_fleets_slowed = 0
+        self.guard_stops = 0              # moves turned into waits
+        self.guard_fallback_stops = 0     # stopped after the rounds ran out
+        self.guard_rounds_max = 0
+        self.guard_violations = 0         # the live invariant check: must stay 0
+        self._guard_last = ((), {}, {})
         # Recovery escapes fleets one at a time and picks a right-of-way winner;
         # both used to inherit the order of self.nodes. See WarehouseRecovery.
         self.recovery.order_independent = self.simultaneous_step
@@ -535,6 +614,17 @@ class FLOWRRA:
         _scfg = CONFIG.get("stream", {}) or {}
         self.stream = bool(_scfg.get("enabled", False))
         self._stream_cfg = dict(_scfg)
+        # NO-WORK EXIT (stream.no_work_exit; build log entries 33-34). Off by
+        # default. On, in the stream: a fleet left with no order -- its order
+        # taken by a peer while en route and nothing left to retarget to --
+        # drives out at the nearest dock like a fleet that has delivered,
+        # instead of freezing mid-aisle. A frozen fleet is outside the guard,
+        # the proximity index and the collision check, and can later be
+        # recalled for a rescue; all three guard-era collisions were fleets
+        # driving onto one of these (entry 33). Despawning removes the state.
+        self.no_work_exit = bool(_scfg.get("no_work_exit", False))
+        self.stream_no_work_exits = 0      # fleets sent out with no order
+        self.stream_parked_no_exit = 0     # ...that could not reach any dock, and parked
         if self.stream:
             self.despawn_on_delivery = True
             self._order_window = order_floor_window
@@ -659,6 +749,13 @@ class FLOWRRA:
         # full speed; convoys (no closing) pay nothing. Priority mode only.
         # False: presence-based, exactly as before.
         self.approach_warning = bool(rd.get("approach_warning", False))
+        # PRESENCE CHARGE (build log entries 25 and 29). True, as every run so
+        # far: the safety head charges -0.5 for every step a fleet ends in a
+        # warned pair -- with path warnings, a head-on route up to 3 hops away --
+        # whoever moved. The trace showed what it teaches: never stay near
+        # anyone, so back away (79 of 154 network decisions near a peer). False:
+        # only collisions (-1) and approach (closing the gap) are charged.
+        self.presence_charge = bool(rd.get("presence_charge", True))
         # Measurement (always on, changes nothing): the approach charge the new
         # rule WOULD make, and standoffs -- pairs inside the warning distance
         # where neither fleet moved. Under approach-charging a standoff is not
@@ -1500,7 +1597,12 @@ class FLOWRRA:
             gone = set(self._stream_fulfilled)
             for n in self.nodes:
                 if n.id not in self._despawning and n.current_goal_id in gone:
-                    self._retarget(n)
+                    # Its order was delivered by someone else. With nothing left
+                    # to retarget to, the no-work exit sends it to a dock now
+                    # rather than on to the old goal cell (switch off: as before,
+                    # it carries on and is dealt with when it arrives).
+                    if not self._retarget(n):
+                        self._exit_without_work(n)
         self._stream_fulfilled = []
         if getattr(self, "_book", False):
             while self._book_released < self._book_target(self.step_count):
@@ -1614,6 +1716,10 @@ class FLOWRRA:
             "stream_orders_issued": s["orders"],
             "stream_exits": s["exits"],
             "stream_reentries": s["reentries"],
+            # No-work exit (entries 33-34): fleets sent out with no order, and
+            # fleets that parked mid-floor in the stream for want of a dock.
+            "stream_no_work_exits": self.stream_no_work_exits,
+            "stream_parked_no_exit": self.stream_parked_no_exit,
             "stream_on_floor_mean": s["floor_sum"] / max(1, s["floor_steps"]),
             "stream_life_steps_mean": s["life_sum"] / max(1, s["exits"]),
             "stream_exit_leg_steps_mean": s["leg_sum"] / max(1, s["exits"]),
@@ -2761,9 +2867,276 @@ class FLOWRRA:
             return False
         if la is None or lb is None:
             return False
-        gap_now = float(np.sum(np.abs(pa - pb)))
-        gap_was = float(np.sum(np.abs(la - lb)))
+        if self.hops_everywhere and self.hop_metric is not None:
+            gap_now = self.hop_metric.distance(pa, pb)        # hops (entry 29)
+            gap_was = self.hop_metric.distance(la, lb)
+        else:
+            gap_now = float(np.sum(np.abs(pa - pb)))
+            gap_was = float(np.sum(np.abs(la - lb)))
         return gap_now >= gap_was - 0.05
+
+    # ---- ROUTE BY DEFAULT (conflict.route_by_default) -------------------------
+    def _apply_route_default(self, actions, valid_masks) -> None:
+        """Replace the network's choice with the shortest-path move for every
+        mobile fleet NOT in contention. In contention means: in this step's
+        warning or deadlock set (with path warnings: a warned pair -- a meeting
+        route within the conflict radius, a follower too close, anyone within
+        the 1-hop floor), or a live peer within route_network_radius hops (0:
+        the warning set alone). The route move is the goal gradient's best
+        move, taken only if the action mask allows it (the hard veto on people
+        holds); a fleet at its goal, or with no move shown, keeps the network's
+        choice. Exactly the rule deploy_eval's champion+route arm measured
+        (entries 26-28), except that contention is read from path awareness
+        rather than a fixed 2-cell radius. Records the network's own choices
+        (self._route_raw) and which fleets the route decided (self._route_mask)."""
+        raw = np.array(actions, copy=True)
+        routed = np.zeros(len(actions), dtype=bool)
+        busy = set(self.loop.warning_nodes) | set(self.loop.deadlocked_nodes)
+        imm = self.immobile_nodes
+        eligible = np.zeros(len(actions), dtype=bool)
+        route_moves = np.full(len(actions), -1, dtype=np.int64)
+        _exm = None
+        if self.route_explore:
+            _exm = getattr(self.gnn, "last_explore_mask", None)
+            if _exm is not None and len(_exm) != len(actions):
+                _exm = None
+        for i, node in enumerate(self.nodes):
+            if node.id in imm:
+                continue
+            self.route_steps += 1
+            if node.id in busy:
+                continue
+            if (self.route_network_radius > 0.0
+                    and self.proximity.nearest(node.id) <= self.route_network_radius):
+                continue
+            g = node.get_goal_gradient()
+            if not np.any(g > 0):
+                self.route_no_move += 1
+                continue
+            move = int(np.argmax(g)) + 1
+            if valid_masks is not None and not bool(valid_masks[i][move]):
+                self.route_no_move += 1
+                continue
+            eligible[i] = True
+            route_moves[i] = move
+            if _exm is not None and bool(_exm[i]):
+                # Fix 3: the network chose to explore here; let it. Its lesson
+                # is still valued at the route's move (_honest_complete_pending).
+                self.route_explore_kept += 1
+                continue
+            self.route_routed += 1
+            self.route_network_differed += int(int(raw[i]) != move)
+            actions[i] = move
+            routed[i] = True
+        self._route_raw, self._route_mask = raw, routed
+        self._route_eligible, self._route_moves = eligible, route_moves
+        self._route_actions = np.array(actions, copy=True)
+
+    # ---- NO-WORK EXIT (stream.no_work_exit; build log entries 33-34) --------
+    def _exit_without_work(self, node) -> bool:
+        """In the stream, send a fleet that has no order left out at the
+        nearest dock -- the delivery path's drive-out, without a delivery --
+        instead of freezing it mid-aisle. Returns True if it was sent out.
+
+        False (the caller freezes, exactly as before) when the switch is off,
+        outside the stream, or when no dock can be reached from its cell; the
+        last is counted (stream_parked_no_exit), so a fleet parked mid-floor
+        is always visible in the run's numbers.
+
+        Nothing is fulfilled, delivered or timed: the order this fleet was
+        chasing was delivered by someone else. Its target is the dock; on
+        arrival _collect_despawned removes it and _stream_left books an exit,
+        and the stream brings it back with a new order like any other."""
+        if not (self.no_work_exit and getattr(self, "stream", False)
+                and self.despawn_on_delivery):
+            return False
+        exit_node = self._nearest_exit(node)
+        if exit_node is None or exit_node not in self._coords_by_id:
+            self.stream_parked_no_exit += 1
+            return False
+        self._despawning[node.id] = exit_node
+        self._leg_started[node.id] = self.step_count
+        node.current_goal_id = exit_node
+        node.goal_pos = np.array(self._coords_by_id[exit_node], dtype=np.float32)
+        node.goal_distance_map = self._exit_dist
+        node.initial_graph_distance = node.get_graph_distance_to_goal()
+        self._best_dist.pop(node.id, None)
+        self._stall_steps[node.id] = 0
+        self.stream_no_work_exits += 1
+        print(f"[Stream] Fleet {node.id} has no order left; heading out at dock "
+              f"{exit_node} instead of parking.")
+        return True
+
+    # ---- HONEST TARGET (training.honest_target; build log entry 34) ----------
+    def _honest_complete_pending(self, executed) -> None:
+        """Push the transition held from the previous step, completed with what
+        happened in its next state -- which is THIS step.
+
+        For each fleet in the held transition's next state (matched by id: the
+        stream changes the roster between steps), next_policy_action is:
+          * -1 if the network drove it this step: the route did not take it
+            and the move executed is the network's own choice (its exploring
+            moves included). learn() bootstraps from the network's best move,
+            as always -- Q-learning where the network actually acts;
+          * otherwise the move actually executed this step: the route's, a
+            rule's, a ladder hold's, or the guard's (a stop is 0). learn()
+            bootstraps from that move, so no target leans on a move that
+            never happens (principle 7).
+        A fleet absent this step (it left the floor) reads -1; its next
+        active mask is 0, so nothing it bootstraps reaches the loss."""
+        if self._honest_pending is None:
+            return
+        kw, next_ids = self._honest_pending
+        self._honest_pending = None
+        ids = self._honest_ids or []
+        raw = self._honest_raw
+        pos = {fid: j for j, fid in enumerate(ids)}
+        if (self.route_by_default and self._route_mask is not None
+                and len(self._route_mask) == len(ids)):
+            routed = np.asarray(self._route_mask, dtype=bool)
+        else:
+            routed = np.zeros(len(ids), dtype=bool)
+        # Fix 3 (route_explore): a fleet the route would have driven but that
+        # explored instead is valued at the ROUTE's move -- the policy that
+        # runs in that state whenever it does not explore.
+        if (self.route_explore and self.route_by_default
+                and self._route_eligible is not None
+                and len(self._route_eligible) == len(ids)):
+            explored_clear = (np.asarray(self._route_eligible, dtype=bool) & ~routed)
+            route_moves = self._route_moves
+        else:
+            explored_clear = np.zeros(len(ids), dtype=bool)
+            route_moves = None
+        nam = kw.get("next_active_mask")
+        npa = np.full(len(next_ids), -1, dtype=np.int64)
+        for k, fid in enumerate(next_ids):
+            j = pos.get(fid)
+            if j is None or raw is None or executed is None or j >= len(executed):
+                continue
+            ex = int(executed[j])
+            counted = nam is None or (k < len(nam) and nam[k] > 0)
+            if explored_clear[j]:
+                npa[k] = int(route_moves[j])
+                if counted:
+                    self.honest_exec += 1
+                continue
+            if (not routed[j]) and ex == int(raw[j]):
+                if counted:
+                    self.honest_net += 1
+            else:
+                npa[k] = ex
+                if counted:
+                    self.honest_exec += 1
+        self.gnn.memory.push(**kw, next_policy_action=npa)
+        self.honest_pushed += 1
+
+    def flush_pending_transition(self) -> int:
+        """Push the held transition without a next step to complete it (the
+        episode was cut off at its step budget, or a step pushed nothing). It
+        bootstraps from the network's best move, exactly as before the honest
+        target. The runner calls this once after its step loop, so no
+        transition is ever lost. Returns 1 if one was pushed, else 0."""
+        if self._honest_pending is None:
+            return 0
+        kw, next_ids = self._honest_pending
+        self._honest_pending = None
+        self.gnn.memory.push(**kw, next_policy_action=np.full(len(next_ids), -1, dtype=np.int64))
+        self.honest_pushed += 1
+        self.honest_flushed += 1
+        return 1
+
+    # ---- SAFETY: bubbles by kind and the intent guard (build log entry 29) ----
+    def _kind_brake(self, node) -> float:
+        """Braking factor from path awareness: the slowest any nearby pair asks
+        for. Per pair, a linear ramp from 0.1 at the near end (the guard's
+        min_gap, or the collision distance without the guard) to 1.0 at that
+        pair's bubble: bubble_meeting for head-on, contested, unknown and the
+        moving fleet of a blocked pair; bubble_following for the follower of a
+        following pair; bubble_other otherwise (the leader of a convoy, the
+        blocker itself, sequential and none). The final-approach floor applies
+        inside a ramp, as in the distance-only rule. Hops throughout: the
+        verdicts carry GraphProximity distances."""
+        lo = self.guard_min_gap if self.intent_guard else float(self.loop.collision_threshold)
+        s = 1.0
+        for v in self._verdicts_start:
+            if node.id != v.a and node.id != v.b:
+                continue
+            k = v.kind
+            if k in ("head_on", "contested", "unknown"):
+                W = self.bubble_meeting
+            elif k == "blocked":
+                W = self.bubble_meeting if v.blocker != node.id else self.bubble_other
+            elif k == "following":
+                W = self.bubble_following if v.follower == node.id else self.bubble_other
+            else:
+                W = self.bubble_other
+            d = float(v.dist)
+            if d <= lo:
+                f = 0.1
+            elif d >= W:
+                f = 1.0
+            else:
+                f = 0.1 + 0.9 * (d - lo) / max(1e-9, W - lo)
+                if node.get_progress_fraction() >= self.final_approach_threshold:
+                    f = max(f, self.final_approach_speed_floor)
+            s = min(s, f)
+        return s
+
+    def _run_intent_guard(self, pending, actions):
+        """Apply guard_warehouse.guard_speeds to this step's decided moves.
+        pending: (i, node, action_id, base_speed, old_dist, old_pos, pos_before)
+        per moving fleet, node.speed already braked. Sets each fleet's speed to
+        the guard's and turns a move the guard stopped outright into a wait
+        (recorded as the executed action). Returns pending with those actions."""
+        from guard_warehouse import candidate_radius, guard_speeds
+        movers = {node.id: (node, int(a), float(node.speed))
+                  for (_i, node, a, *_rest) in pending}
+        vmax = max((m[2] for m in movers.values()), default=0.0)
+        R = min(candidate_radius(self.guard_min_gap, vmax), self.proximity.search_radius)
+        pairs = [(a, b) for a, b, _d in self.proximity.pairs(radius=R)
+                 if a in movers and b in movers]
+        speeds, st = guard_speeds(movers, pairs, self.hop_metric,
+                                  min_gap=self.guard_min_gap, rounds=self.guard_rounds)
+        # Kept for the invariant check after the moves (_guard_verify).
+        self._guard_last = (pairs, {i: np.asarray(m[0].current_pos, dtype=np.float64).copy()
+                                    for i, m in movers.items()},
+                            {i: m[0] for i, m in movers.items()})
+        self.guard_pairs_checked += st["pairs_checked"]
+        self.guard_pairs_short += st["pairs_short"]
+        self.guard_fleets_slowed += st["fleets_slowed"]
+        self.guard_fallback_stops += st["fallback_stops"]
+        self.guard_rounds_max = max(self.guard_rounds_max, st["rounds"])
+        if st["pairs_short"]:
+            self.guard_steps_active += 1
+        out = []
+        for (i, node, a, base_speed, old_dist, old_pos, pos_before) in pending:
+            s = speeds.get(node.id, node.speed)
+            if s < node.speed - 1e-12:
+                if s <= 1e-9 and a != 0:
+                    a = 0                           # stopped by the guard: a wait
+                    actions[i] = 0
+                    self.guard_stops += 1
+                    node.speed = 0.0
+                else:
+                    node.speed = s
+            out.append((i, node, a, base_speed, old_dist, old_pos, pos_before))
+        return out
+
+    def _guard_verify(self) -> None:
+        """THE INVARIANT, checked live after every guarded move: no pair the
+        guard checked ended closer than min_gap hops (or than it started, if it
+        started closer), and none drove through the other. Counts violations;
+        every run should report 0. test_guard_integration.py asserts it."""
+        from guard_warehouse import crossed
+        pairs, p0, nodes = getattr(self, "_guard_last", ((), {}, {}))
+        for a, b in pairs:
+            na, nb = nodes[a], nodes[b]
+            pa, pb = np.asarray(na.current_pos, dtype=np.float64), np.asarray(nb.current_pos, dtype=np.float64)
+            d0 = self.hop_metric.distance(p0[a], p0[b])
+            d1 = 0.0 if crossed(p0[a], pa, p0[b], pb) else self.hop_metric.distance(pa, pb)
+            if d1 < min(self.guard_min_gap, d0) - 1e-6:
+                self.guard_violations += 1
+        self._guard_last = ((), {}, {})
 
     def _brake_distance(self, node) -> float:
         """
@@ -2874,8 +3247,12 @@ class FLOWRRA:
             return False                      # head-on or crossing
         if a.last_pos is None or b.last_pos is None:
             return False
-        gap_now = float(np.sum(np.abs(a.current_pos - b.current_pos)))
-        gap_was = float(np.sum(np.abs(a.last_pos - b.last_pos)))
+        if self.hops_everywhere and self.hop_metric is not None:
+            gap_now = self.hop_metric.distance(a.current_pos, b.current_pos)   # hops (entry 29)
+            gap_was = self.hop_metric.distance(a.last_pos, b.last_pos)
+        else:
+            gap_now = float(np.sum(np.abs(a.current_pos - b.current_pos)))
+            gap_was = float(np.sum(np.abs(a.last_pos - b.last_pos)))
         return gap_now >= gap_was - 0.05      # steady or opening, not closing
 
     def _drop_following_pairs(self, at_risk: Set[str]) -> Set[str]:
@@ -2935,7 +3312,8 @@ class FLOWRRA:
             dl, wn = self._step_deadlocked, self._step_warning
         if warn_override is not None:
             warn = warn_override
-        coh = np.array([-1.0 if n.id in dl else (-0.5 if n.id in wn else 0.0)
+        _pres = -0.5 if self.presence_charge else 0.0
+        coh = np.array([-1.0 if n.id in dl else (_pres if n.id in wn else 0.0)
                         for n in self.nodes], dtype=np.float64)
         eff = (T[:, ti[("goal", "progress")]] + T[:, ti[("time", "idle")]]
                + T[:, ti[("time", "overtime")]] + T[:, ti[("goal", "final_approach")]])
@@ -2982,23 +3360,42 @@ class FLOWRRA:
             db = np.asarray(self.nodes[ib].current_pos, dtype=np.float64) - pb0
             if np.linalg.norm(da) < 1e-6 and np.linalg.norm(db) < 1e-6:
                 standoff.add(frozenset((a_id, b_id)))
-            u = pb0 - pa0
-            nu = float(np.linalg.norm(u))
-            if nu < 1e-9 or close <= 0.0:
-                continue
-            # CLOSING of the gap, not movement toward the other's old position:
-            # a convoy follower moves toward where its leader WAS, while the
-            # leader moves away by the same amount -- the gap is unchanged and
-            # nobody should pay. So: charge only if the gap actually shrank,
-            # and split that closing between the two by how much each moved
-            # toward the other.
-            closing = nu - float(np.linalg.norm((pb0 + db) - (pa0 + da)))
-            if closing <= 1e-9:
-                continue
-            u = u / nu
-            ca, cb = max(0.0, float(da @ u)), max(0.0, float(db @ -u))
-            if ca + cb <= 1e-12:
-                continue
+            if self.hops_everywhere and self.hop_metric is not None:
+                # IN HOPS (safety.hops_everywhere; build log entry 29). The same
+                # rule, measured through the graph like every other distance:
+                # the gap's closing is hops before minus hops after, and each
+                # fleet's share is how much ITS move alone (the other where it
+                # was) closed the gap. Straight-line distance mis-measured pairs
+                # that meet around a corner.
+                pa1, pb1 = pa0 + da, pb0 + db
+                d_before = self.hop_metric.distance(pa0, pb0)
+                if d_before < 1e-9 or close <= 0.0:
+                    continue
+                closing = d_before - self.hop_metric.distance(pa1, pb1)
+                if closing <= 1e-9:
+                    continue
+                ca = max(0.0, d_before - self.hop_metric.distance(pa1, pb0))
+                cb = max(0.0, d_before - self.hop_metric.distance(pa0, pb1))
+                if ca + cb <= 1e-12:
+                    continue
+            else:
+                u = pb0 - pa0
+                nu = float(np.linalg.norm(u))
+                if nu < 1e-9 or close <= 0.0:
+                    continue
+                # CLOSING of the gap, not movement toward the other's old position:
+                # a convoy follower moves toward where its leader WAS, while the
+                # leader moves away by the same amount -- the gap is unchanged and
+                # nobody should pay. So: charge only if the gap actually shrank,
+                # and split that closing between the two by how much each moved
+                # toward the other.
+                closing = nu - float(np.linalg.norm((pb0 + db) - (pa0 + da)))
+                if closing <= 1e-9:
+                    continue
+                u = u / nu
+                ca, cb = max(0.0, float(da @ u)), max(0.0, float(db @ -u))
+                if ca + cb <= 1e-12:
+                    continue
             for i, fid, part in ((ia, a_id, ca), (ib, b_id, cb)):
                 if fid in dead or part <= 0.0:
                     continue
@@ -3952,6 +4349,35 @@ class FLOWRRA:
             "wave_fired": self.waves_fired,
             "wave_failures": self.wave_failures,
             "wave_rescuers_hit": self.wave_rescuers_hit,
+            # The intent guard (safety.intent_guard; build log entry 29). With
+            # it on, collisions from movement are prevented, and THESE are the
+            # safety measure: how often the safety layer had to step in.
+            "guard_on": int(self.intent_guard),
+            "guard_steps_active": self.guard_steps_active,
+            "guard_pairs_checked": self.guard_pairs_checked,
+            "guard_pairs_short": self.guard_pairs_short,
+            "guard_fleets_slowed": self.guard_fleets_slowed,
+            "guard_stops": self.guard_stops,
+            "guard_fallback_stops": self.guard_fallback_stops,
+            "guard_rounds_max": self.guard_rounds_max,
+            "guard_violations": self.guard_violations,
+            # Route by default (conflict.route_by_default).
+            "route_on": int(self.route_by_default),
+            "route_share": (self.route_routed / self.route_steps) if self.route_steps else 0.0,
+            "route_network_differed": ((self.route_network_differed / self.route_routed)
+                                       if self.route_routed else 0.0),
+            "route_no_move": self.route_no_move,
+            # Fix 3: exploring fleets in the clear left to explore, not routed.
+            "route_explore_on": int(self.route_explore),
+            "route_explore_kept": self.route_explore_kept,
+            # Honest target (entry 34): transitions pushed through the hold, and
+            # the share of active next-state fleets valued at the move actually
+            # made (the rest at the network's best, where it drove).
+            "honest_on": int(self.honest_target),
+            "honest_pushed": self.honest_pushed,
+            "honest_flushed": self.honest_flushed,
+            "honest_exec_share": ((self.honest_exec / (self.honest_exec + self.honest_net))
+                                  if (self.honest_exec + self.honest_net) else 0.0),
             # The conflict ladder (step 2a-i).
             "ladder_l3_fired": self.ladder_l3_fired,
             "ladder_l3_fleets": self.ladder_l3_fleets,
@@ -4652,6 +5078,8 @@ class FLOWRRA:
                         # Every goal claimed while this fleet was en route to one
                         # that got taken -- nothing left for it to do.
                         self._release_target(node)
+                        if self._exit_without_work(node):
+                            continue
                         self.frozen_nodes.add(node.id)
                         self.gnn.freeze_node(node.id, node.current_pos)
                         print(f"[Core] Fleet {node.id} frozen -- pool exhausted while retargeting.")
@@ -4736,6 +5164,19 @@ class FLOWRRA:
                            if _inconf else None),
         )
 
+        # HONEST TARGET: the network's own choices, BEFORE the route, rules,
+        # holds or the guard touch them -- and the roster they index.
+        if self.honest_target and actions is not None:
+            self._honest_raw = np.array(actions, copy=True)
+            self._honest_ids = list(node_ids)
+
+        # ROUTE BY DEFAULT (conflict.route_by_default; build log entries 25-29).
+        # The network decides only where a fleet is in contention; everywhere
+        # else the fleet takes its shortest-path move. Before the ladder, rules,
+        # holds and the guard, which all still apply.
+        if self.route_by_default and actions is not None:
+            self._apply_route_default(actions, valid_action_masks_array)
+
         # The network's masked Q-values for THIS step, [num_nodes, 7], or None
         # if no forward pass ran (every fleet explored). Used by the tabu veto
         # below to take the network's second choice instead of a random one.
@@ -4797,6 +5238,7 @@ class FLOWRRA:
                        None if n.last_pos is None else np.asarray(n.last_pos, dtype=np.float64).copy(),
                        np.asarray(n.current_pos, dtype=np.float64).copy())
                 for n in self.nodes}
+        _guard_pending = []                     # (safety.intent_guard) decided, not yet moved
         for i, node in enumerate(self.nodes):
             if node.id in self.immobile_nodes:
                 continue
@@ -5086,6 +5528,17 @@ class FLOWRRA:
                     if node.get_progress_fraction() >= self.final_approach_threshold:
                         local_safety = max(local_safety, self.final_approach_speed_floor)
 
+                # BUBBLES BY KIND (safety.bubbles_by_kind; build log entry 29).
+                # The ramp's far end depends on what each nearby pair is doing,
+                # from path awareness: meeting kinds (head-on, contested, the
+                # mover of a blocked pair, unknown) brake from bubble_meeting, a
+                # follower from bubble_following, anything else only at the
+                # floor. The near end is the guard's min_gap. Replaces the
+                # distance-only value just computed; the statistics above keep
+                # measuring the nearest peer exactly as before.
+                if self.bubbles_by_kind:
+                    local_safety = self._kind_brake(node)
+
                 # BRAKING SWITCH (warehouse.braking). Off: full speed always --
                 # as in POGEMA, where an agent moves a whole cell or stays put.
                 # For comparisons on their protocol; on by default.
@@ -5168,6 +5621,16 @@ class FLOWRRA:
                 self.actions_overridden += 1
             actions[i] = action_id
 
+            if self.intent_guard:
+                # THE INTENT GUARD (safety.intent_guard; build log entry 29):
+                # every fleet's move is decided first; the guard reads all of
+                # them, then everyone moves -- after this loop. Only with
+                # step.simultaneous, where nothing above reads another fleet's
+                # new position, so deciding all before moving any changes nothing.
+                _guard_pending.append((i, node, int(action_id), base_speed,
+                                       old_dist, old_pos, _pos_before))
+                continue
+
             node.apply_discrete_action(action_id)
 
             # --- motion accounting (see _fleet_travel in __init__) ---
@@ -5197,6 +5660,26 @@ class FLOWRRA:
                 (self._post_action_deadlocked,
                  self._post_action_warning) = self._peek()
                 _leftover_i = i
+
+        # ---- THE INTENT GUARD, then the moves (build log entry 29) -----------
+        # Every move is known. The guard lowers the speed of any fleet whose
+        # move would bring it within min_gap hops of another moving fleet (or
+        # through it), then each fleet moves -- the same apply and motion
+        # accounting as in the loop above. A fleet the guard stops outright
+        # waits, and the wait is what is recorded as its executed action.
+        if self.intent_guard and _guard_pending:
+            for (i, node, action_id, base_speed, old_dist, old_pos,
+                 _pos_before) in self._run_intent_guard(_guard_pending, actions):
+                node.apply_discrete_action(action_id)
+                # --- motion accounting, as in the loop above ---
+                _moved = float(np.sum(np.abs(node.current_pos - _pos_before)))
+                self._fleet_travel[node.id] = self._fleet_travel.get(node.id, 0.0) + _moved
+                self._fleet_steps[node.id] = self._fleet_steps.get(node.id, 0) + 1
+                self._fleet_speed[node.id] = self._fleet_speed.get(node.id, 0.0) + float(node.speed)
+                if _moved < 1e-6:
+                    self._fleet_idle[node.id] = self._fleet_idle.get(node.id, 0) + 1
+                _carry[i] = (_moved, base_speed, old_dist, old_pos)
+            self._guard_verify()
 
         # ---- BETWEEN THE PHASES: snapshot, and resolve simultaneous arrivals ---
         _claimed_snap = frozenset(self.claimed_goals)
@@ -5532,6 +6015,10 @@ class FLOWRRA:
                                           f"({len(self.claimed_goals)}/{len(self.goal_pool)} claimed); "
                                           f"heading out via {exit_node}. 🔥")
                             else:
+                                if self.stream:
+                                    # Delivered, but no dock reachable: it parks
+                                    # mid-floor. Counted, so it is never silent.
+                                    self.stream_parked_no_exit += 1
                                 self.frozen_nodes.add(node.id)
                                 self.gnn.freeze_node(node.id, node.current_pos)
                                 print(f"[Core] Fleet {node.id} claimed goal {delivered} and retired! "
@@ -5549,7 +6036,7 @@ class FLOWRRA:
                             _pending_retarget.append(node)
                         else:
                             found = self._retarget(node)
-                            if not found:
+                            if not found and not self._exit_without_work(node):
                                 self.frozen_nodes.add(node.id)
                                 self.gnn.freeze_node(node.id, node.current_pos)
                                 print(f"[Core] Fleet {node.id} frozen -- pool fully claimed "
@@ -5696,7 +6183,7 @@ class FLOWRRA:
         # Deferred retargets, in a fixed order independent of list position.
         for node in sorted(_pending_retarget, key=lambda n: str(n.id)):
             found = self._retarget(node)
-            if not found:
+            if not found and not self._exit_without_work(node):
                 self.frozen_nodes.add(node.id)
                 self.gnn.freeze_node(node.id, node.current_pos)
                 print(f"[Core] Fleet {node.id} frozen -- pool fully claimed "
@@ -5925,17 +6412,17 @@ class FLOWRRA:
                 _push_rewards = step_rewards_array
             _leaving = (self._stream_leaving_ids()
                         if getattr(self, "stream", False) else set())
-            self.gnn.memory.push(
-                node_features_array,
-                adj_mat,
-                actions,
-                _push_rewards,
-                next_node_features_array,
-                next_adj_mat,
-                done,
-                current_integrity,
-                active_mask,
-                self.last_recovery_mode,
+            _push_kw = dict(
+                node_features=node_features_array,
+                adj_matrix=adj_mat,
+                actions=actions,
+                rewards=_push_rewards,
+                next_node_features=next_node_features_array,
+                next_adj_matrix=next_adj_mat,
+                done=done,
+                integrity=current_integrity,
+                active_mask=active_mask,
+                recovery_action=self.last_recovery_mode,
                 # Structural validity in the NEXT state. Without it the target
                 # maxes over impossible actions whose Q-values no transition
                 # ever corrects: loss_goal 0.39 -> 384.5 in cold_run5, and
@@ -5961,7 +6448,31 @@ class FLOWRRA:
                 valid_mask=valid_action_masks_array,
                 teacher_mask=_teacher,
             )
-        
+            if not self.honest_target:
+                self.gnn.memory.push(**_push_kw)
+            else:
+                # 1. The transition held from LAST step is completed with what
+                #    happened in its next state -- this step -- and pushed.
+                self._honest_complete_pending(actions)
+                # 2. This step's own transition: held until the next step shows
+                #    what was actually done in its next state. A terminal one
+                #    never bootstraps, so it goes in now.
+                _next_ids = [n.id for n in self.nodes]
+                if done:
+                    self.gnn.memory.push(
+                        **_push_kw,
+                        next_policy_action=np.full(len(_next_ids), -1, dtype=np.int64))
+                    self.honest_pushed += 1
+                else:
+                    self._honest_pending = (
+                        {k: (v.copy() if isinstance(v, np.ndarray) else v)
+                         for k, v in _push_kw.items()},
+                        _next_ids)
+        elif self.honest_target and self._honest_pending is not None:
+            # A step that pushed nothing (no actions) cannot complete the held
+            # transition with ITS moves; push it now, bootstrapping as before.
+            self.flush_pending_transition()
+
         # ---- REWARD COMPOSITION (measurement only) -------------------------
         # The final [N, K] matrix -- after post-action re-attribution, exactly
         # what was pushed. The learned view uses the same active mask the push

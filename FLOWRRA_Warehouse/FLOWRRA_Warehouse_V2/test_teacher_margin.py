@@ -126,8 +126,12 @@ def test_sample_mixes_old_and_new():
     buf.push(**transition(rng, teacher=True))
     random.seed(0)
     batch = buf.sample(2)
-    # 16 since masked pooling added the real-row masks (test_graph_pooling.py).
-    check("sample_returns_16", len(batch), 16)
+    # 16 since masked pooling added the real-row masks (test_graph_pooling.py);
+    # 17 since the honest target (build log entry 34) appended its moves LAST,
+    # so every index below is unchanged. Nothing here stored that field, so
+    # the 17th is None: the switch off adds nothing to learning.
+    check("sample_returns_17", len(batch), 17)
+    check("no_honest_field_reads_none", batch[16] is None, True)
     valid_t, teacher_t = batch[12], batch[13]
     check("valid_tensor_present", valid_t is not None, True)
     check("teacher_tensor_shape", tuple(teacher_t.shape), (2, N))

@@ -73,6 +73,12 @@ class WarehouseRecovery:
         # Set by the orchestrator from step.simultaneous. When True, escape order
         # and winner tie-breaks follow fleet id rather than list position.
         self.order_independent = False
+        # HOPS (safety.hops_everywhere; build log entry 29). The env sets this
+        # to its guard_warehouse.HopMetric; then every fleet-to-fleet distance
+        # here is measured in graph hops, like everywhere else. None: Manhattan,
+        # exactly as before (always on the safe side, since Manhattan never
+        # exceeds hops, but inconsistent with every other consumer).
+        self.hop_metric = None
         # Cells holding a human or debris. Refreshed by the orchestrator before
         # every recovery call, because it REASSIGNS its set when humans move --
         # a reference taken once would go stale.
@@ -171,6 +177,14 @@ class WarehouseRecovery:
         # Used to alternate the winner on the next offence -- see _assign_yields().
         self.pair_last_loser: Dict[frozenset, str] = {}
 
+    def _gap(self, pa, pb) -> float:
+        """Fleet-to-fleet distance: graph hops when hop_metric is set
+        (safety.hops_everywhere), otherwise Manhattan as before."""
+        if self.hop_metric is not None:
+            return float(self.hop_metric.distance(pa, pb))
+        # Exactly the old expression (same dtypes), so the off path is bit-identical.
+        return float(np.sum(np.abs(pa - pb)))
+
     def _record_recurrences(self, conflicted_nodes: List[Any]) -> int:
         """
         Bump each conflicting pair's recurrence count if it is meeting within
@@ -190,7 +204,7 @@ class WarehouseRecovery:
         for i in range(len(conflicted_nodes)):
             for j in range(i + 1, len(conflicted_nodes)):
                 a, b = conflicted_nodes[i], conflicted_nodes[j]
-                if float(np.sum(np.abs(a.current_pos - b.current_pos))) > self.warning_threshold:
+                if self._gap(a.current_pos, b.current_pos) > self.warning_threshold:
                     continue
                 key = frozenset((a.id, b.id))
                 if a.id in self.currently_yielding and b.id in self.currently_yielding:
@@ -220,7 +234,7 @@ class WarehouseRecovery:
         for i in range(len(conflicted_nodes)):
             for j in range(i + 1, len(conflicted_nodes)):
                 a, b = conflicted_nodes[i], conflicted_nodes[j]
-                dist = float(np.sum(np.abs(a.current_pos - b.current_pos)))
+                dist = self._gap(a.current_pos, b.current_pos)
                 if dist <= self.collision_threshold:
                     # DO NOT COUNT AN OVERLAP BETWEEN TWO ALREADY-HELD FLEETS.
                     #
@@ -591,7 +605,7 @@ class WarehouseRecovery:
                 for other in nodes:
                     if other.id == node.id or other.id in frozen_node_ids:
                         continue
-                    _d = float(np.sum(np.abs(n_pos - other.current_pos)))
+                    _d = self._gap(n_pos, other.current_pos)
                     if _d <= self.collision_threshold:
                         _too_close = True
                         break
@@ -685,7 +699,7 @@ class WarehouseRecovery:
             for n1 in tier_nodes:
                 for n2 in tier_nodes:
                     if n1.id != n2.id and n1.id in snap["positions"] and n2.id in snap["positions"]:
-                        dist = np.sum(np.abs(snap["positions"][n1.id] - snap["positions"][n2.id]))
+                        dist = self._gap(snap["positions"][n1.id], snap["positions"][n2.id])
                         if dist <= self.collision_threshold:
                             is_safe = False
                             break
@@ -709,7 +723,7 @@ class WarehouseRecovery:
             if is_safe and winner_node is not None:
                 for n in tier_nodes:
                     if n.id in snap["positions"]:
-                        dist = np.sum(np.abs(snap["positions"][n.id] - winner_node.current_pos))
+                        dist = self._gap(snap["positions"][n.id], winner_node.current_pos)
                         if dist <= self.collision_threshold:
                             is_safe = False
                             break

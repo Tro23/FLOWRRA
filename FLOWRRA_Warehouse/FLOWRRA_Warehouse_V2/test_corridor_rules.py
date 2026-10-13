@@ -30,11 +30,32 @@ from config_warehouse import CONFIG
 import drive_shortest_path as drv
 
 FAIL = []
-ALL = {"conflict.path_warnings": True, "conflict.directional_braking": True,
-       "conflict.node_aligned_moves": True,
-       "conflict.corridor_entry": True, "conflict.priority": True,
-       "stream.enabled": False}
-OFF = {"stream.enabled": False}
+
+# SWITCHES, SPELLED OUT (fixed 2026-10-12, build log 30). These tests were
+# written when the config FILE had every conflict component off, so "restore
+# the config" meant "off". Since run 2 the file runs with them all on (and,
+# since build log 30, the safety switches too), so "off" has to be said.
+CONFLICT_OFF = {"conflict.path_warnings": False, "conflict.directional_braking": False,
+                "conflict.corridor_entry": False, "conflict.priority": False,
+                "conflict.yield_to_stopped": False, "conflict.node_aligned_moves": False,
+                "conflict.ladder.enabled": False, "conflict.ladder.shadow": False,
+                "conflict.ladder.retrace": False}
+SAFETY_OFF = {"safety.intent_guard": False, "safety.bubbles_by_kind": False,
+              "safety.hops_everywhere": False, "conflict.route_by_default": False}
+# And no injected failures or people: the file runs with both on (failure waves
+# since 3 October), and a failure stopping one of two test fleets -- or a wave
+# firing in one list order and not the other (failure injection draws from the
+# global random stream, build log 30) -- is not what these tests are about.
+NO_FAILURES = {"errors.enabled": False, "obstacles.enabled": False}
+# The four components these tests are about, and nothing else: yield-to-stopped,
+# the ladder and the safety layer off, as they were when the tests were written.
+ALL = dict(CONFLICT_OFF, **SAFETY_OFF, **NO_FAILURES)
+ALL.update({"conflict.path_warnings": True, "conflict.directional_braking": True,
+            "conflict.node_aligned_moves": True,
+            "conflict.corridor_entry": True, "conflict.priority": True,
+            "stream.enabled": False})
+OFF = dict(CONFLICT_OFF, **SAFETY_OFF, **NO_FAILURES)
+OFF["stream.enabled"] = False
 
 
 def check(name, got, want):

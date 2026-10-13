@@ -595,6 +595,10 @@ def main():
                            "learner_n": agent.last_learner_n})
             if env.is_episode_over():
                 break
+        # HONEST TARGET (entry 34): the last step's transition is held waiting
+        # for a next step that will not come; push it now so none is lost.
+        if hasattr(env, "flush_pending_transition"):
+            env.flush_pending_transition()
 
         est = env.get_error_statistics()
         if getattr(env, "stream", False):
@@ -667,6 +671,20 @@ def main():
                 + f"| lead mean {est['stream_book_lead_mean']:.0f} / p90 {est['stream_book_lead_p90']:.0f} steps "
                 f"| robots busy {est['stream_book_busy'] * 100:.0f}% "
                 f"| {est['stream_book_per_robot']:.2f} per 1,000 robot-steps")
+        if est.get("guard_on") or est.get("route_on"):
+            # SAFETY (build log entry 29): how often the intent guard stepped in
+            # (with it on, these replace collisions as the safety measure), and
+            # how much of the driving route by default did.
+            logger.info(
+                f"        safety | guard stepped in on {est['guard_steps_active']} steps "
+                f"| {est['guard_pairs_short']} pairs too close | {est['guard_fleets_slowed']} slowed, "
+                f"{est['guard_stops']} stopped, {est['guard_fallback_stops']} by fallback, "
+                f"{est['guard_violations']} invariant violations "
+                f"| route decided {est['route_share'] * 100:.0f}% of moves "
+                f"(network would have differed {est['route_network_differed'] * 100:.0f}%)"
+                + (f" | honest target: {est['honest_exec_share'] * 100:.0f}% of next moves valued "
+                   f"as actually made, {est['honest_pushed']} pushed ({est['honest_flushed']} flushed)"
+                   if est.get("honest_on") else ""))
         if "path_views" in est:
             logger.info(
                 f"         paths | contested {est['path_contested_pct']:.1f}% of views "
@@ -710,7 +728,8 @@ def main():
                                      "tier1_", "tier2_", "recurrence_", "doorstep_", "start_hops_",
                                      "steps_held_", "steps_waiting_", "wave_", "ladder_", "obstacle_",
                                      "convoy_", "held_pair_", "rwd_", "path_", "stream_", "choice_",
-                                     "preempt_", "conflict_", "watch_", "corridor_"))})
+                                     "preempt_", "conflict_", "watch_", "corridor_",
+                                     "guard_", "route_", "honest_"))})
         row.update({f"loss_{h}": mean_hl[h] for h in heads})
         # Value level per head, and the recovery head's loss and value --
         # episode means over learning steps (0.0 before learning starts).

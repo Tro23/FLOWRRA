@@ -232,6 +232,28 @@ def real_env(sets, agents=24, seed=0, recovery="always"):
 
 ON = {"conflict.path_warnings": True, "conflict.directional_braking": True}
 
+# SWITCHES, SPELLED OUT (fixed 2026-10-12, build log 30). These tests were
+# written when the config FILE had every conflict component off, so "restore
+# the config" meant "off". Since run 2 the file runs with them all on (and,
+# since build log 30, the safety switches too), so "off" has to be said.
+CONFLICT_OFF = {"conflict.path_warnings": False, "conflict.directional_braking": False,
+                "conflict.corridor_entry": False, "conflict.priority": False,
+                "conflict.yield_to_stopped": False, "conflict.node_aligned_moves": False,
+                "conflict.ladder.enabled": False, "conflict.ladder.shadow": False,
+                "conflict.ladder.retrace": False}
+SAFETY_OFF = {"safety.intent_guard": False, "safety.bubbles_by_kind": False,
+              "safety.hops_everywhere": False, "conflict.route_by_default": False}
+# And no injected failures or people: the file runs with both on (failure waves
+# since 3 October), and a failure stopping one of two test fleets -- or a wave
+# firing in one list order and not the other (failure injection draws from the
+# global random stream, build log 30) -- is not what these tests are about.
+NO_FAILURES = {"errors.enabled": False, "obstacles.enabled": False}
+# Component 2 alone: braking by distance against direction-aware braking, with
+# bubbles by kind off (they would replace both) -- the guard may stay on: it
+# never touches a steady convoy.
+BRAKE_DIST = {"conflict.directional_braking": False, "safety.bubbles_by_kind": False}
+BRAKE_DIR = {"conflict.directional_braking": True, "safety.bubbles_by_kind": False}
+
 
 def test_loop_uses_exactly_the_classified_pairs():
     env = real_env(ON)
@@ -282,7 +304,7 @@ def test_preemptive_filter_sees_pairs_beyond_two_hops():
 
 
 def test_switches_off_leave_nothing_behind():
-    env = real_env({})
+    env = real_env(dict(CONFLICT_OFF, **SAFETY_OFF, **NO_FAILURES))
     with contextlib.redirect_stdout(io.StringIO()):
         for _ in range(5):
             env.step(episode_step=1, total_episodes=1)
@@ -321,16 +343,16 @@ def moved(env, a, b):
 
 
 def test_convoy_no_longer_throttled():
-    off = moved(*convoy_env({}))
-    on = moved(*convoy_env({"conflict.directional_braking": True}))
+    off = moved(*convoy_env(BRAKE_DIST))
+    on = moved(*convoy_env(BRAKE_DIR))
     print(f"      moved per step: braking by distance {off}   direction-aware {on}")
     check("off_throttles_the_convoy", off[0] < 0.5 and off[1] < 0.5, True)
     check("on_runs_at_full_speed", on, (0.5, 0.5))
 
 
 def test_closing_pair_still_brakes():
-    off = moved(*convoy_env({}, lead_dir=(-1, 0, 0)))
-    on = moved(*convoy_env({"conflict.directional_braking": True}, lead_dir=(-1, 0, 0)))
+    off = moved(*convoy_env(BRAKE_DIST, lead_dir=(-1, 0, 0)))
+    on = moved(*convoy_env(BRAKE_DIR, lead_dir=(-1, 0, 0)))
     print(f"      head-on at 1.5: by distance {off}   direction-aware {on}")
     check("closing_pair_brakes_the_same", on, off)
     check("and_is_throttled", on[0] < 0.5, True)
@@ -343,7 +365,10 @@ def test_order_independent_with_both_switches():
     for h in (1, 5, 20):
         res = []
         for rev in (False, True):
-            drv.apply_config(ON)
+            # The whole current config -- guard, bubbles, route by default,
+            # ladder -- with injected failures off (their draws are not yet
+            # order-independent: build log 30).
+            drv.apply_config(dict(ON, **NO_FAILURES))
             res.append(mod.run(rev, h, 24, 7, True)[0])
         worst = max(worst, sum(1 for k in res[0] if res[0][k] != res[1][k]))
     check("forwards_equals_reversed", worst, 0)

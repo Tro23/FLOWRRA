@@ -985,6 +985,27 @@ Each step was built behind its own switch, tested, and run against the step befo
     - **Two natural extensions, both using the hold:**
       1. **n-step hindsight.** Hold a transition n steps, use the n real rewards and the moves actually made, and only then bootstrap. Less reliance on estimated values; more variance under exploration.
       2. **A Learner trained on what the whole system executed** (route, rules, ladder and guard together), not on RULES alone. The labels are the corrected moves, so the Learner learns to propose moves that need no correcting: the "fight" between the nudge and the values (run 4) should not arise. Imitation is capped at the system's level; the Q heads are what can go beyond it.
+    - **Rohit's sharpening, the same evening: untangling a jam from the destinations backwards.** When robots bunch up, consider every joint state they could pass through. Choose the moves that untangle them without contact, so that each can still reach its destination. That is working backwards from the future to the present. Recorded with the answer given:
+      - **It is a two-point boundary problem.** Where the robots are now and where each must end up fix the path between, as in physics' least action.
+      - **The "future" is a present fact.** The destinations are known now. So this is backward reasoning from known goals, not physical retrocausality, and that is what keeps the language defensible.
+      - **FLOWRRA already does it for one robot.** The goal-distance maps are computed backwards from each destination to every cell, and the route follows them downhill.
+      - **For several robots in a jam, it is local space-time planning (windowed MAPF).** It has the same shape as wave function collapse in procedural generation:
+        - every robot's possible positions over the next few steps start in superposition;
+        - the most constrained one is fixed first;
+        - the constraints (one robot per cell per step, no swaps, progress towards each destination) propagate;
+        - the first step of the consistent plan is the move taken now.
+      - **Ways to learn it:**
+        - Solve each L2/L3 jam exactly offline; jams are small, a few robots over a few steps. Train a head on the solutions: imitation of a destination-consistent teacher.
+        - A generative model over short joint trajectories, conditioned on the destinations. Diffusion planners (Janner et al., 2022) start from noise over whole trajectories and settle into one consistent with the start and the goal, close to the "collapse" picture; recent work extends this to several robots.
+        - The guard stays underneath either way.
+      - **Rohit's refinement: construct the second boundary by learning, then collapse.**
+        - Only the goal's direction is known (the distance map's downhill move), not the robot's whole future path. So inside the small zone, choose for each robot the cell where it should leave the zone, and solve the zone's moves between where the robots are and those cells.
+        - This is a horizon with a terminal cost (model-predictive control), or search with learned values at the leaves (as in AlphaZero).
+        - **Step 1, the boundary.** Assign each robot an exit cell of the zone, no two the same, minimising the moves inside the zone plus the cost-to-go from the exit cell. The distance maps already give that cost-to-go exactly when there is no traffic. The network's values are what can price traffic beyond the zone, so this is where learning enters.
+        - **Step 2, the collapse.** An exact space-time solve inside the zone, between the two fixed boundaries.
+        - The ladder's L2 retrace is a crude version of step 1: one retreat cell, chosen by rule.
+        - **Why run 7 comes first:** a learned boundary is only as good as the values behind it, so honest values are a precondition.
+
 
     **Run 7, step by step** (ticked off here as each is done):
     1. [x] Build Fix 1 and its test (13 October). Changed: `agent_warehouse.py` (the optional 15th field in push, padding with −1, sampling, and the bootstrap in learn), `core_warehouse.py` (the hold, `_honest_complete_pending`, `flush_pending_transition`, counters `honest_*`), `main_runner_warehouse.py` (the flush after each episode, `honest_` CSV columns, the log line), `config_warehouse.py` (`training.honest_target`, False). New: `test_honest_target.py`. Checked here without torch: the hold-and-complete rule on a stand-in (route move kept, network move −1, guard stop 0, a fleet that left −1, counts only active fleets) and the storage layout (14 fields with it off, 15 with it on, padding −1). The torch parts run on Rohit's machine (step 3).
@@ -993,9 +1014,74 @@ Each step was built behind its own switch, tested, and run against the step befo
        - [x] `test_honest_target.py` ALL PASS, after one fix to the test itself: its hand-built tensors were on the CPU while the agent was on the GPU. `test_stream_no_work.py` ALL PASS.
        - [x] `--check` with both switches off (`deploy_check5`): reproduces 12 October exactly. Champion 31 delivered, 0 collisions, lead time 23.16; RULES 30, 0, 19.5; the repeat IDENTICAL. The new columns read 0. The log still shows "Fleet 25#2 frozen, pool exhausted", as it should with the switch off.
        - [x] The existing suite: all 13 pass (test_teacher_margin, test_phase_3, test_graph_pooling, test_learner_head, test_stream_failures, test_smoke_integration, test_line_end, test_intent_guard, test_conflict_rules, test_corridor_rules, test_ladder_retrace, test_ladder_authority, test_guard_integration). First pass: `test_teacher_margin.py` and `test_graph_pooling.py` failed `sample_returns_16`. Both are stale checks on the number of parts in a sampled batch: Fix 1 appends a 17th, last, so every index they read is unchanged. Both now expect 17, plus a check that the 17th is None when no transition carried the field. I missed these two when I searched for `sample()` callers: I checked which indexes they read, not the length they assert.
-    4. [ ] (config ready: RUN 7 header, `honest_target` and `no_work_exit` on, `eps_peak` 0.05; command in the header) Dry run A: 10 episodes, warm from the champion, peak 0.05 / floor 0.01, run 5's failures, book 80, both fixes on. Read the delivery value (below 1.42, not climbing), the losses against exploration, and L3 against exploration.
+    4. [x] (config ready: RUN 7 header, `honest_target` and `no_work_exit` on, `eps_peak` 0.05; command in the header) Dry run A, **done 13 October: stable**: 10 episodes, warm from the champion, peak 0.05 / floor 0.01, run 5's failures, book 80, both fixes on. Read the delivery value (below 1.42, not climbing), the losses against exploration, and L3 against exploration.
+       **Dry run A, results** (`ladder_run3_dry`, 10 episodes, warm from the champion, 43.8 minutes, no errors):
+       - **Values honest and settling.** Delivery value by episode: 1.04, 0.82, 0.78, 0.83, 0.88, 0.83, 0.76, 0.74, 0.74, 0.74. Below 1.42 throughout, levelling off. Run 5, warm from the same champion without the honest target: 1.03 to 0.86. Run 6 climbed every episode.
+       - **Efficiency value rising, but plausibly honest:** 0.56 to 1.34. With the route, every routed step makes progress: the efficiency reward is 0.042 per fleet-step here against run 5's 0.018, over lives of about 97 steps. A discounted return of 1.3 to 1.8 is in range. To watch in the run: it should level off.
+       - **Losses falling.** Delivery 0.015 to 0.009; efficiency 0.008 to 0.006; safety about 0.001.
+       - **Fix 1 working.** 70% to 97% of next moves valued as actually made. 800 transitions stored per 800-step episode, one of them by the final flush.
+       - **Fix 2 working.** 31 robots sent out with no order and 0 parked; not one "frozen" or "recalled from retirement" line in the log.
+       - **Safety.** 0 collisions and 0 invariant violations in all 10 episodes.
+       - **L3 does not rise as exploration falls.** 3.0 per episode at exploration 0.03 to 0.05 (episodes 1–5); 2.4 at 0.01 (episodes 6–10). Episode 4, small map with 25 robots and 12 failures, had 10.
+       - **Delivered 95.3%** (73 to 78 of 80).
+       - **Reported:** "move away" near another robot 37%, the champion's level, with no change expected in 10 episodes.
+       - **An observation to watch.** In the clear the network now disagrees with the route on 43% of moves; the frozen champion in the tests disagreed on 15%, and run 6's network on 52%. The honest target corrects the values of the moves the route makes, but the moves it never makes in the clear keep stale values. They no longer enter any target, so they cannot inflate anything. With the route on they are never executed, so this costs nothing on the floor; it matters only if the route were switched off. The Learner idea (the destination note) would address it.
+    4b. [x] **Fix 3, explore everywhere, value the policy that runs: agreed and built (13 October).** Changed:
+       - `agent_warehouse.py`: `last_explore_mask`.
+       - `core_warehouse.py`: in the route, an exploring fleet in the clear is left to explore. It is recorded as eligible, with the route's move, and labelled with that move in the honest target. Counters `route_explore_on` and `route_explore_kept`.
+       - `config_warehouse.py`: `conflict.route_explore` True for run 7; dry run B in the header.
+       - `deploy_eval.py`: forced off in `apply_safety_mode` for every mode, which covers `trace_fleet` too; shown in the `[deploy] safety` line.
+       - New: `test_route_explore.py`. `test_honest_target.py` pins it off, so it keeps testing Fix 1 alone.
+       - Checked here on a stand-in: the explorer kept its move, the others were routed; labels route-driven 2, explorer 4 (the route's move), guard stop 0, network −1; switch off, the explorer was routed.
+       - Rohit's machine, 13 October: `test_route_explore.py`, `test_honest_target.py` and `test_guard_integration.py` all pass; switches read `True True True 0.05`; dry run B started. Original proposal:
+       - **The finding (Rohit's question).** Disagreement with the route in the clear jumps as soon as learning starts and then holds, whatever the exploration rate. The frozen champion disagreed on 23% of clear moves on the small map and 7% on the large. In the dry run: 35% in episode 1, about 50–55% on the small map and 35–44% on the large, flat while exploration fell from 0.047 to 0.010.
+       - **The cause.** In the clear only the route's move is ever executed, even when the network had chosen to explore. The route overrides exploring robots too. So only that move's value is corrected; as it settles (the delivery value fell from about 1.0 to 0.74), the other moves keep stale values and some now rank above it.
+       - **The fix.**
+         - A robot whose move this step is an exploring move is not overridden by the route, so it explores in the clear at the Gaussian's rate (0.01 to 0.05). The guard keeps it safe.
+         - Its lesson is valued honestly: the honest target labels a next-state robot that would have been routed with the route's move, the policy that runs there the rest of the time, even when it explored.
+         - The stale moves are then corrected by real experience (principle 7), not by a margin or penalty.
+       - **Switch and scope.** `conflict.route_explore`, off by default. It applies only in training: `deploy_eval` and `trace_fleet` force it off, because deployment never explores through the route.
+       - **To check in a second dry run:** disagreement falls across episodes instead of holding, the delivery value stays under 1.42, and L3 and guard stops do not rise much.
+       **Dry run B, results** (`ladder_run3_dryB`, all three fixes, 43.9 minutes, no errors). The same 10 scenarios in the same order as dry run A (same seed), so every episode is a paired comparison.
+
+       | Mean over 10 episodes | A (fixes 1–2) | B (fixes 1–3) |
+       | --- | --- | --- |
+       | Network disagrees with the route in the clear | 43% | 40% |
+       | Delivery value / efficiency value | 0.815 / 1.10 | 0.810 / 1.09 |
+       | Delivery / efficiency loss | 0.011 / 0.007 | 0.010 / 0.007 |
+       | L3 per episode | 2.7 | 1.2 |
+       | Guard stops per episode | 52 | 87 |
+       | Delivered (of 80) / lead time (steps) | 76.2 / 79.9 | 76.7 / 84.5 |
+       | Collisions, violations, frozen robots | 0, 0, 0 | 0, 0, 0 |
+
+       - **Values and losses unchanged:** the honest target holds with Fix 3 on.
+       - **Disagreement moves the right way, slowly, and only on the large map.**
+         - Part of the 3 points is the measure itself. A counted exploring robots that the route overrode (about 2–3 points at exploration 0.03–0.05); B does not.
+         - The clean comparison is episodes 6–8 (the same large-map scenarios, exploration 0.01): 36–37% in A against 30–32% in B. Within B, the large map falls 36%, 32%, 31%, 30%.
+         - The small map does not improve: episode 9, 55% in A against 57% in B.
+         - At exploration 0.01 only 45–160 exploring moves an episode are corrected in the clear.
+         - The per-episode swings follow the map (small map about 43–57%, large about 30–40%; Rohit: "the sudden map change"), so comparisons are made within a map.
+       - **The cost, in training only:**
+         - Guard stops rise, though very unevenly: up by 252 in episode 1 and 223 in episode 7, down by 155 in episode 9.
+         - Lead time is 4.5 steps longer, from the detours in the clear.
+         - Deployment forces route-explore off, so the frozen tests carry neither cost.
+       - **Possibly a bonus, not yet firm:** L3 2.7 to 1.2 and recovery collapses 27 to 12, but episode 4 alone (10 to 2) carries most of it.
     5. [x] ~~Dry run B with the Learner on~~: held until after run 7 (decided 13 October).
     6. [ ] Agree run 7's settings and predictions; then the run (50 episodes, about 4 hours).
+       **Agreed 13 October, before the run.**
+       - **Settings:** all three fixes on; warm from the champion; exploration peak 0.05 and floor **0.02**. The floor was raised from 0.01 after dry run B, so route-explore corrects the clear about twice as fast. Training only: `deploy_eval` uses its own 0.015.
+       - `recovery_policy.exploration_scale` stays 0.25 (Rohit asked). It has no effect in this run: with the ladder on, the learned recovery head is never consulted (`choose_recovery` is skipped; L3 is a fixed rule).
+       - **Exploration by episode:** 0.026 at 1, 0.05 at about 13, 0.024 at 25, 0.02 from 40.
+
+       | Prediction | Pass if |
+       | --- | --- |
+       | Values stay honest | delivery value below 1.42 in every episode |
+       | Learning settles | delivery loss in the last 10 episodes no higher than in the first 10, and the efficiency value levels off (last-10 mean within 10% of episodes 31–40) |
+       | Safety | 0 invariant violations, 0 collisions, 0 robots parked mid-floor (`stream_parked_no_exit` 0) |
+       | Nothing gets worse | book ≥ 95% and L3 ≤ 3.4 per episode, every map and fleet size weighted equally |
+       | The stale values get corrected | on the large map, disagreement with the route in the clear is lower in the last 10 episodes than in the first 10 (fleet sizes weighted equally) |
+
+       Reported, not scored: the "move away" share near another robot; disagreement on the small map; a per-setting comparison with run 5 (same start, same length). Then the frozen tests decide: ladder_run3 against the champion on 3 of 5 measures, clean and full, guard on for every arm, route-explore off; RULES reported alongside.
     7. [ ] Frozen tests, clean and full, guard on for every arm (ladder_run3, champion, RULES); then the capacity test with the top-up book (approved).
 
 **Next.**

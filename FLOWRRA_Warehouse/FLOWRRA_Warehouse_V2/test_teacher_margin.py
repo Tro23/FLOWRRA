@@ -130,7 +130,9 @@ def test_sample_mixes_old_and_new():
     # 17 since the honest target (build log entry 34) appended its moves LAST,
     # so every index below is unchanged. Nothing here stored that field, so
     # the 17th is None: the switch off adds nothing to learning.
-    check("sample_returns_17", len(batch), 17)
+    # 18 since the router (build log entry 42) appended its labels after that.
+    check("sample_returns_18", len(batch), 18)
+    check("no_router_field_reads_none", batch[17] is None, True)
     check("no_honest_field_reads_none", batch[16] is None, True)
     valid_t, teacher_t = batch[12], batch[13]
     check("valid_tensor_present", valid_t is not None, True)

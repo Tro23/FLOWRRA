@@ -1,56 +1,53 @@
 """
-config_warehouse.py -- RUN 7: ladder_run3, WARM from the champion (2026-10-13).
+config_warehouse.py -- RUN 9: ladder_run5, THE LEARNER AS THE ROUTER, WARM from
+ladder4, the v2 champion (2026-10-14).
 
-Run 6 (ladder_run2, cold) showed the safety layer works -- collisions near zero
-at no cost in throughput, in training and in the frozen tests -- and that its
-network learned nothing over a 3-episode one: its values inflated through moves
-that route by default never executes (delivery head 2.13 against a ceiling of
-1.42). Two fixes, then a warm run from the champion, which with the safety
-layer already ties RULES under full stress (build log 31-34; the checklist in
-entry 34 is the plan of record).
+Run 8 (ladder_run4, SARSA) became the champion (build log 39-41). At meetings
+the network has reached RULES (fewer stand-offs, delivered level); the problem
+left is IN THE CLEAR, where the hard-coded route drives and the network's own
+moves never run, so their values are never corrected (it disagrees with the
+route on ~40% of clear moves). Run 9 hands the clear to the network.
 
-NEW IN THIS RUN (both switches; off reproduces run 6's step exactly -- checked,
-deploy_check5 = deploy_check4):
-  training.honest_target ON: where something other than the network drove a
-                         fleet in the next state (route, rule, hold, guard),
-                         bootstrap from the move it actually made; each
-                         transition is held one step to learn it
-                         (test_honest_target.py).
-  stream.no_work_exit    ON: a fleet left with no order drives out at the
-                         nearest dock instead of freezing mid-aisle, outside
-                         the guard (all three guard-era collisions);
-                         test_stream_no_work.py.
-  conflict.route_explore ON (after dry run A): a fleet that explores is not
-                         overridden by the route, so the network explores in
-                         the clear too and its other moves there are corrected
-                         by experience; valued at the route's move. Training
-                         only (deploy_eval, trace_fleet force it off).
-                         test_route_explore.py.
+NEW IN THIS RUN (training.learner, mode "router"; build log entry 42):
+  the Learner head learns the route's move for every fleet in the clear
+  (computed, executed or not); never the network's own moves; nothing at
+  meetings. It reads the trunk but never trains it, has its own optimizer,
+  and its init draws from its own random stream.
+  The hand-over, per episode (main_runner_warehouse.router_plan):
+    warm-up   route ON, Learner in shadow (scale 0), >= 5 episodes and until it
+              agrees with the route on >= 98% of clear moves in an episode;
+    switch    route OFF for the rest of training;
+    fade      in the clear, score = Q + beta x P_Learner, beta = scale x the
+              heads' median gap; scale 3.0 -> 0 by episode 65;
+    tail      episodes 66-80 at scale 0: the network alone, as deployed.
+  The Q heads keep SARSA: the clear is now really driven, and valued as made.
+  test_learner_router.py.
 
-KEPT FROM RUN 6: the guard, bubbles by kind, hops everywhere, route by default,
-presence_charge OFF, the stream with the fixed order book (80 orders over 400
-steps), people ("cleanup"), failures with waves (run 5's level), the ladder,
-rung costs, learner OFF, max_steps 800.
+KEPT FROM RUN 8: SARSA, honest_target, no_work_exit, route_explore (moot after
+the switch), the guard, bubbles, hops, the stream with the fixed book, people,
+failures with waves, the ladder, rung costs, exploration 0.05 / 0.02.
 
-EXPLORATION: warm, as run 5: eps_peak 0.05, eps_min 0.01, peak at T/4, width
-T/8. No --cold-start.
-
-RUN 7. Dry run A (honest target and no-work exit) was stable; dry run B adds
-route_explore (10 episodes, about 45 minutes, --out ladder_run3_dryB); then,
-once agreed, the run (50 episodes):
+RUN 9. Dry run first (12 episodes, about 1 hour; the same shape compressed:
+warm-up >= 3, fade to episode 10, 2 at 0), then the run (80 episodes, about
+6.5 hours):
   nohup python -u main_runner_warehouse.py --seed 0 \
       --maps 25_5_2_5_2_1,50_20_5_10_5_2 --scens-dir all_scens_v5 \
-      --episodes 10 --agent-sets 25,40,60 --max-steps 800 \
-      --resume ladder_run1/flowrra_curriculum.pth --out ladder_run3_dryB \
-      > ladder_run3_dryB.log 2>&1 &
+      --episodes 12 --agent-sets 25,40,60 --max-steps 800 \
+      --resume ladder_run4/flowrra_curriculum.pth --out ladder_run5_dry \
+      > ladder_run5_dry.log 2>&1 &
 
   nohup python -u main_runner_warehouse.py --seed 0 \
       --maps 25_5_2_5_2_1,50_20_5_10_5_2 --scens-dir all_scens_v5 \
-      --episodes 50 --agent-sets 25,40,60 --max-steps 800 \
-      --resume ladder_run1/flowrra_curriculum.pth --out ladder_run3 \
-      > ladder_run3.log 2>&1 &
+      --episodes 80 --agent-sets 25,40,60 --max-steps 800 \
+      --resume ladder_run4/flowrra_curriculum.pth --out ladder_run5 \
+      > ladder_run5.log 2>&1 &
+
+GRADUATION (frozen test): ladder5 with the route OFF against ladder4 with it ON:
+  --arms ladder5=ladder_run5/flowrra_curriculum.pth:noroute,ladder4=ladder_run4/flowrra_curriculum.pth,RULES
 
 EARLIER RUNS, reproducible from this file by switches alone:
+  run 8, ladder_run4   learner OFF (the v2 champion since entry 41)
+  run 7, ladder_run3   learner OFF, sarsa OFF
   run 6, ladder_run2   honest_target OFF, no_work_exit OFF, eps_peak 0.30,
                        --cold-start, 150 episodes
   run 5, warm_stream1  safety all OFF, route_by_default OFF, presence_charge ON,
@@ -746,7 +743,9 @@ CONFIG = {
     # The recovery head keeps exploration_scale 0.25: its peak falls 0.24 -> 0.075.
     "exploration": {
         "eps_peak": 0.05,                  # ladder_run3, warm, as run 5 (ladder_run2 cold: 0.30)
-        "eps_min": 0.01,
+        "eps_min": 0.02,                   # ladder_run3: floor 0.02 (was 0.01), so the
+                                            # route-explore corrections in the clear come
+                                            # about twice as fast (entry 34); training only
         "mu_frac": 0.25,       # peak at episode T/4
         "sigma_frac": 0.125,   # width T/8
     },
@@ -781,6 +780,13 @@ CONFIG = {
         # value climbed to 2.13 against a ceiling of 1.42 (entry 31). False:
         # transitions pushed at once, in the old layout, exactly as before.
         "honest_target": True,           # RUN 7 (entry 34)
+        # SARSA EVERYWHERE (build log entry 38). With the honest target on, a
+        # fleet the NETWORK drove in the next state is also valued at the move
+        # it actually made there, not at its best move by today's values: every
+        # next move is the move made, so no max is left over moves that run.
+        # (An explorer in the clear keeps the route's move -- Fix 3.) Needs
+        # honest_target on. False: run 7's honest target exactly.
+        "sarsa": True,                   # RUN 8 (entry 38)
         # SOFT TARGET UPDATES: blend the target network toward the online one on
         # every learning step instead of copying it every --target-sync (1000)
         # steps. 0.002 keeps the same AVERAGE lag (~500 steps) as the hard copy,
@@ -841,8 +847,26 @@ CONFIG = {
         #   weight  its supervised loss (reaches only its own layers)
         # Off = no head is built, so older checkpoints still load.
         "learner": {
-            "enabled": False,
-            "beta": 0.1,
+            # RUN 9 (build log entry 42): THE LEARNER AS THE ROUTER. mode
+            # "router": it learns the route's move for every fleet IN THE CLEAR
+            # (the route's own eligibility test), executed or not, and nudges
+            # only those fleets; nothing at meetings. The runner hands the clear
+            # over: route ON while it learns in shadow (scale 0), then route OFF
+            # and the scale falls from scale_start to scale_end (0: the teacher
+            # gone), then a tail at scale_end -- the deployed condition.
+            # mode "meetings": step 3a as before (RULES' orders and holds,
+            # conflicted fleets). enabled False: no head is built.
+            "enabled": True,
+            "mode": "router",
+            "router": {
+                "switch_agreement": 0.98,  # Learner = route on >= 98% of clear moves...
+                "warmup_min": 3,           # ...after at least max(3, warmup_frac x episodes)
+                "warmup_frac": 0.0625,     # 80 episodes: 5; 12 (dry run): 3
+                "tail_frac": 0.1875,       # the last 15 of 80 (2 of 12) at scale_end
+                "scale_start": 3.0,        # at the switch: the Learner wins nearly every clear choice
+                "scale_end": 0.0,          # the teacher disappears; deployment uses this
+            },
+            "beta": 0.0,                   # the fixed warm start before gap_min gaps: no voice
             "weight": 1.0,
             # "prob": Q + beta x probability (0..1), so the pull never exceeds
             # beta -- the Learner as a fourth, normalised signal beside 6:4:1.
@@ -853,8 +877,8 @@ CONFIG = {
             # follows the heads' own running median gap x beta_scale (learner_run2
             # showed a fixed beta drifts relative to a trained network's gaps);
             # the fixed beta is the warm start until gap_min gaps are seen.
-            "beta_mode": "fixed",
-            "beta_scale": 1.0,
+            "beta_mode": "gap",            # RUN 9: beta = scale x the heads' median gap in the clear
+            "beta_scale": 0.0,             # set per episode by the runner (router_scale)
             "gap_window": 5000,
             "gap_min": 200,
         },

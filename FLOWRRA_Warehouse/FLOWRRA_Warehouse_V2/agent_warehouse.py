@@ -24,6 +24,11 @@ import torch.optim as optim
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# The Learner head's own initialisation seed (build log entry 42): drawn inside
+# torch.random.fork_rng, so building the head leaves the global generator as it
+# was. Policy and target heads start identical.
+_LEARNER_INIT_SEED = 1009
+
 # =============================================================================
 # GRAPH ATTENTION LAYER - FIXED
 # =============================================================================
@@ -342,9 +347,17 @@ class GNNPolicy(nn.Module):
         # LEARNER HEAD (step 3a, V2_The_Conflict_Ladder.md). Learns RULES'
         # judgement -- the action the ladder chose -- from every RULES-decided
         # step. Built only when switched on, so older checkpoints still load.
-        self.learner_head = (nn.Sequential(nn.Linear(final_dim, hidden_dim), nn.ReLU(),
-                                           nn.Linear(hidden_dim, action_size))
-                             if learner else None)
+        # Its initial weights come from a SEPARATE random stream (build log entry
+        # 42): building it consumes no draw from the global generator, so every
+        # other layer and every later random draw is exactly what it would be
+        # without the Learner -- a Learner in shadow then changes nothing at all.
+        if learner:
+            with torch.random.fork_rng(devices=[]):
+                torch.manual_seed(_LEARNER_INIT_SEED)
+                self.learner_head = nn.Sequential(nn.Linear(final_dim, hidden_dim), nn.ReLU(),
+                                                  nn.Linear(hidden_dim, action_size))
+        else:
+            self.learner_head = None
         self.last_learner_logits = None
 
         # Head weights used ONLY for action selection, never for the loss. Kept as
@@ -482,8 +495,15 @@ class GraphReplayBuffer:
         valid_mask: Optional[np.ndarray] = None,
         teacher_mask: Optional[np.ndarray] = None,
         next_policy_action: Optional[np.ndarray] = None,
+        learner_label: Optional[np.ndarray] = None,
     ):
         """
+        learner_label: THE ROUTER'S LABEL (build log entry 42). [N] int: for
+        each fleet IN THE CLEAR in this state, a bit mask of the route's
+        equally-short moves (bit a = move a) -- executed or not (with the route
+        off it is computed, never run); -1 for every other fleet. The Learner
+        learns these alone. None: not stored, layout exactly as before.
+
         next_policy_action: the HONEST TARGET (build log entry 34; switch
         training.honest_target). [N'] int, one per fleet in the NEXT state: the
         move that fleet actually made there when something other than the
@@ -557,6 +577,13 @@ class GraphReplayBuffer:
         # stores exactly the 14-field layout it always has.
         if next_policy_action is not None:
             exp = exp + (np.asarray(next_policy_action, dtype=np.int64).copy(),)
+        # THE ROUTER'S LABEL: a 16th field only when given. It needs a 15th in
+        # front of it; without the honest target that slot holds None, which
+        # every reader treats as "no honest field" (all -1, the old bootstrap).
+        if learner_label is not None:
+            if next_policy_action is None:
+                exp = exp + (None,)
+            exp = exp + (np.asarray(learner_label, dtype=np.int64).copy(),)
         self.buffer.append(exp)
 
     @staticmethod
@@ -587,6 +614,9 @@ class GraphReplayBuffer:
         # form it always has; a 15-field one keeps its 15th, padded with -1.
         npa = exp[14] if len(exp) > 14 else None
         has_npa = len(exp) > 14
+        # THE ROUTER'S LABEL (entry 42): an optional 16th field, padded with -1.
+        llab = exp[15] if len(exp) > 15 else None
+        has_llab = len(exp) > 15
         (nf, adj, act, rew, nnf, nadj, done, integ, amask, rec, nvm, nam,
          vm, tm) = exp[:14]
         n = nf.shape[0]
@@ -655,6 +685,11 @@ class GraphReplayBuffer:
             out = out + ((np.concatenate([np.asarray(npa, dtype=np.int64),
                                           np.full(pad, -1, dtype=np.int64)])
                           if npa is not None else None),)
+        if has_llab:
+            # Padded fleets: -1, never taught.
+            out = out + ((np.concatenate([np.asarray(llab, dtype=np.int64),
+                                          np.full(pad, -1, dtype=np.int64)])
+                          if llab is not None else None),)
         return out
 
     def sample(self, batch_size: int) -> Optional[Tuple[torch.Tensor, ...]]:
@@ -718,6 +753,8 @@ class GraphReplayBuffer:
         # HONEST TARGET: the optional 15th field, split off so the 14 classic
         # fields unzip exactly as before.
         next_policy_actions = [b[14] if len(b) > 14 else None for b in batch]
+        # THE ROUTER'S LABEL (entry 42): the optional 16th field.
+        learner_labels = [b[15] if len(b) > 15 else None for b in batch]
         batch = [b[:14] for b in batch]
 
         (
@@ -803,6 +840,17 @@ class GraphReplayBuffer:
                  for m in next_policy_actions], dtype=np.int64)).to(DEVICE)
         else:
             next_policy_actions_t = None
+        # THE ROUTER'S LABEL: [B, N] int, -1 = not taught. A transition stored
+        # without it reads all -1 (nothing to learn there). None when no
+        # transition in the batch has one: the Learner then learns as before,
+        # from the teacher mask.
+        if any(m is not None for m in learner_labels):
+            _n = node_feats_t.shape[1]
+            learner_labels_t = torch.from_numpy(np.array(
+                [m if m is not None else np.full(_n, -1, dtype=np.int64)
+                 for m in learner_labels], dtype=np.int64)).to(DEVICE)
+        else:
+            learner_labels_t = None
 
         return (
             node_feats_t,
@@ -827,6 +875,8 @@ class GraphReplayBuffer:
             # [B, N'] or None -- the honest target's moves; appended LAST so
             # every earlier index (e.g. b[14] = real mask) is unchanged.
             next_policy_actions_t,
+            # [B, N] or None -- the router's labels (entry 42), appended after it.
+            learner_labels_t,
         )
 
     def __len__(self) -> int:
@@ -1019,6 +1069,10 @@ class GNNAgent:
         self.last_beta_eff = float(self.learner_beta)
         self.learner_used = 0        # greedy choices made inside a conflict
         self.learner_changed = 0     # ...where the Learner changed the choice
+        # Published by choose_actions for the core's router measures (entry 42):
+        # the heads' own choice and the Learner's probabilities, or None.
+        self.last_q_argmax = None
+        self.last_learner_probs = None
         # Per-episode diagnostics (read by the runner): the value level of each
         # head -- mean Q of the actions taken, over active fleets -- and the
         # recovery head's mean Q. Losses hint at drift; these measure it.
@@ -1103,8 +1157,21 @@ class GNNAgent:
             self.recovery_eps_scale = 1.0
             self.explore_cfg = {}
 
-        # Optimizer
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
+        # Optimizer. With a Learner head (build log entry 42) the head gets its
+        # OWN Adam and the main one covers everything else, in the same order as
+        # a network built without it. So a checkpoint trained without a Learner
+        # (ladder4) loads its optimizer state exactly, and the main updates are
+        # bit-identical to a Learner-free agent's (Adam is per-parameter, and
+        # the head's gradient is clipped on its own -- see learn()).
+        _lh = self.policy_net.learner_head
+        if _lh is None:
+            self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
+            self.learner_optimizer = None
+        else:
+            _lids = {id(p) for p in _lh.parameters()}
+            self.optimizer = optim.Adam(
+                [p for p in self.policy_net.parameters() if id(p) not in _lids], lr=lr)
+            self.learner_optimizer = optim.Adam(_lh.parameters(), lr=lr)
         self.criterion = nn.MSELoss()
 
         # Replay buffer
@@ -1330,6 +1397,10 @@ class GNNAgent:
             actions: [num_nodes] action indices
         """
         num_nodes = node_features.shape[0]
+        # Router measures (entry 42): reset each call, so a step without a
+        # forward pass never reports a previous step's numbers.
+        self.last_q_argmax = None
+        self.last_learner_probs = None
 
         # If no node IDs provided, assume sequential IDs
         if node_ids is None:
@@ -1433,8 +1504,28 @@ class GNNAgent:
                 # beta x the Learner's log-probability over valid actions. Free
                 # traffic is untouched. The nudged scores are what core reuses
                 # for a vetoed fleet's second choice, so they stay consistent.
+                #
+                # THE ROUTER (build log entry 42): the core passes the fleets IN
+                # THE CLEAR here instead of those in a conflict, and beta is
+                # "gap" x a scale the runner sets per episode. Scale 0 (the
+                # shadow warm-up, and the tail): the gaps are still collected
+                # and the counts kept, but nothing is added -- no choice moves.
+                #
+                # Published for the core's measures, every forward pass: the
+                # heads' own choice (Q only, valid-masked) and the Learner's
+                # probabilities over valid moves (None without a Learner).
+                self.last_q_argmax = q_values_np.argmax(axis=1)
+                self.last_learner_probs = None
                 lg_t = self.policy_net.last_learner_logits
-                if (self.learner_beta > 0 and conflict_mask is not None
+                if lg_t is not None:
+                    _lg = lg_t.squeeze(0).cpu().numpy()
+                    _ok = (valid_action_masks if valid_action_masks is not None
+                           else np.ones_like(_lg, dtype=bool))
+                    _lgm = np.where(_ok, _lg, -1e9)
+                    _e = np.exp(_lgm - _lgm.max(axis=1, keepdims=True))
+                    self.last_learner_probs = _e / _e.sum(axis=1, keepdims=True)
+                _nudge_on = self.learner_beta > 0 or self.learner_beta_mode == "gap"
+                if (_nudge_on and conflict_mask is not None
                         and lg_t is not None and np.any(conflict_mask)):
                     lg = lg_t.squeeze(0).cpu().numpy()
                     ok = (valid_action_masks if valid_action_masks is not None
@@ -1458,7 +1549,8 @@ class GNNAgent:
                             float(g) for g in (qs[:, -1] - qs[:, -2]) if np.isfinite(g))
                     beta = self._effective_beta()
                     self.last_beta_eff = beta
-                    q_values_np[cm] = q_values_np[cm] + beta * bonus[cm]
+                    if beta != 0.0:
+                        q_values_np[cm] = q_values_np[cm] + beta * bonus[cm]
                     self.learner_used += int(used.sum())
                     self.learner_changed += int((used & (q_values_np.argmax(axis=1) != q_only)).sum())
 
@@ -1487,6 +1579,8 @@ class GNNAgent:
             # No forward pass ran this step, so there is no ranking to offer.
             # The consumer must treat None as "fall back to the goal gradient".
             self.last_q_values = None
+            self.last_q_argmax = None
+            self.last_learner_probs = None
 
         return actions
 
@@ -1537,6 +1631,7 @@ class GNNAgent:
             real_mask,
             next_real_mask,
             next_policy_actions,
+            learner_labels,
         ) = batch
 
         B, N, _ = node_feats.shape
@@ -1663,6 +1758,10 @@ class GNNAgent:
             # drifted one, and the delivery head climbed to 2.13 against a
             # ceiling of 1.42 (entry 31). -1 keeps the argmax: where the network
             # actually drives, it is still Q-learning on its own best move.
+            # With training.sarsa (entry 38) the core writes the network's own
+            # move there too, so every active row is given and this is SARSA;
+            # -1 is left only for a fleet that left (its bootstrap is masked by
+            # the per-fleet terminal below) and the end-of-episode flush.
             self.last_honest_share = 0.0
             if next_policy_actions is not None:
                 _given = next_policy_actions >= 0
@@ -1793,19 +1892,36 @@ class GNNAgent:
         # probability is always defined. Trains the Learner's own layers only.
         learner_loss = None
         self.last_learner_loss = self.last_learner_agree = self.last_learner_n = 0.0
-        if (cur_learner_logits is not None and teacher_masks is not None
-                and valid_masks is not None):
-            taught = teacher_masks * active_mask
+        # THE ROUTER (build log entry 42): when the batch carries the router's
+        # labels, those ARE the teacher. A label is a bit mask of the route's
+        # equally-short moves for a fleet in the clear (bit a = move a; -1 = not
+        # in the clear, not taught), computed whether or not the route ran. The
+        # target is SOFT: uniform over the tied moves, so among equally short
+        # moves the Learner stays neutral and the heads choose. Agreement counts
+        # a top move on any tied move. Otherwise the old teacher: the executed
+        # action where the teacher mask is set (RULES' orders, holds).
+        if (cur_learner_logits is not None and valid_masks is not None
+                and (learner_labels is not None or teacher_masks is not None)):
+            A_ = cur_learner_logits.shape[-1]
+            if learner_labels is not None:
+                taught = (learner_labels > 0).float() * active_mask
+                _pow2 = torch.tensor([1 << a for a in range(A_)], dtype=torch.int64,
+                                     device=learner_labels.device)
+                tmask = ((learner_labels.clamp(min=0).unsqueeze(-1) // _pow2) % 2).bool()
+            else:
+                taught = teacher_masks * active_mask
+                tmask = F.one_hot(actions, A_).bool()
             n_t = float(taught.sum().item())
             if n_t > 0:
-                allowed = valid_masks.bool() | F.one_hot(
-                    actions, cur_learner_logits.shape[-1]).bool()
+                allowed = valid_masks.bool() | tmask
                 lg = torch.where(allowed, cur_learner_logits,
                                  torch.full_like(cur_learner_logits, -1e4))
-                lp_a = F.log_softmax(lg, dim=2).gather(2, actions.unsqueeze(-1)).squeeze(-1)
-                learner_loss = -(lp_a * taught).sum() / n_t
+                tgt = tmask.float() / tmask.float().sum(dim=2, keepdim=True).clamp(min=1.0)
+                per_fleet = -(tgt * F.log_softmax(lg, dim=2)).sum(dim=2)
+                learner_loss = (per_fleet * taught).sum() / n_t
                 with torch.no_grad():
-                    agree = float(((lg.argmax(dim=2) == actions).float() * taught).sum().item()) / n_t
+                    hit = tmask.gather(2, lg.argmax(dim=2, keepdim=True)).squeeze(-1).float()
+                    agree = float((hit * taught).sum().item()) / n_t
                 self.last_learner_loss = float(learner_loss.item())
                 self.last_learner_agree = agree
                 self.last_learner_n = n_t
@@ -1891,6 +2007,8 @@ class GNNAgent:
 
         # Optimize
         self.optimizer.zero_grad()
+        if self.learner_optimizer is not None:
+            self.learner_optimizer.zero_grad()
         loss.backward()
 
         # NOTE: _mask_frozen_gradients() is retained for reference but no longer
@@ -1915,6 +2033,8 @@ class GNNAgent:
 
         # Update weights (frozen nodes' don't change)
         self.optimizer.step()
+        if self.learner_optimizer is not None:
+            self.learner_optimizer.step()
 
         return float(loss.item())
 
@@ -2022,18 +2142,55 @@ class GNNAgent:
                 "policy_net": self.policy_net.state_dict(),
                 "target_net": self.target_net.state_dict(),
                 "optimizer": self.optimizer.state_dict(),
+                **({"learner_optimizer": self.learner_optimizer.state_dict()}
+                   if self.learner_optimizer is not None else {}),
                 "frozen_nodes": self.frozen_nodes,
                 "frozen_node_positions": self.frozen_node_positions,
             },
             path,
         )
 
+    @staticmethod
+    def checkpoint_has_learner(path: str) -> bool:
+        """True if the checkpoint carries Learner-head weights (build log entry
+        42): deploy_eval builds each arm with or without the Learner by this,
+        not by the config, so a Learner arm and a Learner-free arm can be
+        compared side by side."""
+        ck = torch.load(path, map_location="cpu", weights_only=False)
+        return any(k.startswith("learner_head.") for k in ck["policy_net"])
+
     def load(self, path: str):
-        """Load model weights."""
+        """Load model weights.
+
+        A checkpoint WITHOUT Learner weights into an agent WITH a Learner head
+        (build log entry 42: warm-starting run 9 from ladder4) loads everything
+        else exactly; only the Learner's own keys may be missing, and the head
+        keeps its fresh initialisation. Every other mismatch still fails loudly.
+        The main optimizer covers the same parameters in the same order as a
+        Learner-free agent's, so its state loads exactly too."""
         checkpoint = torch.load(path, map_location=DEVICE, weights_only=False)
-        self.policy_net.load_state_dict(checkpoint["policy_net"])
-        self.target_net.load_state_dict(checkpoint["target_net"])
-        self.optimizer.load_state_dict(checkpoint["optimizer"])
+        sd_p, sd_t = checkpoint["policy_net"], checkpoint["target_net"]
+        has_learner = any(k.startswith("learner_head.") for k in sd_p)
+        if self.policy_net.learner_head is not None and not has_learner:
+            for net, sd in ((self.policy_net, sd_p), (self.target_net, sd_t)):
+                missing, unexpected = net.load_state_dict(sd, strict=False)
+                bad = [k for k in missing if not k.startswith("learner_head.")]
+                if bad or unexpected:
+                    raise RuntimeError(f"checkpoint mismatch beyond the Learner head: "
+                                       f"missing {bad}, unexpected {list(unexpected)}")
+            print(f"[Agent] {path} has no Learner head: everything else loaded "
+                  f"exactly; the Learner starts fresh.")
+        else:
+            self.policy_net.load_state_dict(sd_p)
+            self.target_net.load_state_dict(sd_t)
+        try:
+            self.optimizer.load_state_dict(checkpoint["optimizer"])
+        except (ValueError, KeyError) as e:
+            # An older Learner checkpoint (run 4) kept ONE optimizer over every
+            # parameter; it cannot fill the main optimizer alone.
+            print(f"[Agent] optimizer state not loaded ({e}); starting with fresh moments.")
+        if self.learner_optimizer is not None and "learner_optimizer" in checkpoint:
+            self.learner_optimizer.load_state_dict(checkpoint["learner_optimizer"])
         self.frozen_nodes = checkpoint.get("frozen_nodes", set())
         self.frozen_node_positions = checkpoint.get("frozen_node_positions", {})
 

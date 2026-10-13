@@ -342,6 +342,42 @@ def _teacher_summary(dg):
     }
 
 
+# ---- THE ROUTER'S SCHEDULE (training.learner.mode "router"; build log 42) ----
+def router_plan(lrn: dict, episodes: int) -> dict:
+    """The hand-over, from the config's training.learner.router block:
+      warm-up   route ON, the Learner in shadow (scale 0) for at least
+                `warmup_min` episodes (max of the floor and warmup_frac x
+                episodes) and until it agrees with the route on `agree` of
+                clear moves in an episode;
+      then      route OFF; the scale falls linearly from `start` at the switch
+                to `end` at episode `fade_end`;
+      tail      the last tail_frac x episodes at `end` (0: no teacher at all),
+                the deployed condition.
+    80 episodes: warm-up >= 5, fade to episode 65, 15 at 0. 12 (the dry run):
+    warm-up >= 3, fade to episode 10, 2 at 0."""
+    r = lrn.get("router", {}) or {}
+    warm = max(int(r.get("warmup_min", 3)),
+               int(round(float(r.get("warmup_frac", 0.0625)) * episodes)))
+    tail = max(0, int(round(float(r.get("tail_frac", 0.1875)) * episodes)))
+    return {"warmup_min": warm, "fade_end": max(1, episodes - tail),
+            "agree": float(r.get("switch_agreement", 0.98)),
+            "start": float(r.get("scale_start", 3.0)),
+            "end": float(r.get("scale_end", 0.0))}
+
+
+def router_scale(ep: int, switch_ep, plan: dict) -> float:
+    """The Learner's scale in episode `ep`: 0 before the switch (shadow), then
+    linear from plan start (at the switch) to plan end (at fade_end), then end."""
+    if switch_ep is None or ep < switch_ep:
+        return 0.0
+    if ep >= plan["fade_end"]:
+        return plan["end"]
+    span = plan["fade_end"] - switch_ep
+    if span <= 0:
+        return plan["end"]
+    return plan["start"] + (plan["end"] - plan["start"]) * (ep - switch_ep) / span
+
+
 def main():
     ap = argparse.ArgumentParser(allow_abbrev=False)  # see ablate.py: prefix
                                                      # matching silently
@@ -526,7 +562,10 @@ def main():
     logger.info(f"learner head: enabled={bool(_lrn.get('enabled', False))} "
                 f"beta={_lrn.get('beta')} weight={_lrn.get('weight')} nudge={_lrn.get('nudge', 'logprob')} "
                 f"beta_mode={_lrn.get('beta_mode', 'fixed')} beta_scale={_lrn.get('beta_scale', 1.0)}"
-                + (" | nudges conflicted fleets only, never trains the trunk"
+                + ((" | mode router: learns the route's move in the clear, nudges only "
+                    "fleets in the clear, never trains the trunk (entry 42)"
+                    if _lrn.get("mode", "meetings") == "router"
+                    else " | nudges conflicted fleets only, never trains the trunk")
                    if _lrn.get("enabled") else ""))
     _rcc = CONFIG["training"].get("rung_costs", {}) or {}
     logger.info(f"rung costs: enabled={bool(_rcc.get('enabled', False))} "
@@ -545,8 +584,26 @@ def main():
     _cc = CONFIG.get("conflict") or {}
     logger.info("conflict | " + " ".join(f"{k}={v}" for k, v in _cc.items()))
 
+    # THE ROUTER (build log entry 42): the Learner learns the route in the
+    # clear with the route on, in shadow; once it agrees, the route goes off for
+    # the rest of the run and the Learner's pull fades to nothing.
+    _router = bool(_lrn.get("enabled")) and _lrn.get("mode", "meetings") == "router"
+    _rplan = router_plan(_lrn, args.episodes) if _router else None
+    _switch_ep = None
+    if _router:
+        logger.info(f"router: warm-up with the route ON for at least {_rplan['warmup_min']} episodes "
+                    f"and until the Learner agrees with it on {_rplan['agree'] * 100:.0f}% of clear "
+                    f"moves; then the route OFF, scale {_rplan['start']} -> {_rplan['end']} by "
+                    f"episode {_rplan['fade_end']}, then {_rplan['end']} to the end "
+                    f"({args.episodes - _rplan['fade_end']} episodes)")
+
     logs, learn_steps, t0 = [], 0, time.time()
     for ep in range(1, args.episodes + 1):
+        if _router:
+            # Before the env is built: it reads route_by_default when it starts.
+            CONFIG.setdefault("conflict", {})["route_by_default"] = (
+                _switch_ep is None or ep < _switch_ep)
+            agent.learner_beta_scale = router_scale(ep, _switch_ep, _rplan)
         map_name = rng.choice(names)
         k = (rng.choice(agent_sets) if agent_sets
              else rng.randint(args.agents_min, args.agents_max))
@@ -684,13 +741,36 @@ def main():
                 f"(network would have differed {est['route_network_differed'] * 100:.0f}%)"
                 + (f" | honest target: {est['honest_exec_share'] * 100:.0f}% of next moves valued "
                    f"as actually made, {est['honest_pushed']} pushed ({est['honest_flushed']} flushed)"
-                   if est.get("honest_on") else ""))
+                   if est.get("honest_on") and not est.get("honest_sarsa_on") else "")
+                # SARSA everywhere (entry 38): every next move is valued as made;
+                # the network-driven share says how much of that is its own.
+                + (f" | SARSA: {est['honest_labelled_share'] * 100:.1f}% of next moves valued "
+                   f"as actually made ({(1.0 - est['honest_exec_share']) * 100:.0f}% the network's own), "
+                   f"{est['honest_pushed']} pushed ({est['honest_flushed']} flushed)"
+                   if est.get("honest_on") and est.get("honest_sarsa_on") else ""))
         if "path_views" in est:
             logger.info(
                 f"         paths | contested {est['path_contested_pct']:.1f}% of views "
                 f"(next cell {est['path_contested_next_pct']:.1f}%) | nearest "
                 f"{est['path_contested_soonest']:.2f} cells ahead | shared "
                 f"{est['path_shared_pct']:.1f}% | routes in view {est['path_routes_seen_mean']:.2f}")
+        if _router:
+            _scale_now = agent.learner_beta_scale
+            logger.info(
+                f"        router | route {'ON (warm-up)' if est.get('router_route_on') else 'OFF'} "
+                f"| scale {_scale_now:.2f} (beta {float(getattr(agent, 'last_beta_eff', 0.0)):.4f}) "
+                f"| Learner agrees with the route on {est['router_learner_agree'] * 100:.1f}% of "
+                f"{est['router_clear_fleet_steps']} clear fleet-steps "
+                f"({est['router_tie_share'] * 100:.0f}% with equally short moves) "
+                f"| heads alone differ {est['router_q_differs'] * 100:.0f}% "
+                f"| chosen moves differ {est['router_choice_differs'] * 100:.0f}% "
+                f"| nudge changed {agent.learner_changed - _lc0} of {agent.learner_used - _lu0} choices")
+            if (_switch_ep is None and ep >= _rplan["warmup_min"]
+                    and est["router_learner_agree"] >= _rplan["agree"]):
+                _switch_ep = ep + 1
+                logger.info(f"        router | SWITCH: the route goes OFF from episode {_switch_ep} "
+                            f"(agreement {est['router_learner_agree'] * 100:.1f}% >= "
+                            f"{_rplan['agree'] * 100:.0f}%)")
 
         row = {"episode": ep, "map": map_name, "scen": inst["scen"],
                "agents": len(env.nodes), "reward": ep_reward,
@@ -729,7 +809,10 @@ def main():
                                      "steps_held_", "steps_waiting_", "wave_", "ladder_", "obstacle_",
                                      "convoy_", "held_pair_", "rwd_", "path_", "stream_", "choice_",
                                      "preempt_", "conflict_", "watch_", "corridor_",
-                                     "guard_", "route_", "honest_"))})
+                                     "guard_", "route_", "honest_", "router_"))})
+        if _router:
+            row.update({"router_scale": float(agent.learner_beta_scale),
+                        "router_switch_episode": (_switch_ep if _switch_ep is not None else -1)})
         row.update({f"loss_{h}": mean_hl[h] for h in heads})
         # Value level per head, and the recovery head's loss and value --
         # episode means over learning steps (0.0 before learning starts).

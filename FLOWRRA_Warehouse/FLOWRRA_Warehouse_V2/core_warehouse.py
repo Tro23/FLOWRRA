@@ -437,6 +437,22 @@ class FLOWRRA:
         self.route_explore_kept = 0       # exploring fleets in the clear left to explore
         self._route_eligible = None       # this step: the route would have driven it
         self._route_moves = None          # ...and the move it would have made (-1: none)
+        # THE ROUTER (training.learner, mode "router"; build log entry 42). The
+        # Learner learns the route's move for every fleet in the clear and
+        # nudges only those fleets; the runner switches the route itself off
+        # once the Learner agrees with it (conflict.route_by_default, per
+        # episode). Mode "meetings" (or the Learner off): exactly as before.
+        _lrcfg = (CONFIG.get("training", {}) or {}).get("learner", {}) or {}
+        self.router = bool(_lrcfg.get("enabled", False)) and _lrcfg.get("mode", "meetings") == "router"
+        self._router_labels = None
+        self.router_clear_fleet_steps = 0  # fleet-steps in the clear
+        self.router_learner_n = 0          # ...with a Learner opinion
+        self.router_learner_agree = 0      # ...whose top move was the route's
+        self.router_q_n = 0                # ...with the heads' own opinion
+        self.router_q_differs = 0          # ...whose top move was NOT the route's
+        self.router_choice_differs = 0     # ...whose CHOSEN move was not the route's
+        self.router_tied = 0               # ...where two or more moves were equally short
+        self._router_ties = None           # this step: the route's equally-short moves, as bits
         # HONEST TARGET (training.honest_target; build log entry 34). Off by
         # default: then every transition is pushed at the end of its own step,
         # in the 14-field layout, exactly as before. On: each step's transition
@@ -451,7 +467,18 @@ class FLOWRRA:
         self.honest_pushed = 0            # transitions pushed through the hold
         self.honest_flushed = 0           # ...of which pushed by the end-of-episode flush
         self.honest_exec = 0              # next-state fleets valued at the move actually made
-        self.honest_net = 0               # ...valued at the network's best (it drove)
+        self.honest_net = 0               # ...where the network drove (its best; SARSA: its move)
+        # SARSA EVERYWHERE (training.sarsa; build log entry 38). Off by default:
+        # exactly run 7's honest target. On: a fleet the NETWORK drove in the
+        # next state is ALSO valued at the move it actually made there (its
+        # exploring moves included), not at its best move by today's values --
+        # no max is left over moves that run. Acts only through the honest
+        # target's hold, so it needs training.honest_target on.
+        self.sarsa = bool((CONFIG.get("training", {}) or {}).get("sarsa", False))
+        if self.sarsa and not self.honest_target:
+            print("[Core] WARNING: training.sarsa is on but training.honest_target is off; "
+                  "SARSA acts only through the honest target's hold, so it does nothing.")
+        self.honest_sarsa = 0             # network-driven next-state fleets labelled with their move
         if self.intent_guard or self.hops_everywhere:
             from guard_warehouse import HopMetric
             self.hop_metric = HopMetric(self.G, self.grid_pos_dict,
@@ -2876,6 +2903,84 @@ class FLOWRRA:
         return gap_now >= gap_was - 0.05
 
     # ---- ROUTE BY DEFAULT (conflict.route_by_default) -------------------------
+    # ---- THE ROUTER (training.learner.mode "router"; build log entry 42) -----
+    def _router_clear_moves(self, valid_masks):
+        """Which fleets are IN THE CLEAR this step, and the route's move for
+        each -- the same test _apply_route_default uses, run BEFORE the choice
+        so the Learner can nudge exactly those fleets and learn the route's
+        move there, whether or not the route is on. Pure: reads, never writes.
+
+        Also the route's TIES, as a bit mask per fleet (bit a = move a): every
+        valid move whose goal gradient equals the best. Two directions that each
+        bring the goal a hop closer are equally short; the route takes the
+        first, by index. The Learner learns all of them as equally right (a
+        soft label), so among equally short moves its nudge stays neutral and
+        the heads -- which can see traffic -- choose. Its agreement with the
+        route is measured up to ties for the same reason."""
+        n = len(self.nodes)
+        eligible = np.zeros(n, dtype=bool)
+        moves = np.full(n, -1, dtype=np.int64)
+        ties = np.zeros(n, dtype=np.int64)
+        busy = set(self.loop.warning_nodes) | set(self.loop.deadlocked_nodes)
+        imm = self.immobile_nodes
+        for i, node in enumerate(self.nodes):
+            if node.id in imm or node.id in busy:
+                continue
+            if (self.route_network_radius > 0.0
+                    and self.proximity.nearest(node.id) <= self.route_network_radius):
+                continue
+            g = node.get_goal_gradient()
+            if not np.any(g > 0):
+                continue
+            move = int(np.argmax(g)) + 1
+            if valid_masks is not None and not bool(valid_masks[i][move]):
+                continue
+            eligible[i] = True
+            moves[i] = move
+            gmax = float(np.max(g))
+            bits = 0
+            for a in range(1, 7):
+                if (abs(float(g[a - 1]) - gmax) <= 1e-9
+                        and (valid_masks is None or bool(valid_masks[i][a]))):
+                    bits |= (1 << a)
+            ties[i] = bits
+        self._router_ties = ties
+        return eligible, moves
+
+    def _router_measure(self, clear, route_moves, actions=None) -> None:
+        """Per step, over fleets in the clear: does the Learner's top move match
+        the route's (the readiness gauge for switching the route off); does the
+        heads' own top move (Q alone, before any nudge) match it (the stale
+        values the router is meant to retire); and does the move the network
+        actually CHOSE (nudge and exploration included, before the route, rules
+        or guard) match it -- after the switch, how far it really drives off
+        the route."""
+        n = len(clear)
+        if not clear.any():
+            return
+        self.router_clear_fleet_steps += int(clear.sum())
+        ties = getattr(self, "_router_ties", None)
+        if ties is None or len(ties) != n:
+            ties = np.where(clear, (1 << np.clip(route_moves, 0, 62)), 0).astype(np.int64)
+        cl = np.where(clear)[0]
+
+        def _on_route(moves):
+            # move a is "the route's" if bit a is set: equally short counts.
+            m = np.asarray(moves)[cl].astype(np.int64)
+            return ((ties[cl] >> np.clip(m, 0, 62)) & 1).astype(bool)
+        self.router_tied += int((np.array([bin(int(t)).count("1") for t in ties[cl]]) > 1).sum())
+        if actions is not None and len(actions) == n:
+            self.router_choice_differs += int((~_on_route(actions)).sum())
+        probs = getattr(self.gnn, "last_learner_probs", None)
+        if probs is not None and len(probs) == n:
+            top = np.asarray(probs).argmax(axis=1)
+            self.router_learner_n += int(clear.sum())
+            self.router_learner_agree += int(_on_route(top).sum())
+        qa = getattr(self.gnn, "last_q_argmax", None)
+        if qa is not None and len(qa) == n:
+            self.router_q_n += int(clear.sum())
+            self.router_q_differs += int((~_on_route(qa)).sum())
+
     def _apply_route_default(self, actions, valid_masks) -> None:
         """Replace the network's choice with the shortest-path move for every
         mobile fleet NOT in contention. In contention means: in this step's
@@ -2974,10 +3079,12 @@ class FLOWRRA:
 
         For each fleet in the held transition's next state (matched by id: the
         stream changes the roster between steps), next_policy_action is:
-          * -1 if the network drove it this step: the route did not take it
-            and the move executed is the network's own choice (its exploring
-            moves included). learn() bootstraps from the network's best move,
-            as always -- Q-learning where the network actually acts;
+          * if the network drove it this step (the route did not take it and
+            the move executed is the network's own choice, its exploring
+            moves included): -1, so learn() bootstraps from the network's
+            best move -- Q-learning where the network actually acts. With
+            training.sarsa on (entry 38): the move it made, like every other
+            fleet -- SARSA everywhere, no max left over moves that run;
           * otherwise the move actually executed this step: the route's, a
             rule's, a ladder hold's, or the guard's (a stop is 0). learn()
             bootstraps from that move, so no target leans on a move that
@@ -3023,6 +3130,10 @@ class FLOWRRA:
             if (not routed[j]) and ex == int(raw[j]):
                 if counted:
                     self.honest_net += 1
+                if self.sarsa:
+                    npa[k] = ex
+                    if counted:
+                        self.honest_sarsa += 1
             else:
                 npa[k] = ex
                 if counted:
@@ -4378,6 +4489,28 @@ class FLOWRRA:
             "honest_flushed": self.honest_flushed,
             "honest_exec_share": ((self.honest_exec / (self.honest_exec + self.honest_net))
                                   if (self.honest_exec + self.honest_net) else 0.0),
+            # SARSA everywhere (entry 38): the network-driven fleets labelled
+            # with their own move, and the share of active next-state fleets
+            # labelled with a real move (exec + SARSA); about 1.0 when on.
+            "honest_sarsa_on": int(self.sarsa and self.honest_target),
+            "honest_sarsa": self.honest_sarsa,
+            "honest_labelled_share": (((self.honest_exec + self.honest_sarsa)
+                                       / (self.honest_exec + self.honest_net))
+                                      if (self.honest_exec + self.honest_net) else 0.0),
+            # The router (entry 42): in the clear, how often the Learner's top
+            # move is the route's (the readiness gauge for the switch), and how
+            # often the heads' own top move is NOT (the stale values it retires).
+            "router_on": int(self.router),
+            "router_route_on": int(self.route_by_default),
+            "router_clear_fleet_steps": self.router_clear_fleet_steps,
+            "router_learner_agree": ((self.router_learner_agree / self.router_learner_n)
+                                     if self.router_learner_n else 0.0),
+            "router_q_differs": ((self.router_q_differs / self.router_q_n)
+                                 if self.router_q_n else 0.0),
+            "router_choice_differs": ((self.router_choice_differs / self.router_clear_fleet_steps)
+                                      if self.router_clear_fleet_steps else 0.0),
+            "router_tie_share": ((self.router_tied / self.router_clear_fleet_steps)
+                                 if self.router_clear_fleet_steps else 0.0),
             # The conflict ladder (step 2a-i).
             "ladder_l3_fired": self.ladder_l3_fired,
             "ladder_l3_fleets": self.ladder_l3_fleets,
@@ -5153,6 +5286,19 @@ class FLOWRRA:
         # nudge (step 3a). Off the ladder, nobody.
         _inconf = (set(self.loop.warning_nodes) | set(self.loop.deadlocked_nodes)
                    if self.ladder_on else set())
+        _nudge_mask = (np.array([n.id in _inconf for n in self.nodes])
+                       if _inconf else None)
+        # THE ROUTER (training.learner.mode "router"; build log entry 42). The
+        # Learner nudges fleets IN THE CLEAR instead -- exactly the fleets the
+        # route would drive -- and learns the route's move there, whether the
+        # route is on (warm-up) or off (after the switch). Nothing at meetings.
+        self._router_labels = None
+        if self.router:
+            _clear, _rmoves = self._router_clear_moves(valid_action_masks_array)
+            _nudge_mask = _clear if _clear.any() else None
+            # The label: the route's equally-short moves as a bit mask (bit a =
+            # move a), -1 for fleets not in the clear.
+            self._router_labels = np.where(_clear, self._router_ties, -1).astype(np.int64)
         actions = self.gnn.choose_actions(
             node_features=node_features_array,
             adj_matrix=adj_mat,
@@ -5160,9 +5306,10 @@ class FLOWRRA:
             total_episodes=total_episodes,
             node_ids=node_ids,
             valid_action_masks=valid_action_masks_array,
-            conflict_mask=(np.array([n.id in _inconf for n in self.nodes])
-                           if _inconf else None),
+            conflict_mask=_nudge_mask,
         )
+        if self.router and actions is not None:
+            self._router_measure(_clear, _rmoves, actions)
 
         # HONEST TARGET: the network's own choices, BEFORE the route, rules,
         # holds or the guard touch them -- and the roster they index.
@@ -6448,6 +6595,11 @@ class FLOWRRA:
                 valid_mask=valid_action_masks_array,
                 teacher_mask=_teacher,
             )
+            # THE ROUTER'S LABEL (entry 42): the route's move for each fleet in
+            # the clear at choice time, -1 elsewhere. Indexed like `actions`.
+            if (self.router and self._router_labels is not None
+                    and len(self._router_labels) == len(actions)):
+                _push_kw["learner_label"] = self._router_labels.copy()
             if not self.honest_target:
                 self.gnn.memory.push(**_push_kw)
             else:

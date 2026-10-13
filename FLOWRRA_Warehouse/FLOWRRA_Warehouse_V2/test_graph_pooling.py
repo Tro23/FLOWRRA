@@ -89,7 +89,12 @@ def test_sample_marks_real_rows():
     buf.push(**transition(rng, 5))
     random.seed(0)
     b = buf.sample(2)
-    check("sample_returns_16", len(b), 16)
+    # 17 since the honest target (build log entry 34) appended its moves LAST;
+    # b[14] and b[15] are unchanged, and with no such field stored b[16] is None.
+    # 18 since the router (build log entry 42) appended its labels after that.
+    check("sample_returns_18", len(b), 18)
+    check("no_router_field_reads_none", b[17] is None, True)
+    check("no_honest_field_reads_none", b[16] is None, True)
     real, next_real = b[14], b[15]
     check("mask_shape", tuple(real.shape), (2, 5))
     check("real_rows_per_state", sorted(real.sum(dim=1).tolist()), [3.0, 5.0])

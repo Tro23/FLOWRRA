@@ -86,6 +86,11 @@ def env_part():
         CONFIG["conflict"]["route_explore"] = explore_on
         CONFIG.setdefault("step", {})["simultaneous"] = True
         CONFIG.setdefault("training", {})["honest_target"] = True
+        # Run 7's labels (network-driven -1); SARSA is tested in test_sarsa.py.
+        CONFIG["training"]["sarsa"] = False
+        # The router (entry 42) adds a learner label to every push; tested in
+        # test_learner_router.py. Off here, so this keeps testing its own fix.
+        CONFIG["training"]["learner"] = dict(CONFIG["training"].get("learner", {}) or {}, enabled=False)
 
     def make_env(seed=7, n_fleets=24):
         random.seed(seed)

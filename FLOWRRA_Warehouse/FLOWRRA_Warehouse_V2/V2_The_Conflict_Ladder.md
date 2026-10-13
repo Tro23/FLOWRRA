@@ -1067,7 +1067,7 @@ Each step was built behind its own switch, tested, and run against the step befo
          - Deployment forces route-explore off, so the frozen tests carry neither cost.
        - **Possibly a bonus, not yet firm:** L3 2.7 to 1.2 and recovery collapses 27 to 12, but episode 4 alone (10 to 2) carries most of it.
     5. [x] ~~Dry run B with the Learner on~~: held until after run 7 (decided 13 October).
-    6. [ ] Agree run 7's settings and predictions; then the run (50 episodes, about 4 hours).
+    6. [x] Agree run 7's settings and predictions; then the run (50 episodes, about 4 hours). Done; scored in entry 35.
        **Agreed 13 October, before the run.**
        - **Settings:** all three fixes on; warm from the champion; exploration peak 0.05 and floor **0.02**. The floor was raised from 0.01 after dry run B, so route-explore corrects the clear about twice as fast. Training only: `deploy_eval` uses its own 0.015.
        - `recovery_policy.exploration_scale` stays 0.25 (Rohit asked). It has no effect in this run: with the ladder on, the learned recovery head is never consulted (`choose_recovery` is skipped; L3 is a fixed rule).
@@ -1082,7 +1082,873 @@ Each step was built behind its own switch, tested, and run against the step befo
        | The stale values get corrected | on the large map, disagreement with the route in the clear is lower in the last 10 episodes than in the first 10 (fleet sizes weighted equally) |
 
        Reported, not scored: the "move away" share near another robot; disagreement on the small map; a per-setting comparison with run 5 (same start, same length). Then the frozen tests decide: ladder_run3 against the champion on 3 of 5 measures, clean and full, guard on for every arm, route-explore off; RULES reported alongside.
+       **Run 7, midpoint check (25 of 50 episodes, about 2 hours in; not a score).**
+       - **Healthy.** No errors, 0 collisions, 0 invariant violations, 0 frozen or recalled robots, 69 no-work exits. The delivery value settled at about 0.80 (episode 1: 1.02) and the delivery loss is flat at about 0.010.
+       - **Paired with run 5,** which had the same start and the same episodes (the same seed gives the same sequence of settings):
+         - Lead time is far shorter on the small map: 40 robots 53 steps against 139, 60 robots 37 against 106, 25 robots 64 against 163. It is shorter on the large map too: 134 against 159.
+         - Collisions are 0 against up to 33 per episode in run 5.
+         - L3 is about 1.0 per episode against 2.3 to 5.4.
+         - This is mostly the system (guard, route, fixes), not yet learning.
+       - **To watch:**
+         1. **The efficiency value is still rising** (0.58, 1.34 at episode 10, 1.68 at 25), and its loss is creeping up (0.007 to 0.010). Rough estimate of the honest level from the rewards: about 1.0 on the small map and about 2.5 on the large, where lives are about 155 steps and the route doubles the per-step progress. So this may be a slow climb towards a higher honest level; the "levels off" prediction decides.
+         2. **Disagreement on the large map is flat** at about 31–40%, not falling. Fix 3 removed the early jump but is not pulling it lower. That prediction may fail.
+         3. **The book is 93.6%** with settings weighted equally, against the prediction's 95%. The one large-map, 25-robot episode delivered 85%, and route-explore detours cost time in training only.
     7. [ ] Frozen tests, clean and full, guard on for every arm (ladder_run3, champion, RULES); then the capacity test with the top-up book (approved).
+
+35. **Run 7, ladder_run3: scored (13 October).** 50 episodes, warm from the champion, all three fixes on, exploration 0.05 peak and 0.02 floor; 4.1 hours, no errors.
+
+    | Prediction | Pass if | Result |
+    | --- | --- | --- |
+    | Values stay honest | delivery value below 1.42 in every episode | ✅ highest 1.075 (run 6: 2.13) |
+    | Learning settles | delivery loss last 10 ≤ first 10; efficiency value levels off (last 10 within 10% of 31–40) | ❌ delivery loss 0.010 → 0.016; efficiency value +14.5% (1.80 → 2.06) |
+    | Safety | 0 violations, 0 collisions, 0 parked mid-floor | ✅ all 0 over 50 episodes; also 0 fallback stops, 0 frozen, 0 recalled; 130 no-work exits |
+    | Nothing gets worse | book ≥ 95% and L3 ≤ 3.4, settings weighted equally | ❌ / ✅ book 93.5% (large map with 25 robots 86% over 5 episodes); L3 1.48 |
+    | The stale values get corrected | large-map disagreement lower in the last 10 than the first 10 | ❌ 33% → 44%: it rose in the second half, at exploration 0.02 |
+
+    **2 pass, 2 fail, 1 split.**
+
+    **The honest target did its main job.** About 90% of next moves were valued as actually made (78% to 100% per episode). The delivery value never came near the ceiling: 0.74 to 0.80 through episode 30, then a step to about 1.0 over episodes 31–36, flat after that, ending at 1.07. The delivery loss stepped with it, from 0.010 to about 0.016, then held.
+
+    **But the values are not fully settled.**
+    - **The step in the delivery value coincides with a jam.** Episodes 30–31 (small map, 25 robots) had 354 and 362 guard stops and L3 11 and 6, with the network driving 36–41% of moves. There the bootstrap is still Q-learning's best move, including moves the rules or the guard overrode and so never ran.
+    - **The efficiency value rose all run** (0.58 to 2.16), its loss flat at about 0.011. The per-step reward did not change (0.038 to 0.039), but the second half drew more large-map episodes (13 against 11), where the honest level is higher (about 2.5 against about 1.0 on the small map). It looks like part mix, part drift, and the two cannot be separated here.
+    - **Disagreement in the clear rose on the large map** (31–35% early, 37–49% late). Exploration at 0.02 corrects too few of the moves the route never makes.
+    - **One residual cause fits all three:** values of moves that experience does not correct. In the clear they are the moves the route never makes; in contention, the moves the rules or the guard override, which the bootstrap's maximum can still pick.
+    - **Clarified with Rohit (13 October): two separate pieces, often run together.**
+      1. **SARSA keeps every value honest.** Each head's value of a state and move is learned from the move actually made next, whoever chose it. It answers "how good is what really happens?" It does not teach the network which move the route or the guard would make: moves never made still have no data.
+      2. **Alignment to the route and the guard is imitation: the Learner head**, trained on the moves the whole system executed. It answers "what would the system do here?" It is a separate head, so it moves no Q-value (principle 7).
+      - Together, the network's choice is consequences (honest Q) plus the system's judgement (the Learner). The Learner proposes moves that need no correcting, and the Q heads are what can go beyond the system.
+      - The rewards were not the problem in run 6; the bootstrap targets were.
+      - **Rohit: can the two be weighed together, so that they agree in the end?** Yes. The principled form is KL-regularised (soft) reinforcement learning, with the Learner as the prior policy:
+        - **The Learner** learns π_sys(a|s), what the whole system does (route, rules, ladder, guard), by supervision.
+        - **The Q heads** learn by (expected) SARSA under the policy actually run.
+        - **The choice:** π(a|s) ∝ π_sys(a|s)^β · exp(Q(s,a)), that is, score = Q + β · log π_sys. This is exactly the form of the Learner's existing nudge.
+        - Because the bootstrap uses the policy actually run, nudge included, the values become consistent with the combined policy. At the fixed point, the policy that is valued is the policy that runs.
+        - **β is the one dial.** Large β copies the system; β near 0 trusts the values. A schedule that starts high and lowers β as the values prove honest lets the network graduate from imitation to its own judgement.
+        - **Principle 7 holds:** Q-values move only from real rewards through moves actually made, and imitation lives in its own head and enters only at choice time.
+        - **Avoid** pushing the Q-values towards the system's moves with a margin (DQfD): that was the margin teacher, retired when it drifted the values.
+        - **A variant:** weight the imitation by the honest advantage (as AWAC/AWR do). Imitate the system where its move is at least as good as the alternatives; learn where it is not.
+        - **Order agreed (Rohit, 13 October):** the frozen tests first; then SARSA everywhere, as one rule; then the KL-regularised Learner (retrained on the whole system's moves, with a β schedule).
+        - **Run 4, read in this light:** the Learner was trained on RULES alone, with a fixed β of 0.1 and inflating values, and the network came to rely on the nudge. Trained on the whole system, with honest values and a falling β, it becomes the designed combination.
+    - **A candidate fix, for after the frozen tests:** bootstrap from the move actually made for every robot, network-driven ones included. That is SARSA, the honest target applied everywhere, with no maximum left. At exploration 0.02 it values practically the same policy. It would not by itself fix the disagreement in the clear; that needs more exploration there or the Learner (the destination note).
+
+    **Paired with run 5:** the same starting network and, by the seed, the same 50 episodes in the same order.
+
+    | | run 7 | run 5 | p | run 7 better in |
+    | --- | --- | --- | --- | --- |
+    | Book delivered | 94.1% | 91.5% | 0.005 | 31 of 50 |
+    | Lead time (steps) | 86 | 135 | < 0.001 | 48 of 50 |
+    | Collisions per episode | 0 | 13.0 | < 0.001 | 44 of 50 (6 ties at 0) |
+    | L3 per episode | 1.48 | 3.16 | < 0.001 | 31 of 50 |
+
+    On the small map the lead time is 54 against 136 steps with 40 robots, 38 against 106 with 60, and 65 against 155 with 25. Most of this is the system (the guard, route by default, the fixes), and both runs learned on the job. The frozen tests separate the network's own contribution.
+
+    **Next: the frozen tests**, clean and full, guard on for every arm, route-explore forced off, no-work exit on for every arm (the config's setting). Arms: ladder_run3, the champion and RULES. The decision rule, agreed before: ladder_run3 against the champion on 3 of 5 measures (delivered, lead time, guard stops, L3, near misses); RULES reported alongside. No winner is predicted. The champion's numbers will differ a little from entries 32–33, because the no-work exit is new for every arm.
+
+36. **Frozen test for run 7, clean condition: scored (13 October).** No failures and no people. The same 18 seeded days as entries 26 and 32 (2 maps × 25/40/60 fleets × 3 seeds), three arms, 54 runs, 33 minutes. The `[deploy]` line confirmed: guard, bubbles, hops and the route on; route explore off.
+
+    | | book delivered | lead time, mean / 90th pct (steps) | collisions, all 18 days | L3 per day | guard stops per day | books finished | network differs from the route in the clear |
+    | --- | --- | --- | --- | --- | --- | --- | --- |
+    | RULES | 99.3% | 72 / 154 | 0 | 3.5 | 23 | 14 of 18 | (rules: 0%) |
+    | champion | 99.4% | 75 / 161 | 0 | 3.3 | 143 | 16 of 18 | 14% |
+    | ladder3 | 99.9% | 78 / 170 | 0 | 2.9 | 130 | 17 of 18 | 50% |
+
+    0 invariant violations and 0 fallback stops in all 54 runs.
+
+    **The days replayed exactly.** The champion's and RULES' rows are identical, day by day, to entry 32's. No robot ran out of work in the clean condition (0 no-work exits, 0 parked, no "frozen" line in the log), so the new switch never acted here. In the full condition it will: entry 33 had 131 freezes. Their count in the full test, now as no-work exits, also confirms the switch is on there.
+
+    **ladder3 against the champion: no measure differs.** This is not the decision; the full test is.
+
+    | Measure | ladder3 | champion | p | ladder3 better on |
+    | --- | --- | --- | --- | --- |
+    | Delivered | 99.9% | 99.4% | 0.29 | 2 days, worse on 1, 15 ties |
+    | Lead time (steps) | 78 | 75 | 0.20 | 6 of 18 |
+    | Guard stops per day | 130 | 143 | 0.73 | 5 of 18 (lower mean, but more stops on 10 days) |
+    | L3 per day | 2.9 | 3.3 | 0.80 | 6 of 18 (more on 9; lower mean from a few bad champion days) |
+    | Near misses with people | – | – | – | (no people in clean) |
+
+    By the mean, ladder3 is ahead on three of the four measured (delivered, guard stops, L3) and behind on lead time. None is firm.
+
+    **By map, the picture splits:**
+    - **Small map**, where robots meet most and the network drives most: ladder3 needs the guard less (221 stops a day against 267) and has fewer stand-offs (L3 4.2 against 5.4). It delivers more (99.9% against 98.7%) and finishes 8 books against 7. It is slower: 50 steps against 46 (RULES: 39).
+    - **Large map:** lead time ties (106, 105 and 105 for ladder3, the champion and RULES). ladder3 needs the guard twice as often (39 stops a day against 18), with L3 at 1.7 against 1.1.
+    - **Disagreement in the clear** is 55% on the small map and 44% on the large one, against the champion's 22% and 7%. It is harmless while the route drives in the clear, but those stale values are next door to the meetings where the network does drive. That may be part of the extra guard stops on the large map; it is not shown.
+
+    **Run 7's network against run 6's, on the same days** (valid, because the days replayed exactly): they are indistinguishable. Delivered 99.9% against 99.9% (p 0.56), lead time 78 against 78 (p 0.85), guard stops 130 against 130 (p 0.78), L3 2.9 against 2.6 (p 0.76). Only the disagreement differs: 50% against 62% (p < 0.001, lower on 16 of 18 days).
+    - So the honest target did what it was built to do: values that stay honest (entry 35) and less disagreement. But in the clean condition it did not change what happens on the floor.
+    - Every network trained under the guard (shake3, ladder2, ladder3) lands in the same place: 99.6–99.9% delivered, lead time 76–78, guard stops 130–141, L3 2.4–2.9. The champion is at 99.4%, 75, 143 and 3.3. Training under the guard shifts the network the same small way every time, slightly more delivered and fewer stand-offs for about 3 steps of lead time, and none of it is firm on 18 days.
+    - In clean conditions, most of the outcome is set by the safety system: the route in the clear and the guard at meetings.
+
+    **Against RULES.** RULES is still the faster driver where robots meet (lead time 72 against 78, p 0.030, faster on 14 of 18 days). It needs the guard far less (23 stops a day against 130, p 0.006).
+
+    **Where the network beats RULES:**
+    - **More books finished:** 17 of 18, the most of any arm on these days with the guard on (RULES 14, the champion 16, ladder2 and shake3 16).
+    - **More delivered:** 99.9% against 99.3% (p 0.074, not yet firm). On the large map RULES leaves 1.4% of the book undelivered and finishes 5 books of 9; ladder3 delivers it all and finishes 9.
+    - **Fewer stand-offs:** L3 2.9 against 3.5 (not firm).
+
+    **Does run 7's training mix explain the map split? (Rohit's question; checked from run 7's metrics and log.)** The map and fleet count of each episode are random draws from the seed, not a set rotation.
+    - **Maps were used evenly:** 26 small and 24 large episodes.
+    - **Exploration was spread nearly evenly:** a mean of 0.030 on the small map and 0.028 on the large. One exception: the five peak episodes (12–16, 0.046–0.050) all fell on the small map, and the large map had 11 of the 20 episodes at the 0.020 floor.
+    - **Fleet counts were not even:** 13 episodes with 25 robots, 17 with 40 and 20 with 60. The large map with 25 robots had only 5.
+
+    | Training episodes | 25 robots | 40 robots | 60 robots |
+    | --- | --- | --- | --- |
+    | Small map | 8 | 8 | 10 |
+    | Large map | 5 | 9 | 10 |
+
+    **The mix does not explain the test.** By cell, on the clean test:
+    - **Large map, 40 robots:** all of ladder3's extra guard stops are here. It had 50, 56 and 221 stops on the three days; the champion had 0 on each. Yet this was the large map's most-trained cell: 9 episodes, 7 of them at higher exploration.
+    - **Large map, 25 robots:** the least-trained cell (5 episodes) is ladder3's best. It had 9 stops against the champion's 55, and the fastest lead time of all three arms (123 steps against 132 for the champion and 129 for RULES).
+    - **Small map, 60 robots:** results swing from day to day for every arm (champion 495, 60, 75 stops; ladder3 256, 482, 1), so 3 days cannot separate them.
+    - **Disagreement in the clear** is flat across fleet counts on the large map (42–46%), so it does not single out 40 robots either.
+    - The whole schedule spans only 0.020–0.050: about 2 to 5 moves in 100. Even a perfect spread changes few moves.
+
+    **For the SARSA run (open):** a balanced rotation of the six map × fleet-count cells, so that each gets the same number of episodes and the same exploration. It is not needed to explain this result, but it removes a question from the next one.
+
+    **What is being tested (clarified with Rohit, 13 October).** Every arm runs with the route in the clear: ladder3, the champion and RULES alike. The `route_default` column is True in every row. Since entry 30 the route lives inside the env, and `--safety on` switches it on for everyone. The older `--route-arms` wrapper (the "champion+route" arm of entries 26–28) was not used here.
+    - **Each arm is the .pth plus the same system:** the route in the clear, the ladder at stand-offs, the guard on every move. Only the decision-maker differs, so the differences between arms are the networks' (and the rules') own.
+    - **ladder3 is deployed as it was trained.** Runs 6 and 7 trained with the route on, so its job is the meetings. The route decides about 96% of moves on the large map and 70–75% on the small; the network decides the rest, all at meetings.
+    - **The champion was trained without the route,** and the route helps it (entry 26: lead time 120 → 75 before the guard). For RULES it changes nothing (0% disagreement).
+    - **Route off with the guard on** would measure the network's own driving in the clear: something ladder3 was never trained to do, and the gap the SARSA and Learner work is meant to close. Not run; a possible diagnostic for later.
+
+    **Next: the full test** (failures and people), the same three arms and 30 seeded days, about 1.5 hours. It decides ladder3 against the champion on 3 of 5 measures, with RULES reported.
+
+37. **Frozen test for run 7, full condition: scored (13 October). ladder3 wins 4 of 5 and becomes the v2 champion.** Failures and people on. The same 30 seeded days as entries 27 and 33 (2 maps × 25/40/60 fleets × 5 seeds), three arms, 90 runs, 87 minutes. About 9.5 failures per shift in every arm. People cleared all debris and nobody timed out.
+
+    | | book delivered | lead time, mean / 90th pct (steps) | collisions, all 30 days | L3 per day | guard stops per day | near misses with people, mean (median) | books finished | network differs from the route in the clear |
+    | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+    | RULES | 95.1% | 83 / 189 | 0 | 4.3 | 28 | 12.7 (4) | 1 of 30 | (rules: 0%) |
+    | champion | 93.8% | 84 / 189 | 0 | 2.5 | 139 | 40.0 (5.5) | 1 of 30 | 16% |
+    | ladder3 | 95.0% | 87 / 197 | 0 | 1.8 | 86 | 8.1 (3) | 2 of 30 | 49% |
+
+    0 collisions, 0 invariant violations, 0 fallback stops and 0 robots parked mid-floor in all 90 shifts.
+
+    **The decision (the rule fixed before the run: the higher mean wins a measure, 3 of 5 to win):**
+
+    | Measure | ladder3 | champion | Winner | p | ladder3 better on |
+    | --- | --- | --- | --- | --- | --- |
+    | Delivered | 95.0% | 93.8% | ladder3 | 0.082 | 19 of 30 days, worse on 6 |
+    | Lead time (steps) | 86.6 | 83.6 | champion | 0.31 | 13, worse on 17 |
+    | Guard stops per day | 86 | 139 | ladder3 | 0.12 | 17, worse on 11 |
+    | L3 per day | 1.8 | 2.5 | ladder3 | 0.16 | 16, worse on 8 |
+    | Near misses with people | 8.1 | 40.0 | ladder3 | 0.055 | 14, worse on 7 |
+
+    **ladder3 wins 4 to 1** and becomes the v2 champion: the starting point for the SARSA run.
+    - **No single measure is firm.** Near misses (p 0.055) and delivered (p 0.082) come closest.
+    - **The champion's near-miss mean is driven by two very bad days** (397 and 394). Without each arm's two worst days it is 14.6 against 5.7, and the medians are 5.5 against 3. The direction holds; the size of the gap is inflated.
+    - **The same pattern held in both conditions.** In the clean test (entry 36), delivered, guard stops and L3 also favoured ladder3 by the mean, and lead time favoured the champion. Two independent sets of days pointing the same way is support that a single test cannot give.
+    - **One caveat:** ladder3 is the only arm that trained with the no-work exit, which every arm now runs with (see below).
+
+    **By map:**
+    - **Small map:** ladder3 needs the guard about half as often as the champion (133 stops a day against 243). It has fewer stand-offs (L3 2.8 against 3.5), far fewer near misses (9.0 against 68.6) and delivers a little more (96.2% against 95.6%). It is slower: 55.6 steps against 50.3, and RULES' 46.4.
+    - **Large map:** ladder3 delivers more (93.7% against 92.1%; RULES 93.5%). It has fewer stand-offs (0.9 against 1.5; RULES 3.0) and fewer near misses (7.3 against 11.3). Lead time ties (118, 117 and 119). Guard stops tie (39 against 36).
+    - **The clean test's weak spot did not repeat.** On the large map with 40 robots, ladder3 needed the guard less than the champion here (46 stops against 85), the reverse of the clean test. It was most likely day-to-day noise on 3 days.
+
+    **Did run 7's training change the floor?** In the clean test, run 7's and run 6's networks were indistinguishable (entry 36). Under full stress, they differ against the common reference, the champion:
+    - Run 6's ladder2 was worse than the champion on stand-offs (L3 3.7 against 2.2) and level on guard stops (127 against 123; entry 33).
+    - Run 7's ladder3 is better on both (1.8 against 2.5, 86 against 139).
+    - This is indirect: the two networks never ran on the same days, because the no-work exit changed the days. But it is the first sign, on the floor, that the honest target made the trained network better where it matters most, in a crowded and failing floor.
+
+    **Against RULES (reported, not scored).**
+    - **ladder3 has fewer stand-offs:** L3 1.8 against 4.3 a day (p 0.010, fewer on 19 of 30 days). This is the first measure on which a network beats RULES firmly under full stress. The champion's lead was just short in entry 33 (p 0.051).
+    - **Fewer near misses with people:** 8.1 against 12.7 (p 0.068).
+    - **Delivered ties:** 95.0% against 95.1% (p 0.86). On the large map ladder3 delivers a little more (93.7% against 93.5%) and is slightly faster (118 against 119 steps).
+    - **RULES is still the faster driver where robots meet:** 83 steps against 87 overall (p 0.135, not firm), and 46 against 56 on the small map.
+    - **RULES needs the guard about 3 times less:** 28 stops a day against 86 (p 0.007).
+
+    **The no-work exit, on the floor (entries 33–34, Fix 2).** Every shift with no exit replayed entry 33's day exactly: 5 of 5 for RULES, 1 of 1 for the champion. So every change below comes from the exits, about 2.2 to 2.9 per shift.
+    - **The safety hole is closed:** 0 collisions in 90 shifts, against 1 in 120 in entry 33, which came from a frozen robot. 0 robots parked mid-floor.
+    - **People are safer around RULES:** near misses fell from 33.3 to 12.7 (not firm, p 0.17). For the champion they were unchanged (36.6 to 40.0).
+    - **The cost is throughput, for every arm:**
+      - RULES delivers about 1 order a shift less (77.0 to 76.1, p 0.002) and the champion 1.7 less (76.7 to 75.1, p < 0.001).
+      - Fewer robots are on the floor (18.6 to 17.9 on average) and more are off it at the end (29.2 to 30.5). A robot that exits waits about 120 steps before the stream brings it back.
+      - A frozen robot, by contrast, stayed on the floor and could be recalled. For RULES, handovers fell slightly (9.4 to 9.2, p 0.014).
+    - **Open, for later; not built:** keep the safety and recover the throughput. For example, give a robot heading out a newly released order on its way to the dock, or let it wait at a safe spot that the guard treats as an obstacle. To be designed with the capacity test.
+
+    **Next (agreed order):** design SARSA everywhere, as one rule, for approval before any code; then the KL-regularised Learner. The SARSA run starts warm from ladder3.
+
+38. **Design for run 8: SARSA everywhere (13 October). For approval; no code yet.**
+
+    **What is left of Q-learning after the honest target.** Since run 7, a lesson asks "how good is the next state?" and answers it, for each robot in that state, with:
+    - **the move actually made,** if anything other than the network drove the robot: the route, a rule, a ladder hold or the guard;
+    - **the route's move,** if the robot explored in the clear (Fix 3);
+    - **the network's best move by today's values (the max),** if the network drove it. This is the last place the max is used. In run 7 it covered 11–22% of next moves on the small map (honest share 78–89%) and 1–7% on the large (93–99%).
+
+    **Why that last max still matters (entry 35).** The network's best move by today's values can be a move that would never have run: one the guard would have stopped, or a rule overridden. Experience never corrects those values. Run 7 shows the signs:
+    - **The delivery value stepped up and stayed up.** It went from about 0.80 to 1.0 over episodes 30–36, right after the small-map jams of episodes 30–31 (354 and 362 guard stops).
+    - **The efficiency value rose in every episode,** 0.58 to 2.16, on both maps alike: 2.12 on the small map and 2.16 on the large by episodes 48–50. Yet the rewards suggest the small map's honest level is lower, because lives there are shorter. A climb that ignores the map points to the bootstrap more than to the episode mix.
+    - **Neither is proven.** Run 8 is the test.
+
+    **The rule, in one line: every robot in the next state is valued at the move it actually made there.** Only the network-driven case changes: from "the network's best move" to "the move the network actually made", its exploring moves included.
+
+    | The robot in the next state was driven by | Run 7 (honest target) | Run 8 (SARSA) |
+    | --- | --- | --- |
+    | The route, a rule, a ladder hold, the guard | the move made | the move made |
+    | Explored in the clear (Fix 3) | the route's move | the route's move |
+    | The network | its best move (the max) | **the move it made** |
+
+    - **This values exactly the system as deployed.** In deployment the route always drives the clear, so the route's move is the right label there. The network also explores in deployment (0.015 against 0.02–0.05 in training), so the move it made is the deployed policy, give or take that small difference.
+    - **No max is left over moves that run.** Three cases keep today's form, by design:
+      - a robot that left the floor: its value chain ends there, so nothing reaches the loss;
+      - a step that ends the episode: no bootstrap at all;
+      - the one transition per episode cut off at the step budget, which has no next step to read. It bootstraps from the best move, as is standard for a time limit: 1 transition in 800.
+
+    **Why not expected SARSA.** Expected SARSA averages over what the policy might do: mostly its best move, plus the exploration. The "best move" part is the max again, over moves that may never run. Plain SARSA uses only what happened.
+
+    **What it will not fix, said before the run:** disagreement with the route in the clear. SARSA keeps the values honest; it does not teach the network what the route would do. That is the Learner's job, next. So disagreement is reported, and not predicted to fall.
+
+    **One known cost.** Lessons stay in memory for up to about 25 episodes (20,000 steps). So "the move actually made" was made by the network of up to 25 episodes earlier, and SARSA values a recent mix of the network's own behaviour. That can lag; it cannot inflate. Warm, at exploration 0.02–0.05, the network changes slowly.
+
+    **Plumbing.**
+    - `core_warehouse.py`: in `_honest_complete_pending`, the network-driven case writes the move made instead of −1 when the switch is on. A new counter, `honest_sarsa`, counts the network-driven moves labelled this way; `honest_net` still counts how often the network drove. A new share, `honest_labelled_share`, is labelled next moves over all active ones; it should read about 100%.
+    - `agent_warehouse.py`: no change. `learn()` already uses every label ≥ 0.
+    - `main_runner_warehouse.py`: the log line shows SARSA on and the labelled share. The CSV columns come through `honest_`.
+    - `config_warehouse.py`: `training.sarsa`, False by default. It acts only with `honest_target` on, and prints a warning if set without it. A RUN 8 header.
+    - **Off is exactly run 7's code.**
+
+    **Tests before any training: `test_sarsa.py`.**
+    1. **Switch off:** labels bit-identical to run 7's rule (network-driven −1).
+    2. **Switch on, in real FLOWRRA steps:** 24 robots, the stream, the route, the guard and route-explore on, with exploration raised so every case occurs. Every active next robot is labelled with the move it made, and an explorer in the clear with the route's move. No active robot reads −1, and the counters match.
+    3. **`learn()`:** with every label given, the target is exactly the reward plus γ times the target network's value of the labelled move. Changing the online network's preferences does not change the target: no max is left.
+    4. **Then the three recent tests and the suite of 13.**
+
+    **Decisions for Rohit.**
+    - **A. Start from the champion or from ladder3?**
+      - **From the champion (recommended).** With `--seed 0`, run 8 is run 7 with one switch changed: the same start and the same 50 episodes in the same order. Every episode pairs with run 7, and the frozen test (run 8 against ladder3) becomes a clean comparison of SARSA on the floor.
+      - **From ladder3.** It builds on the new champion, 100 episodes in all. But if it wins, the cause could be SARSA or just 50 more episodes. And ladder3 starts with run 7's possibly inflated values (efficiency 2.16), which SARSA would first have to unlearn.
+    - **B. Dry run first.** 10 episodes from the same start as the run, about 45 minutes. Check: values below 1.42, a labelled share of about 100%, losses not climbing, 0 collisions. Then agree the predictions, and run 50 episodes (about 4 hours).
+    - **C. Keep the episode draw as it is:** same seed, no rotation. Entry 36's check found the map mix does not explain the results, and the same seed keeps runs 5, 7 and 8 paired episode by episode. A balanced rotation can come later, on its own.
+    - Exploration, failures, the book and the three fixes stay as in run 7.
+
+    **Predictions (proposed; to agree after the dry run).**
+
+    | Prediction | Pass if |
+    | --- | --- |
+    | Every value labelled | at least 99.5% of active next moves labelled with a real move, in every episode |
+    | Values stay honest | delivery value below 1.42 in every episode |
+    | Learning settles (run 7 failed this) | delivery loss in the last 10 episodes no higher than in the first 10; efficiency value levels off (last-10 mean within 10% of episodes 31–40) |
+    | The climb was the bootstrap | from the champion: efficiency value in the last 10 below run 7's 2.06, and no lasting step in the delivery value after the jam episodes 30–31. From ladder3: the efficiency value falls from 2.16 and levels off |
+    | Safety | 0 violations, 0 collisions, 0 robots parked mid-floor |
+    | Nothing gets worse | paired with run 7 episode by episode, neither the book delivered nor L3 is significantly worse (p < 0.05) |
+
+    Reported, not scored: disagreement in the clear (not expected to fall) and the network-driven share. Then the frozen tests, clean and full: run 8 against ladder3, 3 of 5, with RULES reported.
+
+    **SARSA, one level deeper (Rohit's question).**
+    - **Deciding, in the core, every step:**
+      1. The network scores every move for every robot (the three heads, weighted 6 : 4 : 1) and proposes one per robot, exploring at ε.
+      2. The route replaces the proposal for robots in the clear.
+      3. Rules and the ladder may override at stand-offs.
+      4. The guard checks every pair and slows or stops.
+      5. The robots move, and each earns three rewards (safety, delivery, efficiency).
+    - **The hold.** The lesson for step t is (state, move made, rewards, next state, ?). The "?" is the move each robot makes in the next state, unknown until step t+1's decision chain has run. Then it is filled in, robot by robot, matched by ID, and the lesson is stored. This is unchanged from run 7; SARSA only changes what is written for network-driven robots.
+    - **Learning, in the agent, every step once memory holds 64 lessons:**
+      1. Sample 64 lessons.
+      2. For each robot and each head: the target is the reward plus γ (0.99) times the target network's value of the next state at the move written in the "?". The same move is used for all three heads, so their weighted sum is the value of one real policy.
+      3. The guess is the online network's value of the move made.
+      4. The loss is the gap (smooth L1), over active robots only. The gradient moves the three heads and the shared trunk. The target network follows slowly.
+    - **Why SARSA cannot inflate.** Q-learning's target uses the highest of the next state's values, including moves never tried there. Their errors never shrink, and the max keeps choosing the most overestimated one; through bootstrapping, the error compounds. SARSA's target uses Q(s′, a′) for a move a′ that really happened at s′. That (s′, a′) is itself the start of a stored lesson, so the value being borrowed is itself being trained. Every link in the chain was experienced. Its fixed point is the true value of the behaviour that runs.
+    - **How the policy still improves.** SARSA evaluates; the choice improves. The network picks moves with high values. Exploration occasionally tries others, and if one does better, its value rises, it is picked more, and SARSA re-evaluates the new behaviour. Evaluate, improve, repeat (generalised policy iteration). It is slower than Q-learning's assumption of perfect play from here on, but every step of it is real.
+    - **What SARSA learns that Q-learning does not:** the consequences of the whole system acting after the network, including the guard's stops, the ladder's holds and its own exploration. Near other robots, a move that the guard will stop next step is valued as what really follows: waiting. This is the cliff-walk lesson in RL textbooks. SARSA learns the path that is safe given its own occasional slip; Q-learning learns the edge and pays for it in exploration.
+
+    **Rohit's idea: the Learner as the router, its moves going into SARSA, and SARSA's output into the three heads.** Mostly right, and close to the agreed KL design. One correction.
+    - **The correction: SARSA is not a box in the network.** It is the rule for the answer key, the "?" in each lesson. It produces no output in the forward pass and adds no layer. The Learner and the three Q heads sit side by side on the shared trunk; they meet at decision time (score = Q + β × log π_Learner), not inside the network.
+    - **"The Learner's moves go into SARSA": yes, through what actually happened.** When the Learner's nudge shapes a choice, the move made carries it, and SARSA writes the move made. The values become the values of the combined policy: network, Learner, route, rules, guard. This is the KL design's fixed point: the policy that is valued is the policy that runs.
+    - **"SARSA's output goes into the three heads": yes, as their training targets.** One target per head per robot: that head's reward plus γ times that head's value at the move made next.
+    - **"The Learner as the router": yes.** That is the Learner trained on the whole system's moves, extended to the clear:
+      - Today it learns only from rules and holds (`teacher_sources`) and nudges only robots in a conflict.
+      - As the router, it also learns from the route's moves in the clear and the guard's stops, and nudges everywhere.
+      - Once it routes as well as the route, the hard-coded route can be switched off. The route-off frozen test (entry 36) then measures whether the network has learned to drive on its own.
+    - **"Clean learning right into the network": clean as long as the Learner does not train the trunk.** Today it reads the trunk but never trains it (`h.detach()`). If imitation trained the trunk, it would move the Q-values without any reward, against principle 7. Keep it detached.
+    - **One trap to avoid:** the Learner should learn only from moves the system decided (the teacher mask), never from the network's own. Otherwise it learns to imitate itself, and the nudge feeds on its own output.
+    - **Order unchanged:** SARSA first, alone, so its effect is measured on its own; then the Learner as the router, with a β schedule.
+
+    **Rohit's follow-up: make a′ a learned outcome, a′ = f(route, the network's move), optimised so that a′ comes close to the route.** The aim is right: blend the route's knowledge with the network's judgement, and pull the network towards the route. The lever is in the wrong place.
+    - **a′ grades the move before it; it does not steer the next choice.** In the target r + γ·Q(s′, a′), a′ decides how good it was to arrive at s′. What the network chooses at s′ comes from its ranking of Q(s′, ·), learned from the lessons that start at s′. Writing the route's move into a′ would change how earlier moves are valued, not make the network choose the route.
+    - **And it would bring back a value nothing corrects.** At a meeting, the route's move is usually the one the guard stops (it is the shortest path, straight at the other robot). If a′ is that move, the target borrows Q(s′, route's move) for a move that did not happen there. It is never corrected, which is run 6's inflation again, and principle 7 is broken. Any rule for a′ other than "what happened" reopens this.
+    - **Where "close to the route" belongs: in the choice, through the Learner.** The Learner is trained, by its own loss, to match the route and the rest of the system: that is the "optimising function". The blend happens at decision time: score = Q + β·log π_Learner. SARSA then records the move that came out of the blend, after the route, rules and guard, as a′. So a′ is, in effect, f(route, network). The blend comes first, in the choice; the recording second, in the target.
+    - **The guess stays Q(s, move made):** it is the thing being trained.
+    - **Pulling the Q-values themselves towards the route** (a margin or a penalty) is the margin teacher, retired when it drifted the values.
+    - **A legitimate later variant:** expected SARSA under the blended policy. The target averages Q(s′, ·) over softmax(Q + β·log π_Learner), the soft, KL-regularised target. It holds only when the blend is what actually runs. While the route, rules and guard still override at meetings, it is not, and plain SARSA is the honest one. Once the Learner drives the clear and the route is off, the two converge.
+    - **Rohit, clarifying: "a′ as the move to make, not the move made".** a′ is the next step's move either way. "The move to make" is a decision, so it belongs in the deciding loop. That is where Rohit's zone idea fits: five robots in a warning zone, each given a safe exit point inside the density, then collapsed through the ladder. This is entry 34's boundary-then-collapse planner, a better decider. "The move made" is the record, and belongs in the learning loop: SARSA. If the planner decides well, the guard has nothing to stop, so the move made is the move to make, and SARSA learns the value of following the planner. The Learner can later imitate it. SARSA is the foundation that planner needs.
+
+    **Decided (Rohit, 13 October): A, start from the champion; B, a dry run first; C, keep the same seed, no rotation.** Run 8 is named `ladder_run4`.
+
+    **Run 8, step by step** (ticked off as each is done):
+    1. [x] **Build (13 October).**
+       - `core_warehouse.py`:
+         - the switch `training.sarsa`, read at start-up, with a warning if it is set without the honest target;
+         - in `_honest_complete_pending`, the network-driven case writes the move made when the switch is on;
+         - counter `honest_sarsa`; stats `honest_sarsa_on`, `honest_sarsa` and `honest_labelled_share`.
+       - `main_runner_warehouse.py`: with SARSA on, the safety line reads "SARSA: x% of next moves valued as actually made (y% the network's own)". The CSV columns come through the `honest_` prefix.
+       - `agent_warehouse.py`: a comment only. `learn()` is unchanged.
+       - `config_warehouse.py`: `training.sarsa` True, and the RUN 8 header with the dry run and run commands (`--resume ladder_run1/...`, `--seed 0`, `--out ladder_run4_dry` / `ladder_run4`). Run 7 moved to EARLIER RUNS.
+       - New: `test_sarsa.py`. The earlier tests `test_honest_target.py` and `test_route_explore.py` now pin `sarsa` off, so each keeps testing its own fix. With SARSA on in the config, their "network-driven reads −1" checks would otherwise fail.
+       - **Checked here without torch, on a stand-in of `_honest_complete_pending`.** Six robots plus one that left the floor: routed, explored in the clear, network-driven, guard-stopped, network-driven, and network-driven but inactive.
+         - SARSA off: [2, 5, −1, 0, −1, −1, −1]. SARSA on: [2, 5, 5, 0, 1, 6, −1].
+         - Counters: system-driven 3, network-driven 2, labelled by SARSA 2, so the labelled share is 1.0.
+         - The robot that left reads −1 either way. The inactive one is labelled but not counted, and its bootstrap is masked in `learn()`.
+    2. [x] **Rohit's machine, 13 October:** `test_sarsa.py`, `test_honest_target.py`, `test_route_explore.py`, `test_guard_integration.py` and the suite all pass. The switches read `True True True True {'eps_peak': 0.05, 'eps_min': 0.02, 'mu_frac': 0.25, 'sigma_frac': 0.125}`.
+    3. [x] **Dry run, done 13 October: stable, passes every check** (`ladder_run4_dry`, 10 episodes, warm from the champion, 44.3 minutes, no errors). The same 10 scenarios in the same order as dry run B and as run 7's first 10. Neither is an exact pair: dry run B's exploration floor was 0.01 against 0.02 here, and run 7's first 10 episodes sat inside a 50-episode schedule.
+       - **SARSA is live:** 100.0% of next moves valued as made in every episode. The network's own share was 11–23% on the small map and 1–4% on the large.
+       - **Safety:** 0 collisions, 0 violations, 0 fallback stops, 0 parked; 28 no-work exits; no frozen or recalled robots; no tracebacks.
+       - **Values honest.** The delivery value fell from 1.06 to 0.74, far below 1.42. It ran a little above dry run B's early on (9 of 10 episodes, p 0.004) and met it by episodes 9–10 (0.742 against 0.744). Per head, SARSA can be higher: the max picks the best move by the weighted sum, where safety counts 6 times, and that move can be worse for delivery than the one actually made.
+       - **The efficiency value was lower than dry run B's in all 10 episodes** (p 0.002), by 3–12%: 1.30 against 1.36 at episode 10 (run 7: 1.34). But it climbed at nearly the same rate (0.45 to 1.30, against 0.47 to 1.36).
+         - So most of the early climb is common to both. That fits an honest adjustment: the champion learned its values without the route, and with the route every step makes progress, so the true efficiency return is higher than the champion believed.
+         - The leftover max adds a little on top: the 3–12%.
+         - The open question is the run's second half, where run 7 kept climbing to 2.16.
+       - **Losses:** the same as dry run B (delivery 0.009–0.012, efficiency 0.005–0.008, safety about 0.001).
+       - **The floor:** no paired measure differs. Delivered 76.9 against 76.7; L3 1.4 against 1.2; guard stops 85 against 87; lead time 87.5 against 84.5 (p 0.19).
+       - **Disagreement in the clear:** 36% against 40% (p 0.105), but 37% more exploring moves were kept in the clear (235 against 171 an episode, from the higher floor). Not credited to SARSA.
+    4. [x] Agree the predictions; then the run (`ladder_run4`, 50 episodes, about 4 hours). **Agreed by Rohit, 13 October; run 8 started.** Final wording, set after the dry run:
+
+       | Prediction | Pass if |
+       | --- | --- |
+       | Every value labelled | at least 99.5% of active next moves labelled with a real move, in every episode |
+       | Values stay honest | delivery value below 1.42 in every episode |
+       | Learning settles (run 7 failed this) | delivery loss in the last 10 episodes no higher than in the first 10; efficiency value levels off (last-10 mean within 10% of the mean of episodes 31–40) |
+       | The late climb was the bootstrap | efficiency value in the last 10 at least 10% below run 7's (≤ 1.85 against 2.06); and the delivery value's mean over episodes 36–50 less than 0.10 above its mean over 21–29 (run 7: +0.20, the step after the jams) |
+       | Safety | 0 violations, 0 collisions, 0 robots parked mid-floor |
+       | Nothing gets worse | paired with run 7 episode by episode, neither the book delivered nor L3 is significantly worse (p < 0.05) |
+
+       - The bootstrap threshold is set at 10% below run 7, not just "below": the dry run already sits 3–12% under dry run B. A small gap would mean the late climb was mostly honest, and the prediction should then fail.
+       - Reported, not scored: disagreement in the clear, the network's own share, and lead time.
+       - No winner is predicted on the floor; the frozen tests decide that.
+    5. [x] Score it, paired with run 7 episode by episode: entry 39.
+    6. [ ] Frozen tests, clean and full: ladder4 against ladder3, 3 of 5; RULES reported.
+
+39. **Run 8, ladder_run4 (SARSA everywhere): scored (13 October).** 50 episodes, warm from the champion, run 7's settings with one switch changed (`training.sarsa`); 4.05 hours, no errors. The same 50 scenarios in the same order as run 7, so every episode is a paired comparison.
+
+    | Prediction | Pass if | Result |
+    | --- | --- | --- |
+    | Every value labelled | ≥ 99.5% of active next moves labelled, every episode | ✅ 100% in all 50 episodes |
+    | Values stay honest | delivery value below 1.42 in every episode | ✅ highest 1.04 (run 7: 1.07) |
+    | Learning settles | delivery loss last 10 ≤ first 10; efficiency value last 10 within 10% of 31–40 | ❌ delivery loss 0.0105 → 0.0113, narrowly higher (run 7: 0.0100 → 0.0159); efficiency value +17.7% (run 7: +14.5%) |
+    | The late climb was the bootstrap | efficiency value last 10 ≥ 10% below run 7's; delivery value step 21–29 → 36–50 under 0.10 | ✅ / ❌ **delivery step −0.001 (run 7: +0.210)**; efficiency only 1.8% below run 7 (2.02 against 2.06) |
+    | Safety | 0 violations, 0 collisions, 0 parked | ✅ all 0; 0 fallback stops; 118 no-work exits; no frozen or recalled robots |
+    | Nothing gets worse | book delivered and L3 not significantly worse than run 7, paired | ✅ delivered 93.8% against 94.1% (p 0.96); L3 1.96 against 1.48 (p 0.18) |
+
+    **4 pass, 1 fail, 1 split.**
+
+    **The finding: the leftover max was the delivery head's problem, and SARSA removed it.**
+    - **Run 7's delivery value** stepped from 0.82 (episodes 21–29) to 1.03 (36–50), right after the small-map jams of episodes 30–31. It never came back down.
+    - **Run 8's,** on the same episodes, stayed flat: 0.81 and 0.81. It ended at 0.80 against run 7's 1.07.
+    - **The delivery loss stayed flat** at about 0.011, where run 7's rose 60% to 0.016.
+    - This is entry 35's hypothesis confirmed for this head, by a clean paired test: the same start and the same episodes, with one switch changed.
+
+    **The efficiency climb is not the max.**
+    - Both runs climbed almost identically: run 8 from 0.49 to 2.06, run 7 from 0.58 to 2.16. The last-10 means are 2.02 against 2.06.
+    - The gap was largest mid-run (5–7% over episodes 15–35) and closed late. The prediction was set to fail if the gap was small, and it failed.
+    - So the efficiency climb is common to both runs. Two readings remain:
+      - **Honest:** under the route every step makes progress, so the true efficiency return is higher than the champion's values (learned without the route) said. The memory, about the last 25 episodes, also held more large-map episodes late on, where lives are longer.
+      - **A slower drift** that SARSA does not remove: bootstrapping through a network that generalises across states, a lagging target network, and replayed labels from older behaviour.
+    - **A direct check would separate them:** compare the efficiency value of the moves made against the discounted efficiency return actually earned afterwards. Not built; a candidate measurement. A rough version from the existing columns follows (Rohit's question): it points to the honest reading.
+    - **The efficiency loss is higher under SARSA** (0.0148 against 0.0114 in the last 10). Some of that is expected: a SARSA target follows one real next move, exploration included, so it is noisier than a max. But it rose with the value all run.
+
+    **Rohit: do the rewards explain the efficiency climb? Yes. The value is catching up to a level the rewards set, not inflating past it.** Checked from the metrics CSV, both runs, without new code.
+    - **The rewards themselves did not change over the run.** The efficiency reward the network learns from, per active robot-step, is about 0.054 on the small map (0.054 in the first 25 episodes, 0.053 in the last 25). On the large map it is about 0.071 (0.069 to 0.073). Run 7 is the same.
+    - **A rough honest level from those rewards:** the reward rate times the discounted steps a robot has left in its life (γ 0.99, lives about 62 steps on the small map and 138 on the large), averaged over the roughly 25 episodes that the memory holds.
+      - It is about 1.3 on the small map and 3.2 on the large.
+      - Over the memory, it sits at about 2.3–2.8 from episode 5 on, with no trend.
+    - **The learned value started far below that level and climbed towards it all run,** while the level stayed flat:
+
+      | Episode | 1 | 10 | 25 | 40 | 50 |
+      | --- | --- | --- | --- | --- | --- |
+      | Level from rewards (memory-weighted) | 1.6 | 2.7 | 2.6 | 2.6 | 2.7 |
+      | Learned efficiency value, run 8 | 0.49 | 1.32 | 1.54 | 1.88 | 2.06 |
+      | Learned efficiency value, run 7 | 0.58 | 1.34 | 1.68 | 1.92 | 2.16 |
+
+    - **So the "climb" is the value filling up.**
+      - The champion learned its efficiency values without the route, when robots detoured and progress per step was lower: about 0.5.
+      - Under the route, nearly every step makes progress, so the true value is higher.
+      - With γ 0.99 a value sums about 100 future steps, and each lesson passes information back only one step, so it fills slowly. At episode 50 it is still below the level.
+      - That is why "levels off" failed: it had not arrived.
+      - That is also why SARSA barely changed it. The efficiency reward is earned nearly every step by whichever move runs, so the max has little to inflate.
+    - **The same check on the delivery head agrees with the main finding.** The level its rewards set (one delivery, discounted by the steps until it) is about 0.62–0.67 from episode 10 on, flat. Run 8's delivery value is flat at about 0.80. Run 7's climbed to 1.02–1.08, after the jams.
+    - **Caveats:** a rough estimate. It assumes a constant reward rate within a life, a uniform position in the life, the mean life length, and no end-of-episode cut-off; the levels could be off by perhaps a quarter. The trends (flat rewards, rising value) do not depend on those assumptions.
+    - **A prediction for the next run from these weights:** the efficiency value should level off at about 2.5–2.8. Well above about 3 would mean drift.
+    - **Rohit: what does efficiency do once safety and delivery have settled? Each head fills towards its own level at its own pace; efficiency is the last.** Run 8, 10-episode windows, against the level the rewards set (same rough method):
+
+      | Episodes | Delivery: learned (slope) | Safety: learned / level | Efficiency: learned (slope) / level |
+      | --- | --- | --- | --- |
+      | 1–10 | 0.83 (−0.021 per episode) | −0.043 / −0.131 | 1.04 (+0.067) / 2.42 |
+      | 11–20 | 0.79 (+0.011) | −0.053 / −0.093 | 1.36 (+0.007) / 2.50 |
+      | 21–30 | 0.81 (−0.003) | −0.068 / −0.085 | 1.57 (+0.025) / 2.54 |
+      | 31–40 | 0.83 (+0.002) | −0.085 / −0.084 | 1.72 (+0.018) / 2.40 |
+      | 41–50 | 0.80 (+0.001) | −0.094 / −0.081 | 2.02 (+0.016) / 2.68 |
+
+      - **Delivery settled first,** by about episode 11. It started near its level.
+      - **Safety arrived by episodes 31–40,** at −0.085 against a level of −0.084. It started too optimistic (−0.04) and filled downwards. In the last 10 it is slightly past the level (−0.094), within the method's accuracy.
+      - **Efficiency, once both had settled, is still climbing, but more slowly.** The gap to its level shrinks: 1.38, 1.13, 0.97, 0.68, 0.66.
+      - **A fit to the gap from episode 10 on:** it halves about every 35 episodes. With these settings the value would come within 10% of its level (about 2.55) around cumulative episode 90, and within 5% around 125.
+      - **Why efficiency is last:** it had the furthest to go (0.5 against about 2.5), and its value sums about 100 steps of small rewards. Delivery's is one event a few dozen steps away, and safety's is small.
+      - **For the next warm run** (the Learner, from whichever network wins the frozen tests): about 50 more episodes should bring efficiency close to flat, near 2.5–2.8.
+    - **Clarified with Rohit:** the climb follows training time, not the exploration floor. It ran from episode 1, at the highest exploration, and was steady throughout. The head weights stay 6 : 4 : 1. What grows is the efficiency head's accuracy: the robots' efficiency per step did not change; the network learned what that efficiency is worth. As its values become accurate, the differences between moves in that head sharpen, and with them its say in close choices. That is the network learning correctly, not the focus shifting.
+
+    **Disagreement with the route in the clear fell, against the prediction.** It was 38.5% against run 7's 42.7% (p < 0.001), lower in 43 of 50 episodes. On the large map it went from 25% to 37% (first 10 to last 10), against run 7's 33% to 44%: about 7 points lower throughout, though still rising within the run.
+    - The exploration schedule is identical here, so unlike dry run B, this is a fair pair.
+    - **A plausible reading, not shown:** the max at meetings inflated the values of moves that lead into meetings, and that leaked one step back into the clear. Without the max, the route's move ranks first more often.
+    - **Predicted wrongly, in the good direction.**
+
+    **The floor in training: no paired difference from run 7.**
+    - Delivered: 75.0 against 75.3 a shift (p 0.92).
+    - Lead time: 85.5 against 86.2 (p 0.87).
+    - Guard stops: 86 against 69 (p 0.69).
+    - L3: 1.96 against 1.48. Worse on 23 episodes, better on 12; not firm (p 0.18).
+    - Near misses with people: 78 against 54 (p 0.47).
+    - **The two weakest episodes had more robot failures than run 7 had on the same days:** episode 29 (large map, 25 robots) had 15 failures against 8 and delivered 55 against 73; episode 8 had 16 against 11. This is the known order leak (item 3): failures draw from the shared `random`, so once choices differ, so do the failures. Training episodes pair only until then. The frozen tests seed every stream before each arm, so they do not have this problem.
+
+    **The network's own share:** 15.7% of next moves on the small map, 4.8% on the large.
+
+    **Next: the frozen tests**, ladder4 against ladder3 (the v2 champion), with RULES reported. The rule: 3 of 5 measures (delivered, lead time, guard stops, L3, near misses), clean and full. No winner predicted.
+    - **Proposed, to save time (agreed):** run the clean test with all three arms (about 33 minutes). Nothing in deployment changed since entry 36: the SARSA switch acts only in training. So ladder3's and RULES' rows should be identical, day by day, to entry 36's. If they are, run the full test with ladder4 alone (about 35 minutes instead of 90), paired with entry 37's ladder3 and RULES rows on the same 30 days.
+
+
+40. **Frozen test for run 8, clean condition: scored (13 October).** No failures and no people. The same 18 seeded days as entries 26, 32 and 36, three arms, 54 runs, about 32 minutes. The `[deploy]` line confirmed: guard, bubbles, hops and the route on; route explore off.
+
+    **The days replayed exactly.** ladder3's and RULES' rows are identical, day by day, to entry 36's (18 of 18 each). Nothing in deployment changed with SARSA. So the full test can run ladder4 alone, paired with entry 37's ladder3 and RULES rows on the same 30 days.
+
+    | | book delivered | lead time, mean / 90th pct (steps) | collisions | L3 per day | guard stops per day | books finished | network differs from the route in the clear |
+    | --- | --- | --- | --- | --- | --- | --- | --- |
+    | RULES | 99.3% | 72 / 154 | 0 | 3.5 | 23 | 14 of 18 | (rules: 0%) |
+    | ladder3 | 99.9% (1,439 orders) | 78 / 170 | 0 | 2.9 | 130 | 17 of 18 | 50% |
+    | ladder4 | 99.9% (1,438 orders) | 76 / 166 | 0 | 1.9 | 78 | 17 of 18 | 41% |
+
+    0 invariant violations, 0 fallback stops and 0 robots parked in all 54 runs.
+
+    **ladder4 against ladder3: no measure differs firmly.** This is not the decision; the full test is.
+
+    | Measure | ladder4 | ladder3 | Higher mean | p | ladder4 better on |
+    | --- | --- | --- | --- | --- | --- |
+    | Delivered | 99.86% | 99.93% | ladder3, by 1 order in 1,440 | 0.66 | 1 day, worse on 1 |
+    | Lead time (steps) | 76.2 | 77.9 | ladder4 | 0.42 | 10 of 18, worse on 8 |
+    | Guard stops per day | 78 | 130 | ladder4 (−40%) | 0.26 | 9, worse on 7 |
+    | L3 per day | 1.9 | 2.9 | ladder4 | 0.33 | 6, worse on 5 |
+    | Near misses with people | – | – | – | – | (no people in clean) |
+
+    - By the mean, ladder4 is ahead on 3 of the 4 measured; delivered goes to ladder3 by a single order.
+    - **Disagreement with the route in the clear is lower on every day:** 41% against 50%, 18 of 18 (p < 0.001). This is training's finding (entry 39) holding in the frozen test.
+
+    **By map:**
+    - **Large map:** ladder4 needs the guard half as often (18 stops a day against 39) and has half the stand-offs (L3 0.8 against 1.7). Lead time ties (105.4, 105.7; RULES 105.0).
+      - ladder3's clean weak spot, 40 robots, is gone: 28 stops a day against 109.
+    - **Small map:** fewer guard stops (137 against 221), fewer stand-offs (3.1 against 4.2), faster (47.1 against 50.2 steps; RULES 39.1).
+      - **With 60 robots it nearly matches RULES:** lead time 33.7 against 32.2 (ladder3 43.8).
+      - **A weak spot, 25 robots:** guard stops 264 against 227 and L3 7.0 against 2.7. One day carries most of it (seed 1: L3 12 and 2 orders undelivered); on another, guard stops were 212 against 44.
+
+    **Against RULES:**
+    - **RULES is still faster** (72 steps against 76, p 0.043) and **still needs the guard less** (23 stops against 78, p 0.010).
+    - **ladder4 has closed part of both gaps** relative to ladder3: lead time 6 steps → 4, guard stops 130 → 78.
+    - **ladder4 finishes more books** (17 of 18 against 14) and delivers more (99.9% against 99.3%, p 0.16). It has fewer stand-offs (1.9 against 3.5, p 0.53).
+
+    **Next: the full test, all three arms (decided by Rohit, 13 October)**, about 90 minutes. It costs 55 minutes more than ladder4 alone, and buys two things:
+    - a self-contained comparison: every arm runs through the same days in the same session;
+    - a second replay check, this time with failures and people. ladder3's and RULES' rows should match entry 37's day by day.
+
+
+41. **Frozen test for run 8, full condition: scored (13 October). By the agreed rule ladder4 wins 3 to 2, but the one firm difference goes against it: near misses with people.** Failures and people on. The same 30 seeded days as entries 27, 33 and 37, three arms, 90 runs, about 90 minutes. The `[deploy]` line confirmed the safety settings and route explore off.
+
+    **The days replayed exactly, with failures and people too.** ladder3's and RULES' rows are identical to entry 37's on all 30 days. With entry 40, that makes 48 of 48 days replayed exactly for each, across both conditions. The shortcut would have given the same rows, and running all three arms gave a self-contained file plus this check.
+
+    | | book delivered | lead time, mean / 90th pct (steps) | collisions, all 30 days | L3 per day | guard stops per day | near misses with people, mean (median) | books finished | network differs from the route in the clear |
+    | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+    | RULES | 95.1% | 83 / 189 | 0 | 4.3 | 28 | 12.7 (4) | 1 of 30 | (rules: 0%) |
+    | ladder3 | 95.0% | 87 / 197 | 0 | 1.8 | 86 | 8.1 (3) | 2 of 30 | 49% |
+    | ladder4 | 95.5% | 86 / 192 | 0 | 1.2 | 87 | 14.1 (5.5) | 0 of 30 | 39% |
+
+    0 collisions, 0 invariant violations, 0 fallback stops and 0 robots parked in all 90 shifts. About 9.4 failures per shift in every arm.
+
+    **The decision (the rule fixed before the run: the higher mean wins a measure, 3 of 5 to win):**
+
+    | Measure | ladder4 | ladder3 | Winner | p | ladder4 better on |
+    | --- | --- | --- | --- | --- | --- |
+    | Delivered | 95.5% | 95.0% | ladder4 | 0.52 | 13 of 30 days, worse on 12 |
+    | Lead time (steps) | 85.8 | 86.6 | ladder4 | 0.67 | 16, worse on 14 |
+    | Guard stops per day | 86.7 | 85.9 | ladder3, by 0.8 a day | 0.67 | 12, worse on 15 |
+    | L3 per day | 1.2 | 1.8 | ladder4 | 0.61 | 10, worse on 11 |
+    | Near misses with people | 14.1 | 8.1 | **ladder3, firmly** | **0.007** | 7, worse on 16 |
+
+    **By the rule, ladder4 wins 3 to 2.** The three it wins are not firm. One of the two it loses is: near misses with people, the only firm difference in the test.
+
+    **The near misses, looked at more closely:**
+    - **It is broad, not one bad day.** ladder4 was worse on 16 days and better on 7. Three days carry 116 of the 178 extra near-miss steps; without them it is 9.2 against 6.9.
+    - **Part of it is exposure.** On ladder4's days more people came onto the floor (3.6 against 3.2 a shift) and they moved more (237 steps against 217), because more debris was dropped (3.6 against 3.4). Once choices differ, those details drift. Per step a person moved, it is 0.059 near misses against ladder3's 0.037 and RULES' 0.054.
+    - **ladder4 is at RULES' level** (14.1 against 12.7, p 0.99; medians 5.5 against 4). ladder3 was the one unusually low.
+    - **Where:** mostly the small map, with 40 robots (18.2 against 4.8) and 60 (22.6 against 12.8).
+    - **Not explained yet.** In the clear the route drives either way, so the difference must come from moves the network makes near meetings while people are close. To look at with `trace_fleet` on the worst day (small map, 40 robots, seed 4: 78 against 15).
+
+    **Where ladder4 is better:**
+    - **The fewest stand-offs of any arm:** L3 1.2 a day. Against RULES' 4.3 that is firm (p 0.001, fewer on 21 of 30 days), and stronger than ladder3's 1.8 (p 0.010).
+    - **The most delivered of all three arms** (95.5%). On the large map it is 94.7%, against 93.7% and 93.5%.
+    - **Small map with 60 robots: faster than RULES,** 34.7 steps against 36.1 (ladder3 45.7). It needs the guard less than half as often as ladder3 there (46 stops against 103).
+    - **The gap to RULES on lead time narrowed** to 3.0 steps (ladder3: 3.8; p 0.15).
+    - **Disagreement with the route in the clear is lower on every day:** 39% against 49%, 30 of 30.
+
+    **Where it is not:**
+    - Guard stops: level with ladder3, and still 3 times RULES' (p 0.001).
+    - It finished no full book (ladder3 2, RULES 1). Under full stress a finished book is rare for every arm.
+    - The small map with 25 robots is still its weakest setting: guard stops 201 against 180.
+
+    **Reading.** Clean and full together:
+    - ladder4 is ahead of ladder3 by the mean on most measures in both conditions. None of those is firm.
+    - Its stand-offs are the lowest of any network so far.
+    - The one firm result is a regression on near misses with people, to RULES' level.
+
+    **To decide (Rohit):**
+    - **The rule promotes ladder4.** Changing a rule after seeing the result would undo what the rule is for.
+    - **Proposed for every future comparison, fixed now, before the next test:** a safety gate. A challenger is not promoted if it is firmly worse (p < 0.05) on collisions or on near misses with people, whatever its score on the 5 measures. Applied to this test, it would have kept ladder3.
+    - **The champion (what would be deployed) and the next run's starting point can differ.** Whichever is champion, the next run is better started from ladder4: its values are honest (delivery 0.80 against ladder3's inflated 1.07), so SARSA has nothing to unlearn.
+
+    **Rohit's checks (14 October): the typical day, and like-for-like days.** "We are at the end of tuning, so the increments will be small. Look at the mean and the mode, and at like-for-like days: the same debris, the same number of robots failing."
+
+    **The typical day.** For the counts the mode is 0 on many days (L3: 13 days each; near misses: 10 each), and lead time hardly repeats, so the median stands for "a typical day". ladder4 / ladder3 (RULES):
+
+    | Measure | Mean | Median | Mode | ladder4 better on |
+    | --- | --- | --- | --- | --- |
+    | Delivered (orders) | 76.4 / 76.0 (76.1) | 76 / 76 (76) | 76 / 75 | 13 days, worse on 12 |
+    | Lead time (steps) | 85.8 / 86.6 (82.9) | 78.2 / 78.3 (69.8) | – | 16, worse on 14 |
+    | Guard stops | 86.7 / 85.9 (28.1) | 32.5 / 36.0 (0) | 0 / 0 | 12, worse on 15 |
+    | L3 | 1.2 / 1.8 (4.3) | 1 / 1 (2) | 0 / 0 | 10, worse on 11 |
+    | Near misses with people | 14.1 / 8.1 (12.7) | 5.5 / 3.0 (4.0) | 0 / 0 | 7, worse on 16 |
+
+    - **On a typical day the two are nearly twins.** The medians tie on delivered, lead time and L3. ladder4 is a little lower on guard stops (32.5 against 36); ladder3 is lower on near misses (3 against 5.5).
+    - **ladder4's lead in the means comes from fewer bad days.** Fewer stand-off pile-ups (the L3 mean, 1.2 against 1.8, with equal medians) and a slightly shorter tail of lead times (90th percentile 192 against 197).
+
+    **Like-for-like days.** Robot failures, debris and people differ between arms on the same seeded day: the known order leak (item 3). Once choices differ, the shared random draws differ. So days were matched after the fact:
+    - **The same number of failures:** 8 of 30 days. Near misses 12.9 against 7.9 (p 0.094).
+    - **The same debris:** 14 of 30 days. Near misses 13.4 against 9.8, medians 1.5 against 3.0, ladder4 worse on 5 and better on 4 (p 0.41). On these days ladder4 also delivered more (76.2 against 75.2, better on 7, worse on 3).
+    - **The same failures and the same debris:** 4 days, too few to read.
+    - **Near misses per unit of exposure:**
+      - per step a person moved: 0.056 against 0.045 (p 0.38);
+      - per person entering: 3.9 against 2.5 (p 0.047);
+      - per piece of debris: 3.9 against 2.3 (p 0.019).
+      - RULES is at 0.067, 3.5 and 3.3, so ladder4 stays at RULES' level on every one.
+    - **A regression of the daily near-miss gap on the exposure differences:** exposure explains about 1 of the 5.9 extra near-miss steps; about 5 are left. With 30 days and three factors, this is a hint, not a measurement.
+
+    **What it adds up to.**
+    - The near-miss gap shrinks and loses firmness on two like-for-like views (same debris; per person-step), but keeps it on two others.
+    - It is weaker evidence than the headline p 0.007, and it does not vanish.
+    - ladder4 is at RULES' level on every view.
+    - The other measures: ladder4's edge is fewer bad days, not a better typical day.
+
+    **Making like-for-like days automatic.** Fix the order leak by seeding every draw from the episode, the step and the robot (or the debris spot): failures, debris and people's choices. Then every arm faces the same failures and the same debris on the same day, as far as its own robots allow. It is already planned with the per robot-hour failures (item 5). Done before the next frozen test, it would make "same day" mean the same events.
+
+    **Decided (Rohit, 14 October): ladder4 (run 8, `ladder_run4`) is the new v2 champion.**
+    - It wins the agreed rule in the full test (3 to 2), and leads by the mean in the clean test (3 of the 4 measured, entry 40).
+    - **In the clean test it also leads on the typical day:** median lead time 70.5 against 71.4, guard stops 32 against 47, L3 0.5 against 1.0; delivered ties at 80. RULES: 64.1, 0 and 1.5.
+    - **Its values are honest,** so it is the starting point for the next training run.
+    - **Carried with the decision:**
+      1. The safety gate for every comparison from now on: no promotion if firmly worse on collisions or on near misses with people. Fixed now, before the next test.
+      2. Trace the worst near-miss day (small map, 40 robots, seed 4) with `trace_fleet`.
+      3. Fix the order leak (seed failure, debris and people draws from the episode, step and robot) before the next frozen test, so that every arm faces the same events on the same day.
+
+
+42. **Design for run 9: the Learner as the router (14 October). For approval; no code yet.** Built on entries 34 (the destination note), 35 (the KL design) and 38 (SARSA, and Rohit's "Learner as the router").
+
+    **What it is for.** The Learner is a learned copy of what the whole system does (π_sys): the route in the clear, the rules and the ladder at stand-offs, the guard's stops at close calls. It has two jobs:
+    1. **Now, at meetings:** propose moves that will not need correcting. ladder4 still needs the guard about 3 times as often as RULES (87 stops a day against 28); the guard stops are the target.
+    2. **Later, in the clear:** learn the route well enough that the hard-coded route can be switched off, and the network drives everywhere on its own. The route-off frozen test (entry 36) is the graduation exam.
+
+    **What already exists (step 3a, entry 17; run 4).**
+    - A small head (Linear, ReLU, Linear: 7 move scores) reads the shared trunk with `h.detach()`, so it never trains the trunk (principle 7).
+    - It learns by cross-entropy, over valid moves, on fleets the teacher mask marks. Today that means RULES' orders and, optionally, ladder holds (`teacher_margin.sources`).
+    - At choice time it nudges only fleets in a conflict (the warning or deadlock set): score = Q + β × its probability ("prob") or log-probability.
+    - β is fixed, or "gap": the running median of the Q heads' top-two gap at meetings × a scale.
+    - **Run 4's lesson:** trained on RULES alone, with a fixed β and inflating values, the network came to lean on the nudge, and lost to run 2 five measures to nothing (entry 21).
+
+    **What changes.**
+    1. **Teacher: the whole system, never the network's own moves.** The Learner learns from every fleet whose move the system decided:
+       - **route:** routed fleets in the clear, labelled with the route's move;
+       - **rules:** RULES' orders at stand-offs, including retrace and corridor back-outs;
+       - **holds:** ladder holds;
+       - **guard:** fleets the guard stopped, labelled "wait".
+       - **Not taught:** a network move that ran unchanged, so the Learner never learns to imitate itself. Also not taught: an explorer in the clear (its executed move is noise).
+       - These are its own sources (`training.learner.sources`), separate from the retired margin teacher's.
+    2. **It learns before it speaks: a shadow warm-up.** For the first 5 episodes β = 0. The Learner trains and the gaps are collected, but it has no voice. This keeps entry 21's rule: the Learner is never switched on around a trained network.
+    3. **β falls on a schedule, tied to the network's own confidence.** β = scale × the running median top-two gap at meetings, with the "prob" nudge. Since a probability lies between 0 and 1, scale reads directly:
+       - "a fully confident Learner can overturn a Q preference up to scale × a typical near-tie gap";
+       - scale 2.0 lets it overturn most preferences at meetings; 0.5 lets it decide only close calls.
+       - **Schedule:** 2.0 → 0.5, linearly over episodes 6–50. The final 0.5 is what deployment uses.
+       - The network graduates from imitation to its own judgement as its values (honest under SARSA) take over.
+    4. **The Q heads keep SARSA unchanged.** The move made already carries the Learner's influence (entry 38). So the values become the values of the combined policy (Q, the Learner, the route, the rules, the guard): the KL design's fixed point.
+    5. **The nudge stays at meetings in run 9, and the route stays on.** In the clear the route overrides any nudge, so the Learner only learns there. Switching the route off is a later phase, once the Learner agrees with the route on about 98% of clear moves.
+
+    **One level deeper: what happens at one meeting.** Robot A is closing on robot B; both are in the warning set, so the network drives A.
+    - **The Q heads** score A's moves. "Advance" leads "wait" by a small gap, say 0.3 (a near-tie).
+    - **The Learner,** having seen the guard stop hundreds of robots in states like this, gives "wait" 0.8 and "advance" 0.1.
+    - **With β = 1.0 × the median gap** (say 0.4), the nudge adds 0.32 to "wait" and 0.04 to "advance". The 0.3 gap is closed and A waits.
+    - **Without the Learner,** A advances, the guard stops it, and the step is the same wait, but with a guard stop counted.
+    - **SARSA records "wait" as the move made** either way, so the values learn that "here the system waits" (honest).
+    - **As β falls,** A waits only when Q itself is nearly indifferent. If the values have learned that advancing is genuinely better (B is about to move away), Q's gap grows past the nudge and A advances.
+    - **In the clear,** robot C is routed; the Learner learns "route's move here" and has no voice. Its agreement with the route is the readiness gauge for switching the route off.
+
+    **A trade-off to expect, said before the run.** At meetings the Learner sees only the system's interventions: stops, holds, back-offs. So it leans towards waiting.
+    - **Expected:** fewer guard stops.
+    - **Possible:** more stand-offs (L3) and slower lead times. RULES' polite symmetry is what gives RULES the most L3 (entries 32–33).
+    - The falling β exists to hand stand-off breaking back to the network's own values.
+    - **A later variant:** advantage-weighted imitation (AWR). Also teach the network's own accepted moves, weighted by how much better they turned out than average. The Learner then copies only what worked.
+
+    **Plumbing.**
+    - **`core_warehouse.py`:** the teacher mask gains the "route" and "guard" sources. Plus live agreement per source: at each step, the Learner's top move from this step's forward pass against the move the system made, tallied for route, rules, holds and guard.
+    - **`agent_warehouse.py`:**
+      - The Learner gets its own optimizer, and the main one excludes it. A warm start from ladder4, which has no Learner, then loads the main optimizer's state exactly. `load()` accepts missing Learner weights only, logs that, and starts the Learner fresh.
+      - Its initial weights are drawn from a separate random stream, so building it changes no other random draw.
+      - The β scale is set per episode by the runner.
+    - **`main_runner_warehouse.py`:** the schedule (warm-up, start, end); CSV columns `learner_agree_{route,rules,holds,guard}`, `learner_changed` share, `beta_eff`.
+    - **`benchmark_flowrra.build_agent` (used by `deploy_eval`):** build each arm with or without the Learner according to its own checkpoint, not the config. Today a mixed comparison (ladder5 against ladder4) would fail to load one or the other. A Learner arm uses the schedule's final scale.
+    - **`config_warehouse.py`:** `training.learner` enabled, nudge "prob", beta_mode "gap", `sources` [route, rules, holds, guard], `warmup_episodes` 5, `scale_start` 2.0, `scale_end` 0.5; a RUN 9 header.
+
+    **Tests before any training (`test_learner_router.py`).**
+    1. The teacher mask marks routed, rules, holds and guard-stopped fleets. It does not mark network-unchanged fleets or explorers.
+    2. A Learner-only step changes only the Learner's weights: the trunk and the Q heads are bit-identical (principle 7).
+    3. A warm start from a checkpoint without the Learner loads; the main optimizer's state is the checkpoint's.
+    4. **Shadow is silent:** with β = 0, choices and Q updates over real FLOWRRA steps are identical to the Learner switched off.
+    5. A uniform Learner changes no choice; the nudge reaches only conflicted, network-driven fleets.
+    6. The β schedule's values per episode.
+    7. `deploy_eval` loads a Learner arm and a non-Learner arm side by side.
+    8. Then `test_learner_head.py` (updated where needed), the SARSA tests and the suite.
+
+    **Decisions for Rohit.**
+    - **A. Start from ladder_run1 (as run 8) or from ladder4?**
+      - **From ladder_run1, recommended for the measurement.** With `--seed 0`, run 9 is run 8 with the Learner added: the same start and the same 50 episodes. The frozen test (ladder5 against ladder4) is then a clean A/B of the Learner, both 50 episodes from the same start.
+      - **From ladder4: the lineage.** 100 episodes in all, and entry 39's prediction (efficiency levelling off at about 2.5–2.8) becomes testable. But a win could be the Learner or simply 50 more episodes.
+    - **B. Teacher sources:** route, rules, holds and guard; not the network's own moves (recommended).
+    - **C. Nudge and schedule:** "prob" with gap-tied β; scale 2.0 → 0.5 over episodes 6–50 after a 5-episode shadow; deployment at 0.5 (recommended). "logprob" is the exact KL form, but unbounded: a move the Learner rates at 0.1% is pushed down by 7β, a veto.
+    - **D. Scope:** nudge at meetings only, route on; route-off is a later phase.
+
+    **Then:** build and tests (on Rohit's machine), a dry run (10 episodes), predictions, the run (50 episodes, about 4 hours), the frozen tests under the safety gate (entry 41).
+
+    **Revised the same night (Rohit, 14 October): the Learner as the router in the clear, not at meetings.** Rohit's points:
+    - The problem was always in the clear more than in the waiting: the detour habit (entry 25), and the stale values of moves the route never makes (entries 31, 34–35).
+    - At meetings the network has reached RULES. ladder4 ties RULES on delivered (95.5% against 95.1%) and near misses, and has firmly fewer stand-offs (L3 1.2 against 4.3).
+    - L3 below about 5 a day is the FLOWRRA idea working: a spatial or temporal collapse of a jam before anyone collides. So why teach RULES at meetings?
+
+    **Agreed. The original version would have spent the Learner on the network's strongest skill.**
+    - Copying the system's interventions at meetings leans towards waiting (the trade-off above), and risks the stand-off breaking that beats RULES.
+    - The remaining meeting gap, guard stops (87 against 28), is the guard doing its job safely. It costs a little time, not safety.
+    - So the meeting layer is, for now, complete: safety by construction, the ladder, and the network's judgement. Open items are elsewhere: the clear, near misses with people (entry 41), the order leak, and the realistic conditions (item 5).
+
+    **Is the route "better" in the clear?** In an empty aisle, the route's move (the downhill step on the goal's distance map) is the shortest path: it cannot be beaten locally.
+    - **The network can beat it only by anticipation:** among equally short moves, pick the one leading into less traffic, or avoid an aisle that will jam before the robot enters the warning zone.
+    - **The network already has the route's information.** Its inputs include the goal gradient (6 dimensions, `node.get_goal_gradient()`), whose downhill direction is exactly the route's move. So its 40% disagreement in the clear is a value problem, not missing information. The route drives there, so the network's moves there never run, and their values are never corrected.
+    - **The Learner as router fixes both.** It hands the clear to the network gradually, and the network's own moves there finally get real experience.
+
+    **The revised design (run 9).**
+    - **The Learner learns the route's move for every fleet in the clear,** whether or not the route executed it. The route is a function and can always be computed, so this is distillation of the route, never the network's own moves. Nothing is taught at meetings.
+    - **Handover in one run:**
+      1. **Warm-up, route on:** the Learner learns in shadow (β = 0) for at least 5 episodes, and until it agrees with the route on at least 98% of clear moves. Since the gradient is in its inputs, this should come quickly.
+      2. **Then route off for the rest of training.** In the clear: score = Q + β × π_Learner. At meetings: Q alone, as today, with the rules, the ladder and the guard after it.
+    - **β:** gap-tied, measured in the clear; scale 3.0 → 1.0 over the episodes after the switch. Deployment uses 1.0. With scale 3.0 the Learner wins almost every clear choice, so the switch should barely change behaviour.
+    - **The Q heads keep SARSA.** Now the clear is experienced: the network's own moves there run, guided by the Learner, and are valued as made. As β falls, a move Q prefers over the route gets tried more often and valued honestly. If it is worse, Q learns that; if it is better (traffic-aware), it stays.
+    - **`route_explore` becomes moot after the switch:** exploration happens in the clear at ε, as everywhere.
+    - **The guard stays on everywhere,** so the hand-over is safe by construction.
+
+    **The graduation exam.** A frozen test of ladder5 with the route off (Learner at scale 1.0) against ladder4 with the route on, and RULES. 3 of 5, plus the safety gate. Matching ladder4 is already the research result: the network drives the whole floor itself.
+
+    **Risks, said before:**
+    - If the Q heads' clear values do not correct, the falling β brings the detours back: lead time rises (entry 26: the champion without the route, 120 steps against 75). Watched every episode; the end scale is the knob.
+    - Near misses with people: in the clear the network now drives near people too. The safety gate covers it.
+
+    **Plumbing changes from the first version:**
+    - **Teacher:** the route's move for every fleet in the clear (the route's eligibility test), recorded as the Learner's own label. With the route off, the label is computed but not executed.
+    - **Nudge region:** the clear (eligible fleets), not the conflict set.
+    - **The route switch:** a training-time switch flipped by the runner when the warm-up conditions hold. It is logged, with the episode of the switch in the CSV.
+    - **`deploy_eval`:** route on or off per arm (for example `ladder5=path:noroute`), and each arm built with or without the Learner according to its own checkpoint.
+    - **Tests:**
+      - the label is the route's move in the clear only, including with the route off;
+      - the nudge reaches only fleets in the clear;
+      - a uniform Learner changes nothing; the shadow is silent;
+      - the switch fires at the right episode;
+      - deployment runs a route-off Learner arm beside a route-on arm;
+      - plus the earlier items (Learner-only step, warm-start loading, the separate optimizer).
+
+    **Decisions (revised), for Rohit:**
+    - **A. Start from ladder4** (recommended now). Run 9 tests a new way of operating, route off. Starting from the champion keeps its meeting judgement, and entry 39's efficiency prediction (levelling at about 2.5–2.8) becomes testable.
+    - **B. Teacher:** the route's move in the clear only.
+    - **C. Nudge:** in the clear only, "prob", gap-tied; scale 3.0 → 1.0 after the switch; deployment at 1.0.
+    - **D. Hand-over:** route on for at least 5 episodes and until agreement ≥ 98%, then off.
+    - **E. Graduation:** ladder5 (route off) against ladder4 (route on), 3 of 5, safety gate.
+    - The meeting Learner (sources rules, holds, guard) stays in the code, off.
+
+    **Agreed (Rohit, 14 October): all decisions A–E, with one change to C: the teacher disappears in the end.**
+    - **β falls to 0, not to 1.0.** The scale goes from 3.0 to 0 after the switch. The last stretch of training runs at β = 0: pure network, route off, no nudge. That is exactly how it will be deployed and tested, so training ends in the deployed condition.
+    - **A longer run:** about 80 episodes, about 6.5 hours at run 8's 4.9 minutes an episode.
+      - Episodes 1 to at least 5: route on, Learner in shadow, until it agrees with the route on 98% of clear moves.
+      - Then the switch, and the scale from 3.0 to 0, linearly over about 60 episodes.
+      - Then about 15 episodes at 0.
+      - The exact lengths are set after the dry run.
+    - **The dry run** compresses the same shape into about 12 episodes: a warm-up of at least 3, then 3.0 → 0. It checks how fast the Learner reaches 98%, how smooth the switch is, and what happens to lead time as β reaches 0.
+    - **Whether to start at 3.0 or 2.0** is read from the dry run: how many of the network's disagreements in the clear the Learner overturns at each scale (`learner_changed`). If 2.0 already overturns nearly all, start there.
+    - **The graduation test deploys ladder5 at β = 0, route off:** the network alone. The Learner head is then a training scaffold only.
+    - **A longer run also tests entry 39's prediction better:** the efficiency value levelling at about 2.5–2.8, by about 130 episodes in total.
+
+    **Rohit: does the route act after RULES have untangled the warning zone through path awareness?** Not after: beside. Within one step, in the code's order:
+    1. **Path awareness and proximity draw the line** between the clear and contention. The warning and deadlock sets hold robots whose routes meet within the conflict radius, a follower too close, or anyone within 1 hop.
+    2. **The network proposes** a move for every robot (`choose_actions`).
+    3. **The route replaces the proposal for robots in the clear** (`_apply_route_default`).
+    4. **The rules and the ladder act on robots in contention** (RULES' orders, holds, retrace, corridor back-outs), in the per-robot action loop.
+    5. **The guard checks every intended move together,** and slows or stops (`_run_intent_guard`).
+    6. **The robots move.**
+    - Steps 3 and 4 touch different robots, so their order does not matter. What matters is that the guard comes last for everyone.
+    - After the switch in run 9, step 3 becomes the Learner's nudge inside step 2 (in the clear only); steps 1, 4, 5 and 6 are unchanged.
+
+    **Run 9, step by step** (ticked off as each is done):
+    1. [x] **Build (14 October).**
+       - **`agent_warehouse.py`:**
+         - **Isolated start:** the Learner head is built inside `torch.random.fork_rng`, seeded `_LEARNER_INIT_SEED`. Building it consumes no global draw, so every other layer and every later random draw match a Learner-free agent.
+         - **Its own Adam:** the main optimizer covers the other parameters in the same order as a Learner-free network, so ladder4's optimizer state loads exactly. Gradients were already clipped separately (test_learner_head).
+         - **`load()`:** a checkpoint without Learner weights loads everything else exactly, and only the Learner's keys may be missing; any other mismatch still fails. A one-optimizer Learner checkpoint (run 4) loads with fresh moments and a message.
+         - **`checkpoint_has_learner()`;** and `save()` stores the Learner's optimizer.
+         - **The nudge** runs in "gap" mode even at β 0, so gaps and counts keep coming in during shadow. Nothing is added when β is 0.
+         - **`choose_actions` publishes** the heads' own top move and the Learner's probabilities for the core's measures, reset every call.
+         - **The buffer** gains an optional 16th field, the router's label; `sample()` returns an 18th element. `learn()` teaches from the labels when the batch has them, and otherwise from the teacher mask as before. The meetings path is numerically unchanged.
+       - **`core_warehouse.py`:**
+         - With `training.learner` enabled and mode "router", `_router_clear_moves` runs before the choice. It is the route's own eligibility test, and returns the clear set, the route's move and the route's ties.
+         - The nudge region passed to the choice is the clear set; the label (below) goes on every push.
+         - `_router_measure` counts, per clear fleet-step and up to ties: the Learner's agreement with the route, the heads' own disagreement, the chosen move's disagreement, and the share with ties.
+         - Stats: `router_on`, `router_route_on`, `router_clear_fleet_steps`, `router_learner_agree`, `router_q_differs`, `router_choice_differs`, `router_tie_share`.
+       - **`main_runner_warehouse.py`:**
+         - `router_plan` and `router_scale`. Before each episode the route is set on or off and the scale set. After it comes the switch decision, which is logged.
+         - A "router" line per episode, and CSV columns `router_*`, `router_scale`, `router_switch_episode`.
+       - **`benchmark_flowrra.build_agent` (deploy_eval's builder)** builds each arm with or without the Learner according to its checkpoint. A router Learner is deployed at `scale_end` (0).
+       - **`deploy_eval.py`:** an arm written `label=path:noroute` runs with the route off, for that arm only; the setting is restored after the env is built. Rows get `route_env_off` and the `router_*` measures.
+       - **`config_warehouse.py`:** `training.learner` enabled, mode "router", the router block (switch_agreement 0.98, warmup_min 3, warmup_frac 0.0625, tail_frac 0.1875, scale 3.0 → 0.0), beta 0.0, beta_mode "gap", nudge "prob". A RUN 9 header with the dry run, the run and the graduation arms.
+       - **One improvement found while building: ties.** The route's move is the first of the moves with the best goal gradient. Two directions that each bring the goal a hop closer are equally short, and on this map that is common.
+         - So the label is a bit mask of all of the route's equally-short moves (bit a = move a). The Learner learns them with a soft target, uniform over the tied moves, and agreement counts any of them.
+         - So the Learner stays neutral among equally short moves, and the heads, which can see traffic, choose between them: the anticipation the router exists for.
+         - A strict single-move label would also have taught an arbitrary tie-break by index. That could have kept agreement below 98% and the switch from ever firing.
+       - **Tests:** new `test_learner_router.py`.
+         - `test_honest_target.py`, `test_route_explore.py` and `test_sarsa.py` pin the Learner off in their env parts, so each keeps testing its own fix.
+         - The sample-length checks in `test_honest_target.py`, `test_graph_pooling.py` and `test_teacher_margin.py` now expect 18, with the 18th None when no label is stored.
+       - **Checked here without torch, on stand-ins:**
+         - **The schedule:** 80 episodes switching at 6 gives 0, 0, 3.0, 2.95, 2.29, 1.53, 0.76, 0.05, then 0 from 65. 12 switching at 4 gives 3.0 at 4, falling by 0.5 a step to 0 at 10.
+         - **The padding of a 16-field transition:** the label is padded with −1; 14 and 15 fields are unchanged.
+         - **The clear set** equals `_apply_route_default`'s eligibility and moves (6 robots: busy, immobile, no gradient, masked move, a tie).
+         - **The tie bits** come out as 0b10100 for moves 2 and 4.
+         - **The measures** are counted up to ties: Learner 2 of 3, heads 1 of 3, chosen 1 of 3.
+         - **No undefined names** in any edited file (pyflakes).
+    2. [x] **Rohit's machine (done 14 October: tests ALL PASS, switch check, smoke test):**
+       - **The tests:** `test_learner_router.py`, `test_learner_head.py`, `test_sarsa.py`, `test_honest_target.py`, `test_route_explore.py`, `test_guard_integration.py` and the suite.
+         - **First pass, 14 October:** everything passed except two checks in `test_learner_router.py`'s shadow test.
+         - Every agent-level check passed, including the trunk and Q heads bit-identical to a Learner-free agent's after 5 updates. So did the route-on and route-off checks in real steps, and the deploy builder.
+         - The switch check read `True router gap {...}` as expected.
+         - **What failed, and why it was the test:** the shadow test compared two 90-step runs that learned every step. Its own control showed the GPU does not repeat a learning run bit for bit: the Learner-free run twice gave identical moves but weights that differ after learning (atomic adds in the backward pass). Over 90 learning steps, one flipped near-tie is enough to send two identical policies down different days. The run with the Learner in shadow diverged at about step 25 (move agreement 0.70), which measures that chaos, not the Learner.
+         - **Reworked into two halves:**
+           - (a) Choices: the same 60 steps without learning (forward passes, which do repeat) must give identical moves.
+           - (b) Updates: then 20 updates on the now-identical memories, with the same draws. The trunk and Q heads must stay as close to the Learner-free agent as a copy of that agent stays to itself.
+       - **Second pass, 14 October:** `test_learner_router.py` ALL PASS with the reworked shadow test.
+       - **The switch check:** done, `True router gap {...}`.
+       - **A deploy smoke test:** ladder4 with `:noroute`, one instance, with `--check`. It confirms the per-arm route-off plumbing, and gives the first look at ladder4 driving the clear itself.
+       - **Smoke test, done 14 October** (`check9.log`, `deploy_check9.csv`: small map, 25 robots, seed 0, a clean day).
+         - **The plumbing works.** The log says "route OFF for this arm"; the `--check` repeat is IDENTICAL; no errors. The row reads `route_env_off` True, and the router measures are filled in. `router_learner_agree` reads 0 because ladder4 has no Learner head, as expected.
+         - **The first look at ladder4 driving the clear itself,** against the same day in clean8, where the route drove the clear:
+
+           | Same day (small map, 25 robots, seed 0) | ladder4, route off | ladder4, route on | ladder3, route on | RULES |
+           | --- | --- | --- | --- | --- |
+           | Delivered | 80 of 80 | 80 | 80 | 80 |
+           | Book finished at step | 763 of 800 | 626 | 615 | 478 |
+           | Lead time, mean / p90 (steps) | 183 / 360 | 65 / 158 | 62 / 183 | 47 / 99 |
+           | Guard stops | 697 | 182 | 208 | 108 |
+           | Wait-for cycles seen | 218 | 93 | 88 | 12 |
+           | Longest cycle (steps) | 118 | 64 | 89 | 70 |
+           | Retreats ordered | 110 | 40 | 40 | 9 |
+           | L3 fires | 9 | 6 | 4 | 2 |
+           | Collisions / guard violations | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+           | Runtime | 147 s | 39 s | 37 s | 18 s |
+
+         - **Clear moves:** 12,238 robot-steps in the clear. The heads' own move differs from the route's on 60% of them, and the chosen move on 60% (the deploy exploration of 0.015 barely shows). The route had tied moves on 6.5%.
+         - **Reading.** This is the detour habit in full view: the "before" picture the router run has to change. Lead time nearly triples, and the guard, the ladder and retreats work two to three times as hard, because robots that wander in the clear arrive at meetings that should never have happened. Safety by construction held with the network driving every move: no collision and no guard violation. The day still finished, 37 steps before the end of the shift.
+         - **The bar for graduation, on this day:** ladder5 with the route off should land near ladder4 with the route on (lead about 65, guard stops about 180), and the heads' disagreement in the clear should fall well below 60%. Some of it should stay, by design: where the heads see traffic the route cannot, a different move can be the better one. One day is a glimpse, not a result; the frozen tests decide.
+         - **The 60% is not the same measure as clean8's 45%.** Clean8 counts disagreement in states the route had kept tidy. Here the network makes its own states, which are more crowded and further from what the route would have produced.
+    3. [ ] **Dry run** (`ladder_run5_dry`, 12 episodes, about 1 hour). Read:
+       - how fast the Learner reaches 98%, and when the switch fires;
+       - lead time, guard stops and L3 before and after the switch, and as the scale reaches 0;
+       - the heads' and the chosen moves' disagreement in the clear; the tie share;
+       - the values (SARSA) and safety.
+
+       **Dry run 1, stopped after 7 episodes on 14 October: the switch could not fire.** Warm from ladder4; episodes are numbered from 1. The CSV holds episodes 1–5 (the runner saves every 5); 6 and 7 are read from the log. No errors, 0 collisions, 74–78 of 80 delivered every episode, losses normal.
+
+       | Ep | Map | Robots | Learner, live (clear moves) | Learner, training batches | Heads differ |
+       | --- | --- | --- | --- | --- | --- |
+       | 1 | small | 40 | 63.0% of 4,299 | 85.4% (loss 0.40) | 51% |
+       | 2 | large | 40 | 96.3% of 12,628 | 94.8% (0.20) | 44% |
+       | 3 | small | 60 | 83.7% of 3,524 | 94.2% (0.20) | 51% |
+       | 4 | small | 25 | 81.7% of 5,304 | 92.8% (0.23) | 53% |
+       | 5 | small | 40 | 84.0% of 4,546 | 91.7% (0.26) | 48% |
+       | 6 | large | 40 | 95.6% of 12,723 | – | 47% |
+       | 7 | large | 40 | 97.5% of 13,620 | – | 36% |
+
+       - **The small map levelled off at 82–84%** over three episodes, on days of different difficulty (episodes 4 and 5 had failure waves of 8 and 9 robots).
+       - **The large map was still climbing slowly** (96.3%, 95.6%, 97.5%) and might have crossed 98% at episode 8. Stopping was still right: the small map was the binding one, and with fade_end at 10 a switch at 8 would have left a fade of two episodes and one small-map episode with the route off.
+       - **It is not the memory mix.** The memory holds 20,000 steps, about 25 episodes, so every episode was still in it. Three small-map episodes in a row (3–5) did not raise live small-map agreement, and agreement on the training batches *fell* (94.2% → 91.7%, loss 0.20 → 0.26) as small-map examples filled the memory. Allowing for the large map's share, the Learner fits only about 87% of the small-map examples it trains on, and gets about 83% on fresh small-map days. On the large map, live agreement matches or beats training. Balancing the maps in its batches would not help.
+       - **The most likely cause (a hypothesis, not yet tested): what the trunk passes on.** The Learner reads only the trunk's summary of each robot (`h.detach()`), which is built for the value heads. The route's move comes from six goal-gradient numbers that are in every robot's input, but after the trunk's message passing each robot's summary mixes in its neighbours. The small map has 1,435 free cells across 5 floors against 27,000 across 10 for the large map, so with 25–60 robots, even a robot in the clear has more neighbours in the graph. The trunk was also shaped by heads that disagree with the route on about half of clear moves, so it has no reason to keep the route's ranking sharp.
+       - **The heads' disagreement on the large map fell to 36% by episode 7** while still in shadow, so run-8-style training with the route on keeps improving it there. The small map stayed at 48–53%.
+       - **98% was set before the Learner's natural level was known.** The data says about 97% on the large map and about 83% on the small one.
+       - **Options weighed.**
+         - Giving the Learner the six gradient numbers directly would take it near 100%, but it would then be a copy of the route (a pure planner), and the nudge might as well be the route itself. Not taken.
+         - A per-map scoreboard for the switch (each map's latest episode must pass) and a measure splitting the nudge's changes into "onto the route's move" and "elsewhere" were proposed. With an 80% bar and this map order, the scoreboard switches at the same episode as today's rule in both the dry run (after episode 3) and the 80-episode run (after episode 5). It matters when more maps are added.
+       - **Decided (Rohit, 14 October): keep it simple.** `switch_agreement` 0.98 → **0.80**, with today's rule unchanged; no scoreboard and no new measure. In `config_warehouse.py` the RUN 9 header now says 80% and names the rerun `ladder_run5_dry2`.
+         - **The Learner keeps learning after the switch.** The route's move is computed for every robot in the clear on every step, whether or not the route drives (`if self.router:` in the core, with no condition on the route), and goes into memory as the label. Route off only means the route stops driving. After the switch the Learner learns in the states the network makes, which are the ones it will face. The smoke test confirmed it: with the route off, 12,238 clear robot-steps were labelled and measured.
+         - **The nudge's effect is read from the existing router line.** After the switch, the gap between "heads alone differ" and "chosen moves differ" is the nudge's net pull towards the route. If chosen moves on the small map fall from about 50% towards the Learner's error rate (about 17%), it is working. If they stay near the heads', or the small map gets worse, it is misleading, and the fade starts at 2.0.
+    3b. [x] **Dry run 2** (`ladder_run5_dry2`, 12 episodes, 80% bar; the switch should fire after episode 3, the fade runs from episode 4 (3.0) to episode 10 (0), and the small map has three episodes with the route off: 4, 5 and 9). Read as in step 3.
+
+       **Done 14 October, 71.2 minutes, no errors.** The switch fired after episode 3 (small map, 82.9%), and the route was off from episode 4. The scale went 3.0, 2.5, 2.0, 1.5, 1.0, 0.5, then 0 for episodes 10–12. The small map had four episodes with the route off, not three: 4, 5, 9 and 12 (I had missed episode 12). "Run 8" below is the same episode of run 8: the same orders, map and fleet count, with the route on and no Learner. Run 8 started from ladder3 with its own exploration schedule, and failure draws differ, so it is the same day with the route on, not an exact pair.
+
+       | Ep | Map, robots | Scale | Learner, live | Heads differ → chosen differ | Delivered (run 8) | Lead time (run 8) | Guard stops (run 8) |
+       | --- | --- | --- | --- | --- | --- | --- | --- |
+       | 1 | small 40 | shadow | 65.3% | 47% → 48% | 74 (75) | 54 (55) | 171 (163) |
+       | 2 | large 40 | shadow | 95.7% | 42% → 43% | 75 (79) | 122 (125) | 0 (137) |
+       | 3 | small 60 | shadow | 82.9% | 52% → 53% | 78 (78) | 33 (34) | 8 (19) |
+       | 4 | small 25 | 3.0 | 71.1% | 63% → 48% | 74 (73) | 165 (71) | 158 (308) |
+       | 5 | small 40 | 2.5 | 66.9% | 59% → 48% | 69 (75) | 136 (46) | 782 (2) |
+       | 6 | large 40 | 2.0 | 88.9% | 55% → 37% | 67 (75) | 172 (139) | 107 (1) |
+       | 7 | large 40 | 1.5 | 92.3% | 49% → 36% | 73 (75) | 193 (145) | 58 (316) |
+       | 8 | large 40 | 1.0 | 91.4% | 50% → 41% | 75 (69) | 176 (116) | 244 (3) |
+       | 9 | small 60 | 0.5 | 74.0% | 58% → 54% | 77 (80) | 140 (39) | 515 (93) |
+       | 10 | large 60 | 0 | 93.9% | 42% → 43% | 76 (73) | 126 (70) | 45 (42) |
+       | 11 | large 25 | 0 | 94.3% | 41% → 41% | 46 (73) | 220 (161) | 12 (0) |
+       | 12 | small 60 | 0 | 74.3% | 53% → 53% | 78 (79) | 153 (47) | 669 (33) |
+
+       - **The heads are learning from their own moves.** With the route off, their disagreement with the route in the clear fell on both maps. Large map: 55% → 49% → 50% at 40 robots (episodes 6–8), then 42% and 41% (episodes 10 and 11). Small map: 63% → 59% → 58% → 53%; episodes 9 and 12 are both 60 robots, 58% → 53%. These are measured in the network's own states, with the fleet count and the scale changing alongside, so the trend is the evidence, not any single number. The frozen ladder4 differed on 60% in the smoke test (small map, 25 robots).
+       - **The Learner keeps learning in the network's states,** as expected. Small map: 71% → 67% → 74% → 74%. Large: 89% → 92% → 91% → 94% → 94%. On its training batches it stays at 85–90%.
+       - **The nudge was weak:** it closed 10–18 points of disagreement at scales 1.0–3.0 (small map 63% → 48%; large 55% → 37%), and 4 points at 0.5.
+       - **The network alone is still far from the route.** Over the route-off episodes 4–12: mean lead time 165 against run 8's 93 on the same days, guard stops 288 against 89, delivered 70.6 against 74.7, reward 7,674 against 17,436. On the small map deliveries held (77–78 of 80 at 60 robots), but lead time was about 3× and guard stops 5–20× those of the same day with the route.
+       - **Episode 11** (large map, 25 robots): 46 of 80 delivered against 73 in run 8. Failures took 10 of 25 robots (9 rescued), but run 8 had the same failure load (11 errors, 8 in waves) on that day. The difference is speed: at the end of the shift, 13 of the 25 robots were still driving to their goals (run 8: 7), and lead time was 220 against 161. On the large map with few robots, every detour is long, and with 10 down there was no slack.
+       - **Safety held:** 0 collisions and 0 guard violations in all 12 episodes. Near misses with people over episodes 4–12 averaged 20.6 against run 8's 18.7 on the same days; episode 4 had 92 against 31.
+       - **Values stable:** safety −0.10 to −0.12 (as at the warm start), delivery 0.87–1.10, efficiency 1.73–1.91. Losses did not climb, apart from efficiency rising from 0.010 to about 0.014, as expected now that the network's own moves are valued. SARSA labelled 100% of next moves.
+       - **Episodes took 5.5–8.6 minutes with the route off** (about 4.5 with it on). The 80-episode run comes to about 8–9 hours, not 6.5.
+       - **The bar (Rohit's question: 0.9 or 0.93?).** With the current rule and these two maps, any bar between about 0.85 and 0.95 switches on the first large-map episode after the warm-up (the large map sits at about 96% in shadow, the small at about 83%). In the 80-episode run, 0.8 switches after episode 5 (small map), and 0.9 or 0.93 after episode 6 (large), one episode later. The bar is not a lever on the Learner's readiness: its small-map level does not rise in shadow, and it rises after the switch, in the network's own states.
+       - **The efficiency value after the switch (Rohit's question).** In run 8 the value climbed because it was filling towards a higher level that the route's efficient driving set (entry 39). With the route off, the network drives less efficiently, so the rewards now set a lower level. The same rough check, rebuilt from the CSV (the efficiency reward per robot-step on the floor, times the discounted steps left in a robot's life, γ 0.99):
+
+         | | Reward rate per robot-step | Life (steps) | Rough level | Learned value |
+         | --- | --- | --- | --- | --- |
+         | Small map, route on (run 8, same days; dry run 2 episodes 1 and 3) | 0.026–0.036 | 42–78 | 0.5–1.0 | – |
+         | Small map, route off (episodes 4, 5, 9, 12) | 0.002–0.010 | 157–201 | 0.1–0.5 | 1.73–1.91 |
+         | Large map, route on (run 8, same days; dry run 2 episode 2) | 0.039–0.058 | 96–168 | 1.5–2.8 | – |
+         | Large map, route off (episodes 6–8, 10, 11) | 0.011–0.022 | 191–245 | 0.65–1.4 | 1.75–1.88 |
+
+         - The rate fell to about a third (small map) or under half (large), and lives grew 1.5–4× longer. The learned value only dipped (about 2.0 → 1.75–1.9), so it now sits **above** the level the rewards set: the opposite of run 8, where it sat below and climbed.
+         - The memory holds about 25 episodes, so in the 80-episode run it fills with route-off experience, and an honest value should come down towards the new level. Then, if the network gets faster, the level rises again and the value should follow it up.
+         - Caveat: this rebuild counts every robot on the floor in the rate, so its absolute levels come out lower than entry 39's (run 8 by this method: about 0.7 small, 2.25 large, against 1.3 and 3.2 there). Only comparisons made with one method mean anything; the drop between route on and route off does not depend on the denominator.
+       - **The bar: kept at 0.8 (Rohit, 14 October).** One more episode with the network driving rather than one more in shadow; the Learner improves after the switch, not before. In the 80-episode run the warm-up minimum is 5 episodes, so the switch comes after episode 5 at the earliest (small map, about 84% in both dry runs), and the route is off from episode 6: 75 episodes with the network driving, the fade to episode 65, and 15 at 0.
+       - **Rohit's idea: ramp the scale up, then fade it** (for example 1 → 3 → 0, like the exploration Gaussian), because the Learner is weakest right after the switch and is still learning. Sound reasoning: trust the teacher more as it gets better. **Not for this run:**
+         - **Even at its weakest, the nudge pulled towards the route, never away from it.** Episode 4 (Learner 71% on the small map): heads 63% → chosen 48%. Episode 5 (67%): 59% → 48%. A 70% Learner is still right far more often than the heads alone (wrong on 55–63%), so a strong nudge at the start helps on average. A ramp would fix a problem the dry run did not show.
+         - **The early episodes are where the network is worst** (episode 5: 19 recoveries, reward −5,012), so that is where the help matters most.
+         - **The effect would be small in an 80-episode run.** The Learner adapted to the network's states within 3–5 episodes per map, while the fade falls by only about 0.05 per episode, so a ramp would change roughly the first 5–10 of 75 episodes.
+         - **It would need code, a test and another dry run.**
+         - **Kept as a candidate.** If the first route-off episodes show the nudge misleading (chosen-move disagreement above the heads', or near misses jumping), try it in the next run.
+    4. [ ] Predictions; then the run (`ladder_run5`, 80 episodes, **about 8–9 hours**: episodes with the route off take 5.5–8.6 minutes).
+
+       **Predictions, agreed by Rohit on 14 October** (item 6 added for his question about the efficiency value). "Last 15" is episodes 66–80, the network alone. "First 10" is the first 10 episodes with the route off.
+
+       | # | Prediction | Measure | Fails if |
+       | --- | --- | --- | --- |
+       | 1 | The heads learn the clear | heads-alone disagreement in the clear (`router_q_differs`), last 15, per map | above 35% on the large map or 45% on the small (the dry run ended at about 41% and 53%) |
+       | 2 | The network alone gets faster | mean lead time, last 15 against first 10, per map | less than 25% lower on either map |
+       | 3 | Safety holds | collisions, guard violations, near misses with people | any collision or violation, or near misses above about 21 per episode on average |
+       | 4 | The safety value stays steady | `qval_safety`; all losses | outside −0.15 to −0.05, or any loss climbing over the run |
+       | 5 | The Learner improves in the network's own states | `router_learner_agree` over the last 10 episodes of the fade | below 80% on the small map or 95% on the large |
+       | 6 | The efficiency value stays honest | `qval_efficiency` against the efficiency reward rate | it keeps climbing while the reward rate stays low (drift); expected instead: it falls in the early route-off episodes, then moves with the reward rate |
+    5. [ ] Score it; the graduation frozen tests: ladder5 `:noroute` against ladder4 and RULES, clean and full, 3 of 5 plus the safety gate.
 
 **Next.**
 

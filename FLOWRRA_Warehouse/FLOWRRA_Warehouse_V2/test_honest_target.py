@@ -119,7 +119,9 @@ def test_storage_and_padding():
 
     random.seed(0)
     b = buf.sample(2)
-    check("sample_returns_17", len(b), 17)
+    # 18 since the router (build log entry 42) appended its labels LAST.
+    check("sample_returns_18", len(b), 18)
+    check("no_router_field_reads_none", b[17] is None, True)
     rows = sorted(b[16].tolist())
     check("mixed_batch_old_reads_minus_one", rows, sorted([[-1, -1, -1], [-1, 3, 0]]))
 
@@ -210,6 +212,12 @@ def env_part():
         CONFIG["conflict"]["route_explore"] = False
         CONFIG.setdefault("step", {})["simultaneous"] = True
         CONFIG.setdefault("training", {})["honest_target"] = honest
+        # Fix 1 as run 7 had it: SARSA (entry 38) labels the network-driven
+        # fleets too, and is tested in test_sarsa.py.
+        CONFIG["training"]["sarsa"] = False
+        # The router (entry 42) adds a learner label to every push; tested in
+        # test_learner_router.py. Off here, so this keeps testing its own fix.
+        CONFIG["training"]["learner"] = dict(CONFIG["training"].get("learner", {}) or {}, enabled=False)
 
     def make_env(seed=7, n_fleets=24):
         from agent_warehouse import GNNAgent as _G

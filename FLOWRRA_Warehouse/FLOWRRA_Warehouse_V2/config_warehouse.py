@@ -15,7 +15,9 @@ NEW IN THIS RUN (training.learner, mode "router"; build log entry 42):
   and its init draws from its own random stream.
   The hand-over, per episode (main_runner_warehouse.router_plan):
     warm-up   route ON, Learner in shadow (scale 0), >= 5 episodes and until it
-              agrees with the route on >= 98% of clear moves in an episode;
+              agrees with the route on >= 80% of clear moves in an episode
+              (98% until dry run 1, 14 Oct: the Learner levels off at about
+              83% on the small map and 97% on the large; build log 42);
     switch    route OFF for the rest of training;
     fade      in the clear, score = Q + beta x P_Learner, beta = scale x the
               heads' median gap; scale 3.0 -> 0 by episode 65;
@@ -33,8 +35,8 @@ warm-up >= 3, fade to episode 10, 2 at 0), then the run (80 episodes, about
   nohup python -u main_runner_warehouse.py --seed 0 \
       --maps 25_5_2_5_2_1,50_20_5_10_5_2 --scens-dir all_scens_v5 \
       --episodes 12 --agent-sets 25,40,60 --max-steps 800 \
-      --resume ladder_run4/flowrra_curriculum.pth --out ladder_run5_dry \
-      > ladder_run5_dry.log 2>&1 &
+      --resume ladder_run4/flowrra_curriculum.pth --out ladder_run5_dry2 \
+      > ladder_run5_dry2.log 2>&1 &
 
   nohup python -u main_runner_warehouse.py --seed 0 \
       --maps 25_5_2_5_2_1,50_20_5_10_5_2 --scens-dir all_scens_v5 \
@@ -646,6 +648,19 @@ CONFIG = {
         # choice was made in (found while building 3c: it kept only the bare
         # mask, so value targets never saw a pairwise number). Off = old storage.
         "next_state_edge_features": False,
+        # Build the stored NEXT state's attention graph the way the choice's was
+        # built (build log entry 43, found 14 October). The choice uses graph
+        # distance (proximity.adjacency_metric "graph"); the next state, from
+        # which every value target is computed, used the Manhattan builder, so
+        # fleets behind a rack or on another floor were neighbours in s' only.
+        # "choice": the same builder as the choice. "manhattan": the old storage.
+        "next_state_adjacency": "manhattan",   # "manhattan" | "choice"
+        # THE SELF PATH (build log entry 43). Each Q head and the Learner also
+        # read the fleet's OWN encoding (before message passing) beside the
+        # trunk's summary, which mixes in its neighbours'. The diagnostic: a
+        # fleet's own route direction fades as neighbours are mixed in. Starts
+        # at exactly zero, so a warm start is the same network. Off: as before.
+        "self_skip": False,
         "edge_feature_dim": 4,             # 0 | 1 | 2 | 3 | 4
 
         # Channel widths of the gated 3D conv stack. THIS IS A MEMORY KNOB.
@@ -859,7 +874,7 @@ CONFIG = {
             "enabled": True,
             "mode": "router",
             "router": {
-                "switch_agreement": 0.98,  # Learner = route on >= 98% of clear moves...
+                "switch_agreement": 0.80,  # Learner = route on >= 80% of clear moves (was 0.98; dry run 1)...
                 "warmup_min": 3,           # ...after at least max(3, warmup_frac x episodes)
                 "warmup_frac": 0.0625,     # 80 episodes: 5; 12 (dry run): 3
                 "tail_frac": 0.1875,       # the last 15 of 80 (2 of 12) at scale_end

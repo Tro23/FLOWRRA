@@ -1948,7 +1948,351 @@ Each step was built behind its own switch, tested, and run against the step befo
        | 4 | The safety value stays steady | `qval_safety`; all losses | outside −0.15 to −0.05, or any loss climbing over the run |
        | 5 | The Learner improves in the network's own states | `router_learner_agree` over the last 10 episodes of the fade | below 80% on the small map or 95% on the large |
        | 6 | The efficiency value stays honest | `qval_efficiency` against the efficiency reward rate | it keeps climbing while the reward rate stays low (drift); expected instead: it falls in the early route-off episodes, then moves with the reward rate |
+       **Started 14 October, 03:53 IST. Check at 20 episodes** (CSV episodes 1–20; run 8's same episode in brackets: the same orders, map and fleet count, route on, its own exploration schedule).
+       - **The switch fired after episode 5** (small map, 81.1%); the route has been off from episode 6, with the scale falling 3.00 → 2.29 by episode 20. No errors, 0 collisions, 0 guard violations. Exploration is at its peak (0.050 at episode 20) and falls from here. Episodes with the route off take about 6.7 minutes, so the run should end around 12:30–13:00 IST.
+       - **The two maps tell different stories.**
+
+         | Large map, route off | Ep 6 | 7 | 8 | 10 | 11 | 17 | 18 | 20 |
+         | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+         | Robots | 40 | 40 | 40 | 60 | 25 | 40 | 60 | 40 |
+         | Heads differ | 55% | 53% | 45% | 49% | 43% | 40% | 38% | **36%** |
+         | Chosen differ | 32% | 31% | 27% | 30% | 27% | 25% | 25% | 23% |
+         | Learner, live | 87% | 90% | 91% | 92% | 93% | 92% | 94% | 93% |
+         | Lead time (run 8) | 181 (139) | 182 (145) | 181 (116) | 99 (70) | 186 (161) | 160 (147) | 108 (88) | 153 (139) |
+         | Delivered (run 8) | 69 (75) | 71 (75) | 72 (69) | 76 (73) | 66 (73) | 75 (75) | 78 (78) | 77 (72) |
+
+         | Small map, route off | Ep 9 | 12 | 13 | 14 | 15 | 16 | 19 |
+         | --- | --- | --- | --- | --- | --- | --- | --- |
+         | Robots | 60 | 60 | 60 | 40 | 40 | 60 | 25 |
+         | Heads differ | 58% | 57% | 58% | 53% | 57% | 57% | 55% |
+         | Chosen differ | 47% | 47% | 46% | 45% | 47% | 47% | 45% |
+         | Learner, live | 70% | 72% | 72% | 70% | 71% | 72% | 75% |
+         | Lead time (run 8) | 133 (39) | 124 (47) | 103 (35) | 176 (54) | 176 (78) | 108 (36) | 197 (62) |
+         | Guard stops (run 8) | 554 (93) | 313 (33) | 532 (2) | 451 (58) | 572 (176) | 405 (1) | 138 (171) |
+
+         - **Large map: the heads are learning fast.** At 40 robots their disagreement with the route fell 55% → 36% (episodes 6 → 20), already at prediction 1's line. By episodes 17–20, lead time is within about 10% of the same day with the route (160 against 147, 153 against 139; 108 against 88 at 60 robots), and deliveries match or beat it (75, 78, 77 against 75, 78, 72). The first clear evidence that handing the clear to the network can work.
+         - **Small map: flat.** Heads 53–58%, the Learner about 71%, lead time about 3× the route's, guard stops several times higher. No trend yet over 7 episodes.
+         - **Possible reasons, not yet separable:**
+           - exploration rising to its peak (0.033 → 0.050) through these episodes; random moves cost more on a crowded floor, and the states get messier;
+           - harder credit: on the large map a detour costs the robot its own distance (a clean efficiency signal), while on the small map it mostly costs others, in crowding and guard stops;
+           - the weaker nudge (Learner about 71%);
+           - and part of the disagreement may be legitimate: under the route, the heads already differed from it on about 45–51% of small-map clear moves (episodes 1–5 in shadow), so the small map's natural level may sit near prediction 1's 45%.
+       - **Values (Rohit: "watch the q values").** All moving the way honest values should. The losses are flat (safety 0.0011–0.0016, delivery 0.009–0.011, efficiency 0.013–0.016).
+         - **Safety:** −0.10 → −0.13. The safety charges per robot-step on the small map are 2–3× those under the route (rough level −0.11 to −0.34 against −0.03 to −0.09), from the extra close approaches, so a more negative value is honest. It is inside prediction 4's band. If the small map stays rough it may approach −0.15, and that would be the value following real charges, not instability; to be judged together with the safety rewards when scoring.
+         - **Efficiency:** 2.07 → 1.69, falling as prediction 6 expected. On the large map the efficiency reward rate is recovering (0.026–0.028 per robot-step in episodes 6–8, 0.031–0.036 in 17–20; under the route 0.045–0.056). On the small map it stays low (0.006–0.011).
+         - **Delivery:** 0.78–0.98, no trend.
+       - **Near misses with people,** episodes 6–20: 16.6 per episode, under prediction 3's 21.
+
+       **Check at 55 episodes** (CSV episodes 1–55, saved at 55; Rohit was on a hotspot with a laptop low on battery, so this is a safety copy). The scale was 0.51 at episode 55, exploration at its floor (0.020) from about episode 40. 0 collisions and 0 guard violations in all 55 episodes.
+
+       | Period (route off) | Map | Episodes | Heads differ | Lead time | Guard stops | L3 | Near misses | Delivered |
+       | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+       | 6–25 | large | 10 | 42.9% | 151 | 156 | 2.1 | 7.4 | 73.6 |
+       | 26–40 | large | 7 | 35.8% | 154 | 15 | 0.4 | 2.6 | 68.6 |
+       | 41–55 | large | 8 | **33.1%** | 122 | 42 | 1.5 | 18.9 | 75.8 |
+       | 6–25 | small | 10 | 56.5% | 147 | 444 | 5.1 | 43.5 | 74.0 |
+       | 26–40 | small | 8 | 56.5% | 147 | 506 | 5.0 | 44.9 | 75.1 |
+       | 41–55 | small | 7 | 55.6% | 143 | **659** | 6.9 | 116.7 | 73.0 |
+
+       - **Large map: learned, then levelled off at about 31–35%** from about episode 24. Against the same days in run 8 (route on), lead time runs about 15–20% behind (for example 108 against 93, 118 against 100, 121 against 106 at 60 robots in episodes 43–45). Earlier it was about 30% behind, and the nudge has faded from 2.8 to 0.5 meanwhile, so the network now carries more of the job itself. Deliveries are on par (episodes 32 and 39, 25 robots, were bad days: 42 and 63).
+       - **Small map: no learning in 50 episodes.** Heads 53–62%, flat, including episodes 40–55 at the exploration floor, so exploration was not the cause. The Learner sits at 70–77%. Lead time is flat at about 3× the route's (60 robots: 96–126 against 36–51). As the nudge fades, the chosen moves drift further from the route (45–47% → 51–55%), and guard stops rise (444 → 506 → 659 per episode). Near misses rose too, mostly from one episode (55: 566; episodes 42–53 averaged about 42).
+       - **Near misses overall,** episodes 6–55: mean 37.1, median 14. Run 8, episodes 6–50: mean 84.2, median 10. Both are dominated by a few spike days. Prediction 3's line (about 21 per episode, from the dry run's 12 episodes) is above that, so it is failing on the mean.
+       - **Values:**
+         - **Safety:** −0.128 → −0.151 (episodes 49–50) → −0.145. At prediction 4's edge, as foreseen at 20 episodes. On the small map the safety charges per robot-step stay about 5–10× the large map's (−0.003 to −0.004 against −0.0003 to −0.0007).
+         - **Efficiency:** falling towards the level the rewards set, from above, as prediction 6 expected. Learned 1.55 at episode 30 against a memory-weighted rough level of 1.06; 1.25 at 55 against 1.10. On the large map the efficiency reward rate is recovering (0.030 → 0.034 per robot-step); on the small map it fell (0.008 → 0.0045).
+         - **Delivery:** flat, 0.88–0.98.
+         - **Losses:** delivery 0.0104 → 0.0085 and safety about 0.0012, both flat or falling. Efficiency creeping up: 0.0141, 0.0135, 0.0133, 0.0145, 0.0156 over 10-episode windows. To watch for prediction 4.
+       - **Reading so far.** The handover works where a detour's cost lands on the robot itself (the large map) and does not where it lands on others through crowding (the small map). The last 15 episodes, at scale 0, will show how the small map holds up with no help at all.
+       - **Episodes 56–58 (from the log):** 56, small map, 25 robots: 75 delivered, heads 58%. 57, large, 60 robots: **80 of 80, the first full book with the network driving the clear**, heads 31%. 58, large, 60 robots: 75 delivered, heads **28%**, the large map's lowest yet (the Learner there at 96%).
+       - **The small map: what next (Rohit, 14 October).**
+         - **Two ideas weighed and held:**
+           - *A small-map-only run.* The small map had about 25 route-off episodes here with no trend, so more of the same signal extends a flat line. One network serves both maps, so training on one alone risks losing the large map's gains. A small-map-heavy mix may make sense once the fix is known.
+           - *Keeping the nudge above 0.* This run already shows it would not fix the map: lead time stayed at 147, 147 and 143 while the scale fell from 2.9 to 0.5. Only guard stops moved (444 → 659), and the Learner itself sits at about 74% there.
+         - **Agreed order:** finish the run; score the six predictions; the graduation frozen tests (which also give ladder5 against ladder4 with the route, map by map); a diagnostic; then the fix and a new run.
+         - **Candidate causes,** each fitting the two-map split:
+           1. *A blurry picture.* The trunk mixes each robot's summary with its neighbours', and on a crowded map the robot's own goal signal is diluted. The Learner's ceiling (about 74% small, 96% large) hints at it. Fix: feed each robot's own inputs straight to the heads beside the trunk's summary, with the new weights starting at zero, so the warm start is exact.
+           2. *The wrong lesson (credit).* On the small map a detour's cost lands mostly on others (crowding, guard stops), which the detouring robot's own reward barely sees. Fix: charge a robot for the waiting it causes others.
+           3. *Blind value targets* (Rohit's question about edge features). The 4 edge features (closeness, conflict, head-on, arrival order) are used when choosing, but `gnn.next_state_edge_features` is off. So the stored next state, from which SARSA's value target is computed, keeps only the bare neighbour mask: when the network learns what follows a move, it cannot see the pairwise picture of that next state. On the small map nearly every consequence is about neighbours; on the large map robots in the clear have few, so it matters little. Fix: a config switch, with no new weights and an exact warm start, at the cost of more replay memory (edge features stored twice). Tested alone in entry 15: fewer collisions, L3 fires and retreats and the highest RULES agreement, though the per-episode ranges overlapped. Pair relations stay off (the likely cause of harm in the earlier combined test).
+         - **How to tell them apart.** The diagnostic (frozen ladder5, mistakes in the clear split by neighbour count on each map) tests cause 1. Causes 2 and 3 act through learning, so they need a paired dry run against dry run 2: same seed, small-map-heavy, one change at a time.
+    4b. [x] **Run 9 finished, 14 October, 12:52 IST: 80 episodes in 539 minutes, no errors.** 0 collisions and 0 guard violations in all 80 episodes.
+
+       **Scored against the six predictions** ("last 15" = episodes 66–80, scale 0; "first 10" = episodes 6–15, the first 10 with the route off):
+
+       | # | Prediction | Result | |
+       | --- | --- | --- | --- |
+       | 1 | Heads differ, last 15: large ≤ 35%, small ≤ 45% | large **24.4%**, small 50.7% | ❌ (large ✅, small ❌) |
+       | 2 | Lead time, last 15 ≥ 25% below first 10, per map | large −22.1% (164 → 129), small **+21.7%** (143 → 174) | ❌ |
+       | 3 | No collision or violation; near misses ≤ about 21 per episode | 0 and 0; near misses mean 41.4 (median 12) over episodes 6–80, 23.0 in the last 15 | ❌ on near misses (run 8: mean 84, median 10) |
+       | 4 | Safety value within −0.15 to −0.05; no loss climbing | safety value −0.169 at its lowest, −0.166 at the end; efficiency loss 0.014 → 0.017, safety loss 0.0011 → 0.0017 | ❌ |
+       | 5 | Learner over episodes 56–65: small ≥ 80%, large ≥ 95% | small 74.9%, large 95.2% | ❌ (large ✅, small ❌) |
+       | 6 | Efficiency value honest: falls, then moves with the rewards | fell from 2.07 to 1.04 and met the rough level the rewards set (1.05 at episode 80; it was 1.55 against 1.06 at episode 30) | ✅ |
+
+       **One of six passed cleanly; on the large map, 1, 5 and 6 passed.** The run did half of what it set out to do.
+
+       - **Large map: the network learned the clear.** Heads 55% → 24% (last 15). With no help at all (scale 0), it held the level it had with the nudge: lead time about 113 at 60 robots and 146 at 40, the same as in episodes 41–55. It is about 15–20% behind the route on the same days, and deliveries are on par. Episode 57 was the first full book with the network driving (80 of 80, 60 robots); episode 73 delivered 79. Prediction 2 missed by 3 points on this map, and partly from the fleet mix: at 40 robots, 181 → 146 (−19%); at 60, about 105 → 113.
+       - **Small map: the last bit of nudge was holding it together (Rohit's reading).** The heads' disagreement improved only once the nudge was gone (about 56% → 51%), presumably because their own moves now all ran and were corrected. But the floor got rougher. At 60 robots, the like-for-like count:
+
+         | Small map, 60 robots | Scale ≥ 0.66 (10 episodes) | Scale ≤ 0.2 (episodes 61, 68, 78) |
+         | --- | --- | --- |
+         | Lead time | 115 | 155 |
+         | Guard stops | 468 | 964 |
+         | L3 | 6.4 | 10 |
+
+         At 25 robots, lead time 167 → 185 at scale 0. So a small nudge (0.5 and above) mattered on the crowded map, while the large map did not need it. Earlier (episodes 6–55) the strength between 2.9 and 0.5 barely changed lead time; it is the step to zero that hurt. Even with the nudge, the small map stayed at about 3× the route's lead time.
+       - **The safety value drifted.** It kept falling after episode 40 (−0.137 → −0.166) while the safety charges per robot-step stayed flat on both maps (small about −0.0039, large about −0.0005). By the rough method, its level sits near −0.11, so by the end the value was about 0.05 more pessimistic than the charges explain, and the gap was widening. It errs on the cautious side, but it is what prediction 4 was there to catch. A possible link to cause 3 above (blind value targets): the safety head's targets value the next state without its edge features (closeness, conflict), so they cannot see the danger they are estimating.
+       - **Near misses** are spike-driven: a few days carry most of the mean (episode 55: 566, 64: 558, 61: 210, 21: 190), and the median is 12. Below run 8's mean of 84, above the line.
+
+       **Next (Rohit, 14 October):**
+       - **Graduation frozen tests,** clean and full, as agreed.
+       - **For the next run (Rohit):** keep a floor on the scale (`scale_end` about 0.5), from the small map's evidence above. And test `next_state_edge_features` in a dry run, which he expects to be a must.
+       - **Planning notes:**
+         - The clean test can carry an extra arm, ladder5 at scale 0.5 with the route off, to measure the floor frozen before committing to it.
+         - The full test was to come after the order-leak fix (carried item 3, entry 41).
     5. [ ] Score it; the graduation frozen tests: ladder5 `:noroute` against ladder4 and RULES, clean and full, 3 of 5 plus the safety gate.
+       **Running since 14 October, 13:30 IST** (four processes side by side; the machine has 16 cores):
+       - `deploy_eval_clean9.csv` (seeds 0–2, failures and people off) and `deploy_eval_full9.csv` (seeds 0–4, both on): ladder5 `:noroute`, ladder4 and RULES in the same invocation, `--safety on`. Rohit's call: same code version and same days, so no replay check is needed. Comparing these ladder4 and RULES rows with clean8 and full8 also checks, for free, that the router build left them unchanged.
+       - `deploy_eval_clean9_floor.csv` and `deploy_eval_full9_floor.csv`: ladder5 alone, labelled `ladder5f`, with `router.scale_end` 0.5 (the floor). The config was changed after the first two runs had built their agents: deploy_eval reads the scale once, at start-up (`[deploy] arm` lines, two per run, since RULES builds no network). Same seeded days, so these compare directly with the rows above.
+       - **The order leak stays in this full test,** as in full7 and full8: failures, debris and people draw from the shared random, so arms meet different events on the same seeded day once their choices differ. Its fix goes into run 10's build, so that run 10's graduation is like-for-like.
+       - The config now has `scale_end` 0.5 on Rohit's machine (and 0.0 in mine), pending the floor arm's result.
+
+       **Scored 14 October: ladder5 does not graduate; ladder4 stays the champion.** No collisions in any run of any arm. Rohit also ran a 15-robot clean test (`deploy_eval_clean9_k15.csv`, 2 maps × 3 seeds, all three arms), to check whether the policy had overfitted to the trained fleet counts (25, 40, 60).
+       - **Replay check, free:** the ladder4 and RULES rows match clean8 and full8 exactly, 36 of 36 and 60 of 60 (steps run, delivered, lead time, guard stops, L3, collisions; in full also near misses and failures). The router build left them unchanged.
+       - **Overall, ladder5 (route off) against ladder4 (route on), paired:**
+
+         | | Clean, 18 days: ladder5 / ladder4 (p) | Full, 30 days: ladder5 / ladder4 (p) |
+         | --- | --- | --- |
+         | Book filled | 0.979 / 0.999 (0.066) | 0.923 / 0.955 (0.000) |
+         | Lead time | 140 / 76 (0.000) | 150 / 86 (0.000) |
+         | L3 | 8.6 / 1.9 (0.085) | 4.5 / 1.2 (0.000) |
+         | Guard stops | 581 / 78 (0.004) | 441 / 87 (0.000) |
+         | Near misses | – | 54 / 14 (0.179) |
+
+         Worse on every measure in both conditions, so it fails 3 of 5 and the safety gate's spirit (near misses about 4×, not firm at p 0.18). Against RULES the same picture.
+       - **By map (means, medians in brackets):**
+
+         | | Large map, clean | Large map, full | Small map, clean | Small map, full |
+         | --- | --- | --- | --- | --- |
+         | Lead time: ladder5 / ladder5f / ladder4 / RULES | 123 / 120 / 105 / 105 | 141 / 132 / 119 / 119 | 157 / 148 / 47 / 39 | 159 / 156 / 53 / 46 |
+         | Delivered: ladder5 / ladder4 | 79.4 / 80.0 | 74.2 / 75.7 | 77.2 / 79.8 | 73.5 / 77.0 |
+         | Guard stops: ladder5 / ladder4 | 46 (5) / 18 (0) | 52 (30) / 46 (18) | 1,116 / 137 | 830 / 128 |
+         | L3: ladder5 / ladder4 | 0.8 / 0.8 | 1.1 / 0.7 | 16.3 / 3.1 | 7.8 / 1.7 |
+         | Near misses: ladder5 / ladder4 | – | 6.5 (0) / 9.4 (3) | – | 102 (28) / 19 (8) |
+
+         - **Large map, the network alone: about 16–18% slower than the route, deliveries within 1–1.5, the same L3, and fewer near misses with people (6.5 against 9.4).** A policy driving every move in the clear with no planner, close to the planner on the large map: a real result (Rohit: "just a policy to be there is quite something"), and the first time in v2.
+         - **Small map: not learned.** About 3× the route's lead time, 6–8× the guard stops, 5× the near misses (medians 28 against 8).
+       - **The floor (ladder5f, scale 0.5), paired against ladder5 on the same days:** lead time slightly lower (clean −9 steps small map and −3 large; full −3 small and −9 large, lower on 10 of 15 large-map days), L3 mixed (full small map +3.8, higher on 12 of 15), near misses about the same. A small help, not a fix, and smaller than the training episodes suggested (entry 42, 4b).
+       - **The 15-robot test (Rohit's overfit check), ladder5 against ladder4, clean:**
+
+         | Robots | Large map: lead ratio | Large map: heads differ | Small map: lead ratio | Small map: heads differ |
+         | --- | --- | --- | --- | --- |
+         | 15 (not trained) | **1.46** (189 / 129) | 26% | 2.89 | 56% |
+         | 25 | 1.05 | 24% | 2.54 | 51% |
+         | 40 | 1.21 | 25% | 4.04 | 51% |
+         | 60 | 1.28 | 25% | 3.90 | 52% |
+
+         On the large map at 15 robots the gap widens to 46%, but the heads' disagreement is the same as at the trained counts (26%). So the policy does not behave differently on the untrained count; the same habit costs more. With fewer robots nearly the whole trip is in the clear, driven by the network, and trips are longer, while at 60 more of each trip is at meetings, which the rules and the ladder decide. Mild evidence for overfitting at most; 3 days per map. The cheap guard against it is adding 15 to the training fleet counts.
+       - **Rohit's reading (14 October): ladder4 is undefeated.** He doubts ladder5 as the start of run 10 ("there might be a few unlearning steps involved").
+         - *For ladder5:* on the small map without the route it is no worse than ladder4 (smoke test: ladder4 alone 183 lead at 25 robots on the seed-0 day, ladder5 159 on the same day here), and it is far better on the large map.
+         - *Against it:* the drifted safety value (−0.166) and its route-off value levels come with it.
+         - The dry runs can settle it with data (entry 43).
+
+
+43. **Draft for run 10 (`ladder_run6`): the small map (14 October). For discussion once the frozen tests are scored; no code yet.**
+
+    **Where run 9 left us.** On the large map the network drives the clear itself, about 15–20% behind the route, with no help. On the small map it does not: the heads still differ from the route on about half of clear moves, lead time is about 3× the route's, and removing the last of the nudge hurt (entry 42, 4b). The safety value drifted pessimistic while its charges stayed flat. Three candidate causes (entry 42, the 55-episode check): a blurry picture (cause 1), the wrong lesson about crowding (cause 2), blind value targets (cause 3).
+
+    **Proposed shape of run 10:**
+    - **Warm from ladder5.** Its large-map driving and its Learner are already trained.
+    - **Route off from the first episode, no warm-up.** The network has already driven 75 episodes without the route; a warm-up would refill the memory with route-made states. Needs a small router option (for example `start_off`), since today's runner always starts with a warm-up. The dry runs need it too.
+    - **Fleet counts:** consider adding 15 to the training sets (15, 25, 40, 60), after the 15-robot test (entry 42, step 5).
+    - **The scale held at a floor, no fade.** In run 9 the strength between 2.9 and 0.5 barely changed the small map, while the step to 0 hurt it. So a constant 0.5, also used at deployment. Pending the floor arm (entry 42, step 5): if ladder5 at 0.5 is no better than at 0 frozen, keep 0.
+    - **`next_state_edge_features` on (cause 3),** if the paired dry run below supports it. It may also explain the safety value's drift.
+    - **The order-leak fix,** for run 10's graduation to be like-for-like: failure, debris and people draws seeded from the episode, the step and the robot (or the debris spot). Every arm then meets the same events on the same day, as far as its own robots allow.
+    - **Map mix:** both maps as now. Weighting towards the small map only once a fix is known to work.
+
+    **Before the run:**
+    1. **The diagnostic for cause 1** (frozen, minutes). A new small script replays a few days with ladder5 on each map. For every robot-step in the clear it records the robot's neighbours in the network's graph, the distance to the nearest robot, and whether the Learner and the heads matched the route. If mistakes rise with neighbour count on *both* maps, the picture is blurry, and the fix is a direct path from each robot's own inputs to the heads, with its new weights starting at zero so the warm start stays exact. If the small map is worse at the same neighbour count, it is not the picture.
+    2. **Paired dry runs for cause 3,** run side by side: 12 episodes each, the same seed, route off from the start, small map only (the question is the small map, and 12 episodes of it give a clear signal). A: from ladder5, edges off. B: from ladder5, edges on. **C (added after the frozen tests, for Rohit's doubt about starting from ladder5): from ladder4, edges off.** A against B isolates the edges; A against C isolates the starting point. Every episode is a pair (same orders, fleets and seed). Scale 0 in all three: ladder4 has no trained Learner, so a nudge would not be the same across arms, and the floor helped only a little frozen. Read: the heads' disagreement, lead time, guard stops, L3, and the safety value against its charges. A decision rule to agree before they run.
+    3. **Cause 2** (charging a robot for the waiting it causes others) only if causes 1 and 3 do not account for the small map. It changes the reward, so it is the biggest step.
+
+    **Checks for the build:**
+    - **Next-state edges were last used in run 4** (learner_run2), before SARSA and the router. The core path is still there (`core_warehouse.py`, the next state gets `_build_edge_features` when the switch is on), and the buffer pads 3-D adjacency. A short test should confirm the 18-element sample with a 3-D next adjacency.
+    - **Memory:** each stored next state grows from the bare mask (N × N) to N × N × 5, about 58 KB more per transition at 60 robots, so up to about 1.2 GB for the 20,000-transition memory. Check free memory first.
+
+    **Revised 14 October, after the frozen tests (Rohit, and a defect found while building).**
+    - **Rohit's arms:** C starts from ladder4 *with* the next-state fix, since the question is whether run 10 should start there. So A (ladder5, old storage) against B (ladder5, fixed) isolates the fix, and B against C (ladder4, fixed) isolates the starting point.
+    - **Rohit's schedule, "get aggressive":** the scale falls from 5 to 1 instead of 3 to 0, the same for all three arms, so it does not confound the comparisons. All three use the runner's usual warm-up (route on until the Learner reaches 80% on the small map, at least 3 episodes): ladder4 has no Learner, so it needs the warm-up to train one, and the `start_off` router option is not needed after all. A trade-off to watch: a stronger nudge means fewer of the heads' own moves run and get corrected, and in run 9 the small map's heads improved only once the nudge was gone.
+    - **A second defect in the stored next state, found while checking the edge path: its attention graph is built on the wrong distance.**
+      - The choice in s builds its graph on GRAPH distance: neighbours within 10 hops along the floor, immobile robots excluded (`_build_adjacency_graph`, the phantom-pair fix of 13 September).
+      - The stored s', from which every value target is computed, still used the MANHATTAN builder (`_build_adjacency`): straight-line distance through racks and floors, all robots included. Robots behind a rack, or on the floor above, were neighbours in s' but not in s. That fix had called itself "the fourth and last instance of the phantom-pair defect"; this is a fifth, in storage.
+      - It is in every run so far. It cannot touch frozen tests, which do not learn.
+      - Like the missing edge features, it should matter most where robots crowd and floors stack close: the small map (5 floors in 12 units of height, 1,435 cells).
+    - **So arm B and C's change is "make the stored next state the state the choice saw":** both the choice's graph and its edge features. Both correct the same defect, so they are tested together and adopted together if they help.
+
+    **Built (14 October):**
+    - **`core_warehouse.py`:** `gnn.next_state_adjacency`, "manhattan" (default: exactly the old storage) or "choice" (the choice's builder, with the proximity index refreshed on the post-move floor first; idempotent with the post-move refresh, and the next step refreshes again). An unknown value fails at start-up.
+    - **`config_warehouse.py`:** the new switch, defaulting to "manhattan".
+    - **`main_runner_warehouse.py`:**
+      - The `edges` start-up line reports both next-state switches.
+      - A new `--set KEY.PATH=VALUE` option (repeatable) overrides a config value for one run, so runs side by side can differ without editing the config file between launches. The key must exist, so a typo fails at start-up; the value is read as a Python literal (True, 5.0) or kept as text. Each override is logged with the file's value.
+    - **`test_next_state.py`** (new), on real FLOWRRA steps:
+      1. With the old storage, the stored next adjacency is 2-D and equals the Manhattan builder.
+      2. With "choice", it equals the graph builder.
+      3. With both on, it is 3-D with 1 + E channels, channel 0 is the graph builder, and the edge channels are not all zero.
+      4. Learning with both on: `sample()` gives 18 elements and a 4-D next adjacency with 1 + E channels, and every loss is finite.
+      5. For information: how often the two builders' neighbour sets differ, and the memory added.
+    - **`diag_clear.py`** (new), the diagnostic for cause 1: a frozen replay, route off. Per robot in the clear, it records neighbours in the choice's graph and under Manhattan, the graph distance to the nearest robot, the route's tie count, and whether the Learner and the heads matched the route; per step, the share of robots whose two neighbour sets differ. It prints agreement by neighbour count and by nearest distance per map, plus the size of the next-state mismatch per map. Clean conditions as deploy_eval.
+    - Checked here without torch: every edited file parses, no undefined names (pyflakes), and the `--set` parsing on a stand-in (nested keys, literals, text, a typo caught).
+    - **Rohit's machine, 14 October:** `test_next_state.py` and `test_learner_router.py` both ALL PASS.
+    - **Rohit's question: is everything in hops now?** Checked every distance in the decision code. Every decision is in hops:
+      - the attention graph at choice, and with the fix the stored next state;
+      - the warning set and collision sweep (graph proximity index);
+      - the guard (hop metric);
+      - the opening-or-closing tests (hops, `hops_everywhere`);
+      - L3's goal distance (BFS);
+      - the edge features' closeness (graph distance).
+      Conflict, head-on and arrival order come from the routes along the graph. Directions are unit vectors of the last move, compared by dot product, which is right in space.
+      Straight-line distance remains only where it is harmless: on-the-pickup-cell checks (half a hop, where the two agree), measurement-only stats (`sep_*`, the phantom-pair counter), and the fallback for a position off the graph.
+
+    **The diagnostic, done 14 October** (`diag_small.log`, `diag_large.log`; ladder5 frozen, route off, clean, seed 0, 25/40/60 robots; 32,593 clear robot-steps on the small map, 42,925 on the large). "Neighbours" = robots within 10 hops in the choice's attention graph. The robot itself is in the clear by the route's test, so none is close; these are the ones its picture is mixed with.
+
+    | Neighbours | Small map: share / Learner / heads | Large map: share / Learner / heads |
+    | --- | --- | --- |
+    | 0 | 8.7% / **97.5%** / 61.8% | 77.7% / **99.8%** / 80.0% |
+    | 1 | 8.0% / 89.8% / 49.8% | 18.7% / 83.2% / 63.3% |
+    | 2 | 8.6% / 80.6% / 45.8% | 3.2% / 78.6% / 57.7% |
+    | 3–4 | 17.3% / 77.6% / 45.4% | 0.4% / 85.5% / 45.2% (166 robot-steps) |
+    | 5–7 | 22.9% / 71.2% / 45.8% | – |
+    | 8+ | 34.6% / 67.3% / 43.9% | – |
+    | All | 75.5% / 46.8% | 96.0% / 76.0% |
+
+    (Learner and heads: share of clear moves on one of the route's equally short moves.) By the graph distance to the nearest robot the picture is the same: the Learner falls from 87.9% at 8–10 hops to 68.0% within 4 on the small map, and from 86.1% to 77.2% on the large.
+
+    - **Cause 1, the blurry picture, is real, and on both maps.**
+      - A robot alone reads the route almost perfectly on either map: the Learner at 97.5% (small) and 99.8% (large).
+      - With neighbours it falls on both: to about 80% with 1–2 on the large map, to 67% with 8+ on the small.
+      - So the trunk's summary of a robot loses its own route direction as neighbours are mixed in.
+      - The small map's lower total is mostly the mix: 91% of its clear robot-steps have neighbours within 10 hops (35% have 8 or more), against 22% on the large map. Its robots average 7.3 neighbours in the graph; the large map's 0.2.
+    - **But the heads have a second, small-map problem that the picture does not explain.** Alone, with a clean picture, the heads follow the route on 61.8% of moves on the small map against 80.0% on the large. The Learner shows the information is there (97.5%), so it is the heads' *values* that are off on the small map: the learning-target side. That is where the next-state defect and the crowding cost (cause 2) act.
+    - **The next-state defect is about four times larger on the small map.**
+      - Small map: 28.4% of robots had a different neighbour set in the stored s' than at the choice (on average +0.52 phantom neighbours, 7.85 against 7.33). Among robots in the clear, **39.3%**.
+      - Large map: 9.3% of robots, +0.10.
+      - Part of the difference is immobile robots, which the choice's graph excludes and the Manhattan builder kept.
+    - **Dry runs A, B and C, done 14 October** (small map only, 12 episodes, seed 0, same scenarios in the same order; warm-up with the route on, switch after episode 3 in all three at 84–86%, then the scale 5.0 → 1.0 by episode 10 and 1.0 for 11–12; about 2 hours each, side by side, no errors). Means over the route-off episodes 4–12, then the paired count:
+
+      | | A: ladder5, old storage | B: ladder5, next-state fix | C: ladder4, next-state fix |
+      | --- | --- | --- | --- |
+      | Heads differ from the route | 57.1% | **54.5%** | 53.1% |
+      | Chosen moves differ | 45.8% | 44.5% | 43.9% |
+      | Lead time | 143 | **133** | 139 |
+      | Guard stops | 546 | **496** | 517 |
+      | L3 | 6.2 | 4.8 | 5.8 |
+      | Near misses | 157 | **29** | 52 |
+      | Delivered | 75 | 76 | 76 |
+      | Learner, live | 73.0% | 74.3% | 72.2% |
+      | Safety value / loss | −0.246 / 0.0025 | −0.229 / **0.0017** | −0.141 / 0.0014 |
+      | Efficiency value | 0.655 (falling to 0.56) | 0.751 (to 0.70) | 1.402 (barely moving) |
+      | Last 3 (scale 1.0): lead / guard / near misses | 126 / 424 / 147 | **110 / 341 / 11** | 122 / 433 / 34 |
+
+      - **B against A (the next-state fix): a consistent improvement, modest in size.**
+        - The heads' disagreement with the route was lower in **9 of 9** paired episodes (−2.6 points; a sign test gives p ≈ 0.004), and the chosen moves in 7 of 9.
+        - Lead time was 7% lower (13% in the last three, 110 against 126), lower on 6 of 9. Guard stops 9% lower (6 of 9). L3 lower on 7 of 9. Near misses lower on 7 of 9; A's mean is carried by spike days (549, 422).
+        - The safety loss was a third lower (0.0017 against 0.0025) and the efficiency loss lower at the end (0.0073 against 0.0085): more consistent targets learn more cleanly.
+        - The safety value was less pessimistic from the first episode (−0.255 against −0.311).
+        - Each of these except the heads is 6–7 of 9, not firm alone; together, and with the heads at 9 of 9, it is clear. Failure draws differ between arms (the order leak), which adds noise to every paired comparison.
+        - **It does not solve the small map.** The heads still differ on about half of clear moves (49% in the last three), and lead time is still about 2.5× the route's. That fits the diagnostic: the bigger share of the problem is the blurry picture, which this fix does not touch.
+      - **B against C (the starting point, both fixed): ladder5 is at least as good.**
+        - C's heads were slightly lower (6 of 9, −1.4 points). But B had fewer guard stops (7 of 9), fewer near misses (7 of 9) and slightly lower lead time. C's Learner, trained from scratch in the warm-up, was lower on 9 of 9.
+        - **Rohit's "unlearning" concern points the other way.** ladder4's values belong to the route-on world: its efficiency value stayed at about 1.4 through 12 episodes, while A and B, starting from ladder5, sit at 0.6–0.75 for the same small-map days. ladder4 is the one carrying values to unlearn, as run 9's efficiency value did over 80 episodes (2.07 → 1.04).
+      - **The aggressive schedule (5 → 1)** pulled the chosen moves about as far as 3 → 0 did in dry run 2: about 16 points at the start in both (A: 62.5% → 43.6% at scale 5; dry run 2: 63% → 48% at scale 3). The nudge saturates, since the Learner is about 72% right on this map and unsure where it is wrong. No harm seen either; B's best episodes came at the floor of 1.0.
+    - **So two problems, two fixes:**
+      - The learning targets: the next-state fix, being tested now in dry runs A/B/C.
+      - The picture: a direct path from each robot's own encoding to the heads (and the Learner) beside the trunk's mixed summary. Concatenate the node encoder's output, from before message passing, to the trunk's output, with the new input weights of each head starting at zero, so the warm start stays exact. Decided after the dry runs.
+    - **Decided (Rohit, 14 October): fix the blur before the long run** ("it's best to do a fixed long run in the end"). Then run 10 from ladder5, with the next-state fix, the 5 → 1 schedule and a floor of 1.0 (also at deploy), both maps, fleet counts 15/25/40/60, 80 episodes, and the order-leak fix before its graduation.
+
+    **Built: the self path (`gnn.self_skip`), 14 October.**
+    - **`agent_warehouse.py`:**
+      - **The new maps.** With the switch on, each Q head gets a bias-free linear map from the fleet's own encoding (the node encoder's output, before any message passing) into its first layer: the head's first layer computes `W·h + U·h0 + b` instead of `W·h + b`. The Learner gets the same, reading `h0.detach()`, so it still never trains the trunk.
+      - **Same network at the start:** the maps start at exactly zero, so a warm start is the same network bit for bit.
+      - **Nothing else changes:** they are registered last and built from their own random stream (seed 2027), so every other parameter, their order and every later global random draw are as without them.
+      - **Own optimizer:** the maps have their own Adam, so the main and the Learner's optimizers cover exactly the same parameters as before, and ladder5's states load exactly. They are clipped on their own (the Q heads' maps together, the Learner's apart), so at zero the first update of the main path is the same as without them.
+      - **Loading:** `load()` lets a checkpoint without the self path fill everything else exactly, and anything beyond that still fails loudly, including a self-path checkpoint loaded into a plain agent. `save()` stores the maps' optimizer, and `checkpoint_has_self_skip()` tells the two kinds of checkpoint apart.
+    - **`main_runner_warehouse.py`:** passes `gnn.self_skip` and reports it on the `edges` line. **`benchmark_flowrra.build_agent`:** builds each deploy arm with or without the self path, from its checkpoint. **`config_warehouse.py`:** `gnn.self_skip`, default False.
+    - **`test_self_skip.py`** (new):
+      1. Building it draws nothing from the global generator, and the other layers are identical.
+      2. At zero, the Q-values, per-head values and Learner logits are identical.
+      3. A warm start from a plain checkpoint loads every other weight and both optimizers' states exactly, with the self path at zero and the output identical.
+      4. The first update leaves the main path identical, and both kinds of map leave zero.
+      5. A self-path checkpoint round-trips, and fails loudly in a plain agent.
+      6. In real FLOWRRA steps with the conv encoder, it learns with finite losses and moves off zero.
+      7. deploy's builder builds each kind correctly.
+    - **The dry run:** D is B plus `--set gnn.self_skip=True`, run beside a repeat of B (B2, unchanged) as a yardstick for run-to-run noise: two identical runs on one GPU are not bit for bit the same. D against B and B2, by episode.
+    - **Rohit's machine, 14 October:** `test_self_skip.py`, `test_learner_router.py`, `test_learner_head.py` and `test_next_state.py` all ALL PASS. D and B2 started at 22:28 IST. The logs confirmed:
+      - D: five `--set` lines, `self_skip=True`, and "has no self path: everything else loaded exactly; the self path starts at zero".
+      - B2: four `--set` lines, `self_skip=False`, and no `[Agent]` line (ladder5 matches exactly).
+
+    **Results, dry runs D and B2 (15 October).** Small map only, 12 episodes, seed 0, warm from ladder5, the next-state fix on, scale 5 → 1. Means over the route-off episodes (4–12), with D's paired wins against B2:
+
+      | Measure | D (self path) | B2 (repeat of B) | B | D better than B2 |
+      | --- | --- | --- | --- | --- |
+      | Lead time | **65.1** | 132.7 | 133 | 9 of 9 |
+      | Guard stops | **188** | 406 | 496 | 7 of 9 |
+      | Learner, live (router line) | **98.3%** | 73.6% | 74.3% | 9 of 9 |
+      | Learner, training batches | 99.5% | 81.3% | – | 9 of 9 |
+      | Chosen moves differ from the route | **28.0%** | 42.4% | 44.5% | 9 of 9 |
+      | Heads alone differ from the route | 49.6% | 51.9% | 54.5% | 6 of 9 |
+      | Delivered (of 80) | 77.3 | 75.0 | 76 | 7 of 9 |
+      | L3 | 4.8 (one day of 20, ep 11) | 3.8 | 4.8 | 4 of 9 |
+      | Near misses | 51 (one day of 174, ep 12) | 54 | 29 | 5 of 9 |
+      | Collisions | 0 | 0 | 0 | – |
+      | Safety value / loss | −0.249 / 0.0019 | −0.230 / 0.0017 | −0.229 / 0.0017 | value lower 9 of 9 |
+      | At scale 1.0 (eps 10–12), lead time | 47 / 120 / 50 | 84 / 158 / 95 | – | 3 of 3 |
+
+      - **The noise yardstick holds:** B2 and B agree on lead time (133 against 133) and the Learner (74%), with the heads about 3 points apart. Every D gap above is several times that.
+      - **The blur was the limit.** The Learner was already 92–98% right in the shadow episodes (1–3), against its 72–78% ceiling in every earlier small-map run. With its own encoding beside the mixed summary, it reads the route's move in crowds.
+      - **An accurate Learner, through the nudge, halves the small map's lead time and guard stops,** into the route's own range: the route-on warm-up days (1–3) ran at 29–70 in both arms, and D's route-off days at 41–76, with one day of 120 (fleet sizes differ by day, so this is a range, not a paired figure). The gain shows most at the floor of 1.0 (episodes 10–12).
+      - **The heads alone barely moved** (49.6% against 51.9%, 6 of 9). The Q heads have the new path too, but their targets are still value targets; 12 episodes did not teach them the route. So the gain is carried by the Learner's nudge, and **the floor of 1.0 at deploy is essential**: with the nudge at 0, D would drive about as B does.
+      - **Safety:** no collisions; near misses and L3 level on average, each with one spike day. The safety value sat slightly lower in D on all 9 days (−0.249 against −0.230), a small drift to watch in run 10 (run 9's P4 failed on the same drift). The efficiency value was higher in D (0.86–0.98 against 0.73–0.85) and its loss lower.
+      - **Decided (15 October): adopt the self path.** Run 10 keeps the `--set gnn.self_skip=True` line.
+
+    **Next steps (written 14 October; step 1 done 15 October, above):**
+    1. ~~**Read D and B2.**~~ Done: adopt the self path.
+    2. **Agree the predictions, then run 10** (`ladder_run6`), about 9 hours, with the self path.
+
+       **Run 10 started 15 October, 00:56 IST (19:26 UTC on the machine), 80 episodes; the six predictions below agreed by Rohit as drafted.** 80 rather than 60: the schedule scales with length (warm-up 6.25%, floor tail 18.75%), so 80 keeps run 9's shape (5 warm-up, fade, last 15 at the floor), a tail of 15 sees each of the 8 map-and-fleet pairs about twice, and the heads need time. The log confirmed five `--set` lines, `next_state_edge_features=True | next_state_adjacency=choice | self_skip=True` on the edges line, and "has no self path: everything else loaded exactly; the self path starts at zero".
+
+       **Predictions (proposed and agreed 15 October, before the run).** "Last 15" is episodes 66–80, route off at the floor of 1.0; run 9's figures are in entry 42.
+
+       | # | Prediction | Fails if |
+       | --- | --- | --- |
+       | 1 | The Learner reads the route on both maps | live agreement in the last 15 below 95% on the small map or 97% on the large |
+       | 2 | The chosen moves follow the route | chosen moves differ on more than 35% of small-map or 20% of large-map clear moves (last 15) |
+       | 3 | The small map is fixed | small-map lead time in the last 15 is not at least 40% below run 9's last 15; the large map's is worse than run 9's |
+       | 4 | Safety holds | any collision trend, or near misses or L3 in the last 15 above run 9's last 15 (mean and median) |
+       | 5 | The safety value is steady | the safety value leaves −0.10 to −0.20, or its loss climbs over the last 30 episodes (D sat slightly lower than B2) |
+       | 6 | The heads learn the clear with the self path (the open question, allowed to fail) | small-map heads still differ on more than 45% of clear moves in the last 15 |
+
+       Command:
+
+       ```
+       nohup python -u main_runner_warehouse.py --seed 0 --maps 25_5_2_5_2_1,50_20_5_10_5_2 --scens-dir all_scens_v5 --episodes 80 --agent-sets 15,25,40,60 --max-steps 800 --resume ladder_run5/flowrra_curriculum.pth --set training.learner.router.scale_start=5.0 --set training.learner.router.scale_end=1.0 --set gnn.next_state_adjacency=choice --set gnn.next_state_edge_features=True --set gnn.self_skip=True --out ladder_run6 > ladder_run6.log 2>&1 &
+       ```
+
+       The 15-robot set follows the overfit check (entry 42, step 5). The warm-up switches after episode 5, since ladder5's Learner passes 80% on the small map.
+    3. **The order-leak fix, before run 10's frozen tests.** Seed failure, debris and people draws from the episode, the step and the robot (or the debris spot), so every arm meets the same events on the same day. Then check that the ladder4 and RULES replays still match among themselves; they will no longer match full8's rows, because the days change.
+    4. **Run 10's graduation:** clean and full, all three arms in one invocation each.
+       - ladder6 `:noroute` against ladder4 (route on) and RULES, by 3 of 5 plus the safety gate.
+       - **Set `training.learner.router.scale_end` to 1.0 in the config before deploying.** deploy_eval reads the floor from there, and run 10's design keeps it.
+       - The `--check` repeat on the first instance.
+       - Also a 15-robot clean test.
+    5. **If the small map still lags:** cause 2, charging a robot for the waiting it causes others (a reward change), designed and dry-run like the others.
+    6. **Carried:**
+       - trace the worst near-miss day (small map, 40 robots, seed 4);
+       - the no-work-exit throughput refinement;
+       - the capacity test with the top-up book;
+       - item 5's deploy-time conditions (realistic failures, technicians, batteries);
+       - the destination and boundary planner ideas;
+       - a separate `start_off` router option, if a later run wants no warm-up.
 
 **Next.**
 

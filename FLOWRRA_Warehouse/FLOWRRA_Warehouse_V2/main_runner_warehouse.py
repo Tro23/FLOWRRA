@@ -4,6 +4,7 @@ main_runner_Warehouse.py
 Complete training and benchmarking pipeline for FLOWRRA in a discrete 3D warehouse.
 Handles data ingestion (Nodes, Edges, Missions), GNN training loops, and metric tracking.
 """
+import ast
 import time
 import logging
 import sys
@@ -408,7 +409,32 @@ def main():
     ap.add_argument("--out", default="checkpoints")
     ap.add_argument("--target-sync", type=int, default=1000,
                     help="target-net sync period in GRADIENT STEPS, not episodes")
+    ap.add_argument("--set", action="append", default=[], metavar="KEY.PATH=VALUE",
+                    help="override one config value for this run only, e.g. "
+                         "--set gnn.next_state_adjacency=choice --set "
+                         "training.learner.router.scale_start=5.0 (repeatable). The key must "
+                         "already exist, so a typo fails loudly; the value is read as a Python "
+                         "literal (True, 5.0, 3) or else kept as text. Lets side-by-side runs "
+                         "differ without editing config_warehouse.py between launches.")
     args = ap.parse_args()
+    for _item in args.set:
+        _path, _eq, _raw = _item.partition("=")
+        if not _eq or not _path:
+            raise SystemExit(f"--set {_item!r}: expected KEY.PATH=VALUE")
+        try:
+            _val = ast.literal_eval(_raw)
+        except (ValueError, SyntaxError):
+            _val = _raw
+        _d, _keys = CONFIG, _path.split(".")
+        for _k in _keys[:-1]:
+            if not isinstance(_d.get(_k), dict):
+                raise SystemExit(f"--set {_path}: no config section {_k!r}")
+            _d = _d[_k]
+        if _keys[-1] not in _d:
+            raise SystemExit(f"--set {_path}: no such key (typo?)")
+        _old = _d[_keys[-1]]
+        _d[_keys[-1]] = _val
+        logger.info(f"--set {_path} = {_val!r} (config file: {_old!r})")
 
     rng = random.Random(args.seed)
     np.random.seed(args.seed)
@@ -467,7 +493,9 @@ def main():
         _edim += 6                     # 3c pair relations ride after the base edges
     logger.info(f"edges: {_edim} per connection | pair_relations="
                 f"{bool(_lad.get('enabled') and _lad.get('pair_relations'))} | "
-                f"next_state_edge_features={bool(CONFIG['gnn'].get('next_state_edge_features', False))}")
+                f"next_state_edge_features={bool(CONFIG['gnn'].get('next_state_edge_features', False))} | "
+                f"next_state_adjacency={CONFIG['gnn'].get('next_state_adjacency', 'manhattan')} | "
+                f"self_skip={bool(CONFIG['gnn'].get('self_skip', False))}")
     logger.info(
         f"flags | encoder={_enc} output_mode={_omode} edge_dim={_edim} "
         f"adjacency={CONFIG['proximity'].get('adjacency_metric')} "
@@ -503,6 +531,9 @@ def main():
         learner_beta_scale=float(_lrn.get("beta_scale", 1.0)),
         learner_gap_window=int(_lrn.get("gap_window", 5000)),
         learner_gap_min=int(_lrn.get("gap_min", 200)),
+        # The self path (build log entry 43): each head also reads the fleet's
+        # own encoding beside the trunk's mixed summary; starts at zero.
+        self_skip=bool(CONFIG["gnn"].get("self_skip", False)),
         train_recovery=not bool(((CONFIG.get("conflict", {}) or {}).get("ladder", {}) or {}).get("enabled", False)),
         dropout=CONFIG["gnn"]["dropout"], lr=CONFIG["gnn"]["learning_rate"],
         gamma=CONFIG["training"]["gamma"],

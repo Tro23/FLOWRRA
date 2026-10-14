@@ -1,0 +1,633 @@
+nohup: ignoring input
+2026-10-14 10:54:48,640 - Warehouse_Runner - INFO - 50_20_5_10_5_2: 27000 nodes, 10 scenarios, goal bank 400 -- precomputing BFS maps...
+2026-10-14 10:54:57,331 - Warehouse_Runner - INFO - 50_20_5_10_5_2: cached in 8.8s
+[Core] Derived per-map bounds (59.0, 114.0, 54.0) (CONFIG fallback was (50.0, 50.0, 10.0)).
+[Core] Stream: 10 floor(s) on axis Z, 120 dock(s) (12 per floor), 27000/27000 cells reach a dock.
+[Core] Spawned 25 discrete fleets into the warehouse.
+[Core] Optimal 1:1 assignment: 25/25 goals assigned, 0 fleets unassigned, 0 contested.
+[Bench] Agent loaded (input_dim=1239, encoder=conv, edge_dim=4, learner=on beta=0.0 nudge=prob beta_mode=gap router scale 0.0) from ladder_run5/flowrra_curriculum.pth
+[diag] ladder_run5/flowrra_curriculum.pth | 3 instances | route off | epsilon 0.015
+[Core] Derived per-map bounds (59.0, 114.0, 54.0) (CONFIG fallback was (50.0, 50.0, 10.0)).
+[Core] Stream: 10 floor(s) on axis Z, 120 dock(s) (12 per floor), 27000/27000 cells reach a dock.
+[Core] Spawned 25 discrete fleets into the warehouse.
+[Core] Optimal 1:1 assignment: 25/25 goals assigned, 0 fleets unassigned, 0 contested.
+[Stream] Delivery #1 (of 25 orders so far): fleet 19 at 208015, 5 steps into its life; heading to dock 208799. 🔥
+[Stream] Delivery #2 (of 26 orders so far): fleet 11 at 338068, 9 steps into its life; heading to dock 338069. 🔥
+[Stream] Fleet 11 left the floor at dock 338069 (life 1 ended after 12 steps; 24 on the floor).
+[Stream] Fleet 11#2 entered at dock 338069, heading for 189905 (26 orders issued so far).
+[Stream] Delivery #3 (of 26 orders so far): fleet 9 at 83552, 13 steps into its life; heading to dock 82859. 🔥
+[Stream] Delivery #4 (of 27 orders so far): fleet 8 at 248409, 15 steps into its life; heading to dock 248401. 🔥
+[Stream] Delivery #5 (of 27 orders so far): fleet 7 at 335527, 17 steps into its life; heading to dock 336300. 🔥
+[Stream] Delivery #6 (of 27 orders so far): fleet 13 at 6722, 19 steps into its life; heading to dock 6840. 🔥
+[Stream] Delivery #7 (of 28 orders so far): fleet 1 at 290816, 21 steps into its life; heading to dock 291599. 🔥
+[Stream] Delivery #8 (of 28 orders so far): fleet 6 at 334197, 23 steps into its life; heading to dock 334739. 🔥
+[Stream] Delivery #9 (of 28 orders so far): fleet 14 at 46806, 23 steps into its life; heading to dock 46500. 🔥
+[Stream] Delivery #10 (of 28 orders so far): fleet 17 at 295253, 25 steps into its life; heading to dock 295019. 🔥
+[Stream] Delivery #11 (of 28 orders so far): fleet 2 at 127197, 27 steps into its life; heading to dock 127739. 🔥
+[Stream] Delivery #12 (of 29 orders so far): fleet 16 at 210242, 33 steps into its life; heading to dock 210360. 🔥
+[Stream] Delivery #13 (of 29 orders so far): fleet 22 at 124257, 33 steps into its life; heading to dock 124259. 🔥
+[Stream] Delivery #14 (of 29 orders so far): fleet 18 at 336425, 35 steps into its life; heading to dock 336300. 🔥
+[Stream] Delivery #15 (of 29 orders so far): fleet 24 at 292013, 35 steps into its life; heading to dock 291599. 🔥
+[Stream] Delivery #16 (of 30 orders so far): fleet 3 at 376736, 37 steps into its life; heading to dock 376139. 🔥
+[Stream] Delivery #17 (of 30 orders so far): fleet 10 at 296102, 37 steps into its life; heading to dock 296640. 🔥
+[Stream] Delivery #18 (of 30 orders so far): fleet 21 at 87530, 37 steps into its life; heading to dock 88019. 🔥
+[Stream] Delivery #19 (of 30 orders so far): fleet 5 at 270185, 41 steps into its life; heading to dock 250080. 🔥
+[Stream] Delivery #20 (of 30 orders so far): fleet 25 at 378474, 41 steps into its life; heading to dock 377819. 🔥
+[Stream] Fleet 22 left the floor at dock 124259 (life 1 ended after 44 steps; 24 on the floor).
+[Stream] Fleet 22#2 entered at dock 124259, heading for 83552 (31 orders issued so far).
+[Stream] Delivery #21 (of 31 orders so far): fleet 4 at 292014, 46 steps into its life; heading to dock 291599. 🔥
+[Stream] Delivery #22 (of 32 orders so far): fleet 12 at 250860, 55 steps into its life; heading to dock 250080. 🔥
+[Stream] Delivery #23 (of 33 orders so far): fleet 15 at 319253, 61 steps into its life; heading to dock 332999. 🔥
+[Stream] Fleet 13 left the floor at dock 6840 (life 1 ended after 67 steps; 24 on the floor).
+[Stream] Fleet 13#2 entered at dock 6840, heading for 295945 (34 orders issued so far).
+[Stream] Fleet 19 left the floor at dock 208799 (life 1 ended after 80 steps; 24 on the floor).
+[Stream] Fleet 19#2 entered at dock 208799, heading for 319253 (36 orders issued so far).
+[Stream] Fleet 16 left the floor at dock 210360 (life 1 ended after 84 steps; 24 on the floor).
+[Stream] Fleet 16#2 entered at dock 210360, heading for 258905 (36 orders issued so far).
+[Stream] Fleet 6 left the floor at dock 334739 (life 1 ended after 85 steps; 24 on the floor).
+[Stream] Fleet 6#2 entered at dock 334739, heading for 65753 (36 orders issued so far).
+[Stream] Delivery #24 (of 36 orders so far): fleet 23 at 124379, 85 steps into its life; heading to dock 124259. 🔥
+[Stream] Fleet 17 left the floor at dock 295019 (life 1 ended after 87 steps; 24 on the floor).
+[Stream] Fleet 17#2 entered at dock 295019, heading for 336425 (37 orders issued so far).
+[Stream] Fleet 23 left the floor at dock 124259 (life 1 ended after 89 steps; 24 on the floor).
+[Stream] Fleet 23#2 entered at dock 124259, heading for 111173 (37 orders issued so far).
+[Stream] Fleet 2 left the floor at dock 127739 (life 1 ended after 90 steps; 24 on the floor).
+[Stream] Fleet 2#2 entered at dock 127739, heading for 127197 (37 orders issued so far).
+[Stream] Fleet 14 left the floor at dock 46500 (life 1 ended after 96 steps; 24 on the floor).
+[Stream] Fleet 14#2 entered at dock 46500, heading for 293705 (38 orders issued so far).
+[Stream] Fleet 1 left the floor at dock 291599 (life 1 ended after 99 steps; 24 on the floor).
+[Stream] Fleet 1#2 entered at dock 289801, heading for 305766 (38 orders issued so far).
+[Stream] Delivery #25 (of 40 orders so far): fleet 20 at 254884, 109 steps into its life; heading to dock 255240. 🔥
+[Stream] Fleet 10 left the floor at dock 296640 (life 1 ended after 111 steps; 24 on the floor).
+[Stream] Fleet 10#2 entered at dock 296640, heading for 336638 (40 orders issued so far).
+[Stream] Fleet 21 left the floor at dock 88019 (life 1 ended after 113 steps; 24 on the floor).
+[Stream] Fleet 21#2 entered at dock 88019, heading for 259674 (40 orders issued so far).
+[Stream] Delivery #26 (of 40 orders so far): fleet 2#2 at 127197, 23 steps into its life; heading to dock 127739. 🔥
+[Stream] Fleet 25 left the floor at dock 377819 (life 1 ended after 116 steps; 24 on the floor).
+[Stream] Fleet 25#2 entered at dock 377819, heading for 331378 (41 orders issued so far).
+[Stream] Delivery #27 (of 41 orders so far): fleet 16#2 at 258905, 34 steps into its life; heading to dock 251760. 🔥
+[Stream] Fleet 12 left the floor at dock 250080 (life 1 ended after 123 steps; 24 on the floor).
+[Stream] Fleet 12#2 entered at dock 248430, heading for 292383 (42 orders issued so far).
+[Stream] Fleet 8 left the floor at dock 248401 (life 1 ended after 126 steps; 24 on the floor).
+[Stream] Fleet 8#2 entered at dock 248401, heading for 1321 (42 orders issued so far).
+[Stream] Delivery #28 (of 42 orders so far): fleet 23#2 at 111173, 39 steps into its life; heading to dock 124259. 🔥
+[Stream] Fleet 5 left the floor at dock 250080 (life 1 ended after 131 steps; 24 on the floor).
+[Stream] Fleet 5#2 entered at dock 250080, heading for 3065 (43 orders issued so far).
+[Stream] Fleet 3 left the floor at dock 376139 (life 1 ended after 133 steps; 24 on the floor).
+[Stream] Fleet 3#2 entered at dock 376139, heading for 293574 (43 orders issued so far).
+[Stream] Fleet 9 left the floor at dock 82859 (life 1 ended after 136 steps; 24 on the floor).
+[Stream] Fleet 9#2 entered at dock 82859, heading for 86062 (44 orders issued so far).
+[Stream] Fleet 18 left the floor at dock 336300 (life 1 ended after 146 steps; 24 on the floor).
+[Stream] Fleet 18#2 entered at dock 331201, heading for 210979 (45 orders issued so far).
+[Stream] Fleet 15 left the floor at dock 332999 (life 1 ended after 148 steps; 24 on the floor).
+[Stream] Fleet 4 left the floor at dock 291599 (life 1 ended after 152 steps; 23 on the floor).
+[Stream] Fleet 15#2 entered at dock 332999, heading for 373322 (46 orders issued so far).
+[Stream] Fleet 7 left the floor at dock 336300 (life 1 ended after 153 steps; 23 on the floor).
+[Stream] Fleet 4#2 entered at dock 289801, heading for 250377 (47 orders issued so far).
+[Stream] Fleet 7#2 entered at dock 336300, heading for 86336 (48 orders issued so far).
+[Stream] Delivery #29 (of 48 orders so far): fleet 19#2 at 319253, 87 steps into its life; heading to dock 332999. 🔥
+[Stream] Fleet 20 left the floor at dock 255240 (life 1 ended after 173 steps; 24 on the floor).
+[Stream] Fleet 20#2 entered at dock 255240, heading for 1983 (49 orders issued so far).
+[Stream] Fleet 2#2 left the floor at dock 127739 (life 2 ended after 85 steps; 24 on the floor).
+[Stream] Delivery #30 (of 49 orders so far): fleet 3#2 at 293574, 42 steps into its life; heading to dock 293339. 🔥
+[Stream] Fleet 16#2 left the floor at dock 251760 (life 2 ended after 95 steps; 23 on the floor).
+[Stream] Fleet 2#3 entered at dock 127739, heading for 88920 (50 orders issued so far).
+[Stream] Delivery #31 (of 50 orders so far): fleet 22#2 at 83552, 143 steps into its life; heading to dock 82859. 🔥
+[Stream] Delivery #32 (of 50 orders so far): fleet 1#2 at 305766, 88 steps into its life; heading to dock 291480. 🔥
+[Stream] Fleet 16#3 entered at dock 251760, heading for 328985 (51 orders issued so far).
+[Stream] Delivery #33 (of 52 orders so far): fleet 21#2 at 259674, 87 steps into its life; heading to dock 251939. 🔥
+[Stream] Fleet 23#2 left the floor at dock 165659 (life 2 ended after 124 steps; 24 on the floor).
+[Stream] Fleet 23#3 entered at dock 165659, heading for 333775 (54 orders issued so far).
+[Stream] Fleet 24 left the floor at dock 291599 (life 1 ended after 215 steps; 24 on the floor).
+[Stream] Fleet 24#2 entered at dock 291599, heading for 305766 (54 orders issued so far).
+[Stream] Delivery #34 (of 55 orders so far): fleet 6#2 at 65753, 133 steps into its life; heading to dock 44939. 🔥
+[Stream] Delivery #35 (of 55 orders so far): fleet 14#2 at 293705, 123 steps into its life; heading to dock 293160. 🔥
+[Stream] Fleet 19#2 left the floor at dock 332999 (life 2 ended after 146 steps; 24 on the floor).
+[Stream] Fleet 19#3 entered at dock 332999, heading for 25793 (56 orders issued so far).
+[Stream] Fleet 3#2 left the floor at dock 293339 (life 2 ended after 101 steps; 24 on the floor).
+[Stream] Fleet 3#3 entered at dock 293339, heading for 212464 (57 orders issued so far).
+[Stream] Delivery #36 (of 57 orders so far): fleet 17#2 at 336425, 148 steps into its life; heading to dock 336300. 🔥
+[Stream] Delivery #37 (of 58 orders so far): fleet 10#2 at 336638, 135 steps into its life; heading to dock 336419. 🔥
+[Stream] Delivery #38 (of 60 orders so far): fleet 8#2 at 1321, 132 steps into its life; heading to dock 1680. 🔥
+[Stream] Delivery #39 (of 60 orders so far): fleet 5#2 at 3065, 128 steps into its life; heading to dock 3360. 🔥
+[Stream] Fleet 6#2 left the floor at dock 44939 (life 2 ended after 195 steps; 24 on the floor).
+[Stream] Fleet 6#3 entered at dock 44939, heading for 100565 (63 orders issued so far).
+[Stream] Fleet 21#2 left the floor at dock 251939 (life 2 ended after 169 steps; 24 on the floor).
+[Stream] Fleet 21#3 entered at dock 251939, heading for 376944 (63 orders issued so far).
+[Stream] Fleet 1#2 left the floor at dock 250080 (life 2 ended after 190 steps; 24 on the floor).
+[Stream] Fleet 1#3 entered at dock 250080, heading for 167044 (64 orders issued so far).
+[Stream] Fleet 22#2 left the floor at dock 82859 (life 2 ended after 262 steps; 24 on the floor).
+[Stream] Fleet 22#3 entered at dock 82859, heading for 84978 (67 orders issued so far).
+[Stream] Fleet 8#2 left the floor at dock 1680 (life 2 ended after 186 steps; 24 on the floor).
+[Stream] Fleet 8#3 entered at dock 1680, heading for 83178 (68 orders issued so far).
+[Stream] Delivery #40 (of 68 orders so far): fleet 15#2 at 373322, 164 steps into its life; heading to dock 372601. 🔥
+[Stream] Delivery #41 (of 68 orders so far): fleet 25#2 at 331378, 201 steps into its life; heading to dock 331259. 🔥
+[Stream] Fleet 5#2 left the floor at dock 3360 (life 2 ended after 188 steps; 24 on the floor).
+[Stream] Fleet 5#3 entered at dock 3360, heading for 130202 (69 orders issued so far).
+[Stream] Delivery #42 (of 69 orders so far): fleet 9#2 at 86062, 181 steps into its life; heading to dock 86160. 🔥
+[Stream] Delivery #43 (of 69 orders so far): fleet 12#2 at 292383, 198 steps into its life; heading to dock 293160. 🔥
+[Stream] Delivery #44 (of 70 orders so far): fleet 1#3 at 167044, 43 steps into its life; heading to dock 167280. 🔥
+[Stream] Fleet 17#2 left the floor at dock 336300 (life 2 ended after 248 steps; 24 on the floor).
+[Stream] Fleet 17#3 entered at dock 336300, heading for 336425 (71 orders issued so far).
+[Stream] Delivery #45 (of 71 orders so far): fleet 24#2 at 305766, 123 steps into its life; heading to dock 291480. 🔥
+[Stream] Fleet 10#2 left the floor at dock 336419 (life 2 ended after 228 steps; 24 on the floor).
+[Stream] Fleet 10#3 entered at dock 336419, heading for 337365 (71 orders issued so far).
+[Stream] Delivery #46 (of 73 orders so far): fleet 17#3 at 336425, 19 steps into its life; heading to dock 336300. 🔥
+[Stream] Fleet 14#2 left the floor at dock 293160 (life 2 ended after 261 steps; 24 on the floor).
+[Stream] Fleet 14#3 entered at dock 289801, heading for 331378 (74 orders issued so far).
+[Stream] Delivery #47 (of 74 orders so far): fleet 18#2 at 210979, 213 steps into its life; heading to dock 210360. 🔥
+[Stream] Delivery #48 (of 74 orders so far): fleet 13#2 at 295945, 294 steps into its life; heading to dock 296640. 🔥
+[Stream] Fleet 25#2 left the floor at dock 331259 (life 2 ended after 248 steps; 24 on the floor).
+[Stream] Fleet 25#3 entered at dock 331259, heading for 124434 (75 orders issued so far).
+[Stream] Fleet 15#2 left the floor at dock 372601 (life 2 ended after 231 steps; 24 on the floor).
+[Stream] Fleet 15#3 entered at dock 372601, heading for 374786 (77 orders issued so far).
+[Stream] Fleet 1#3 left the floor at dock 167280 (life 3 ended after 101 steps; 24 on the floor).
+[Stream] Fleet 1#4 entered at dock 167280, heading for 127821 (78 orders issued so far).
+[Stream] Delivery #49 (of 78 orders so far): fleet 4#2 at 250377, 232 steps into its life; heading to dock 250199. 🔥
+[Stream] Delivery #50 (of 79 orders so far): fleet 16#3 at 328985, 208 steps into its life; heading to dock 336300. 🔥
+[Stream] Delivery #51 (of 80 orders so far): fleet 10#3 at 337365, 62 steps into its life; heading to dock 338098. 🔥
+[Stream] Delivery #52 (of 80 orders so far): fleet 23#3 at 333775, 189 steps into its life; heading to dock 332999. 🔥
+[Stream] Fleet 12#2 left the floor at dock 293160 (life 2 ended after 282 steps; 24 on the floor).
+[Stream] Fleet 12#3 entered at dock 293160, heading for 3609 (80 orders issued so far).
+[Stream] Delivery #53 (of 80 orders so far): fleet 7#2 at 86336, 242 steps into its life; heading to dock 86339. 🔥
+[Stream] Fleet 24#2 left the floor at dock 291480 (life 2 ended after 195 steps; 24 on the floor).
+[Stream] Fleet 24#3 entered at dock 291480, heading for 331857 (80 orders issued so far).
+[Stream] Delivery #54 (of 80 orders so far): fleet 8#3 at 83178, 104 steps into its life; heading to dock 82801. 🔥
+[Stream] Delivery #55 (of 80 orders so far): fleet 21#3 at 376944, 135 steps into its life; heading to dock 377700. 🔥
+[Stream] Fleet 9#2 left the floor at dock 86160 (life 2 ended after 285 steps; 24 on the floor).
+[Stream] Fleet 9#3 entered at dock 86160, heading for 89101 (80 orders issued so far).
+[Stream] Delivery #56 (of 80 orders so far): fleet 11#2 at 189905, 415 steps into its life; heading to dock 168960. 🔥
+[Stream] Fleet 4#2 left the floor at dock 250199 (life 2 ended after 285 steps; 24 on the floor).
+[Stream] Fleet 4#3 entered at dock 250199, heading for 84653 (80 orders issued so far).
+[Stream] Delivery #57 (of 80 orders so far): fleet 19#3 at 25793, 218 steps into its life; heading to dock 5219. 🔥
+[Stream] Fleet 17#3 left the floor at dock 336300 (life 3 ended after 112 steps; 24 on the floor).
+[Stream] Fleet 17#4 entered at dock 331201, heading for 14934 (80 orders issued so far).
+[Stream] Delivery #58 (of 80 orders so far): fleet 3#3 at 212464, 219 steps into its life; heading to dock 212100. 🔥
+[Stream] Delivery #59 (of 80 orders so far): fleet 6#3 at 100565, 178 steps into its life; heading to dock 86160. 🔥
+[Stream] Delivery #60 (of 80 orders so far): fleet 22#3 at 84978, 156 steps into its life; heading to dock 84480. 🔥
+[Stream] Fleet 7#2 left the floor at dock 86339 (life 2 ended after 299 steps; 24 on the floor).
+[Stream] Fleet 7#3 entered at dock 86339, heading for 126956 (80 orders issued so far).
+[Stream] Fleet 13#2 left the floor at dock 296640 (life 2 ended after 412 steps; 24 on the floor).
+[Stream] Fleet 23#3 left the floor at dock 332999 (life 3 ended after 266 steps; 23 on the floor).
+[Stream] Fleet 13#3 entered at dock 296640, heading for 172449 (80 orders issued so far).
+[Stream] Fleet 23#4 entered at dock 332999, heading for 293574 (80 orders issued so far).
+[Stream] Delivery #61 (of 80 orders so far): fleet 2#3 at 88920, 300 steps into its life; heading to dock 89640. 🔥
+[Stream] Delivery #62 (of 80 orders so far): fleet 25#3 at 124434, 119 steps into its life; heading to dock 124259. 🔥
+[Stream] Delivery #63 (of 80 orders so far): fleet 20#2 at 1983, 314 steps into its life; heading to dock 1680. 🔥
+[Stream] Fleet 11#2 left the floor at dock 168960 (life 2 ended after 479 steps; 24 on the floor).
+[Stream] Fleet 11#3 entered at dock 165601, heading for 172141 (80 orders issued so far).
+[Stream] Fleet 10#3 left the floor at dock 338098 (life 3 ended after 154 steps; 24 on the floor).
+[Stream] Fleet 10#4 entered at dock 338098, heading for 379132 (80 orders issued so far).
+[Stream] Delivery #64 (of 80 orders so far): fleet 5#3 at 130202, 177 steps into its life; heading to dock 131040. 🔥
+[Stream] Delivery #65 (of 80 orders so far): fleet 15#3 at 374786, 121 steps into its life; heading to dock 374280. 🔥
+[Stream] Fleet 19#3 left the floor at dock 5219 (life 3 ended after 281 steps; 24 on the floor).
+[Stream] Fleet 19#4 entered at dock 5219, heading for 130437 (80 orders issued so far).
+[Stream] Fleet 16#3 left the floor at dock 336300 (life 3 ended after 319 steps; 24 on the floor).
+[Stream] Fleet 16#4 entered at dock 336300, heading for 172452 (80 orders issued so far).
+[Stream] Fleet 3#3 left the floor at dock 212100 (life 3 ended after 280 steps; 24 on the floor).
+[Stream] Fleet 3#4 entered at dock 212100, heading for 294177 (80 orders issued so far).
+[Stream] Delivery #66 (of 80 orders so far): fleet 7#3 at 126956, 51 steps into its life; heading to dock 127739. 🔥
+[Stream] Delivery #67 (of 80 orders so far): fleet 9#3 at 89101, 101 steps into its life; heading to dock 89640. 🔥
+[Stream] Fleet 2#3 left the floor at dock 89640 (life 3 ended after 346 steps; 24 on the floor).
+[Stream] Delivery #68 (of 80 orders so far): fleet 10#4 at 379132, 35 steps into its life; heading to dock 379498. 🔥
+[Stream] Fleet 21#3 left the floor at dock 377700 (life 3 ended after 250 steps; 23 on the floor).
+[Stream] Delivery #69 (of 80 orders so far): fleet 14#3 at 331378, 175 steps into its life; heading to dock 331259. 🔥
+[Stream] Fleet 18#2 left the floor at dock 127560 (life 2 ended after 387 steps; 22 on the floor).
+[Stream] Fleet 20#2 left the floor at dock 1680 (life 2 ended after 370 steps; 21 on the floor).
+[Stream] Fleet 6#3 left the floor at dock 86160 (life 3 ended after 264 steps; 20 on the floor).
+[Stream] Fleet 8#3 left the floor at dock 82801 (life 3 ended after 232 steps; 19 on the floor).
+[Stream] Fleet 25#3 left the floor at dock 165659 (life 3 ended after 180 steps; 18 on the floor).
+[Stream] Delivery #70 (of 80 orders so far): fleet 13#3 at 172449, 66 steps into its life; heading to dock 172440. 🔥
+[Stream] Delivery #71 (of 80 orders so far): fleet 4#3 at 84653, 103 steps into its life; heading to dock 84599. 🔥
+[Stream] Delivery #72 (of 80 orders so far): fleet 23#4 at 293574, 87 steps into its life; heading to dock 293339. 🔥
+[Stream] Fleet 5#3 left the floor at dock 131040 (life 3 ended after 249 steps; 17 on the floor).
+[Stream] Delivery #73 (of 80 orders so far): fleet 24#3 at 331857, 164 steps into its life; heading to dock 331259. 🔥
+[Stream] Fleet 14#3 left the floor at dock 331259 (life 3 ended after 222 steps; 16 on the floor).
+[Stream] Fleet 9#3 left the floor at dock 89640 (life 3 ended after 163 steps; 15 on the floor).
+[Stream] Fleet 7#3 left the floor at dock 127739 (life 3 ended after 123 steps; 14 on the floor).
+[Stream] Delivery #74 (of 80 orders so far): fleet 19#4 at 130437, 85 steps into its life; heading to dock 131098. 🔥
+[Stream] Fleet 22#3 left the floor at dock 84480 (life 3 ended after 288 steps; 13 on the floor).
+[Stream] Fleet 10#4 left the floor at dock 379498 (life 4 ended after 101 steps; 12 on the floor).
+[Stream] Delivery #75 (of 80 orders so far): fleet 12#3 at 3609, 195 steps into its life; heading to dock 3360. 🔥
+[Stream] Fleet 4#3 left the floor at dock 84599 (life 3 ended after 158 steps; 11 on the floor).
+[Stream] Fleet 13#3 left the floor at dock 172440 (life 3 ended after 128 steps; 10 on the floor).
+[Stream] Fleet 15#3 left the floor at dock 374280 (life 3 ended after 229 steps; 9 on the floor).
+[Stream] Fleet 23#4 left the floor at dock 293339 (life 4 ended after 145 steps; 8 on the floor).
+[Stream] Delivery #76 (of 80 orders so far): fleet 1#4 at 127821, 235 steps into its life; heading to dock 127560. 🔥
+[Stream] Fleet 24#3 left the floor at dock 331259 (life 3 ended after 229 steps; 7 on the floor).
+[Stream] Delivery #77 (of 80 orders so far): fleet 16#4 at 172452, 133 steps into its life; heading to dock 172440. 🔥
+[Stream] Fleet 19#4 left the floor at dock 131098 (life 4 ended after 150 steps; 6 on the floor).
+[Stream] Fleet 12#3 left the floor at dock 3360 (life 3 ended after 261 steps; 5 on the floor).
+[Stream] Delivery #78 (of 80 orders so far): fleet 3#4 at 294177, 166 steps into its life; heading to dock 293339. 🔥
+[Stream] Delivery #79 (of 80 orders so far): fleet 17#4 at 14934, 243 steps into its life; heading to dock 1799. 🔥
+[Stream] Fleet 16#4 left the floor at dock 172440 (life 4 ended after 197 steps; 4 on the floor).
+[Stream] Delivery #80 (of 80 orders so far): fleet 11#3 at 172141, 219 steps into its life; heading to dock 172440. 🔥
+[diag] 1/3 | 50_20_5_10_5_2 k=25 seed=0 | delivered 80 | lead 148.0 | 14918 robot-steps in the clear | 73.4s
+[Core] Derived per-map bounds (59.0, 114.0, 54.0) (CONFIG fallback was (50.0, 50.0, 10.0)).
+[Core] Stream: 10 floor(s) on axis Z, 120 dock(s) (12 per floor), 27000/27000 cells reach a dock.
+[Core] Spawned 40 discrete fleets into the warehouse.
+[Core] Optimal 1:1 assignment: 40/40 goals assigned, 0 fleets unassigned, 0 contested.
+[Stream] Delivery #1 (of 40 orders so far): fleet 19 at 208015, 5 steps into its life; heading to dock 208799. 🔥
+[Stream] Delivery #2 (of 41 orders so far): fleet 1 at 298193, 9 steps into its life; heading to dock 291599. 🔥
+[Stream] Delivery #3 (of 41 orders so far): fleet 11 at 338068, 9 steps into its life; heading to dock 338069. 🔥
+[Stream] Fleet 11 left the floor at dock 338069 (life 1 ended after 12 steps; 39 on the floor).
+[Stream] Fleet 11#2 entered at dock 338069, heading for 98454 (41 orders issued so far).
+[Stream] Delivery #4 (of 41 orders so far): fleet 9 at 83552, 13 steps into its life; heading to dock 82859. 🔥
+[Stream] Delivery #5 (of 41 orders so far): fleet 33 at 1086, 13 steps into its life; heading to dock 1680. 🔥
+[Stream] Delivery #6 (of 41 orders so far): fleet 8 at 248409, 15 steps into its life; heading to dock 248401. 🔥
+[Stream] Delivery #7 (of 41 orders so far): fleet 27 at 5998, 15 steps into its life; heading to dock 5219. 🔥
+[Stream] Delivery #8 (of 41 orders so far): fleet 7 at 335527, 17 steps into its life; heading to dock 336300. 🔥
+[Stream] Delivery #9 (of 41 orders so far): fleet 13 at 6722, 17 steps into its life; heading to dock 6840. 🔥
+[Stream] Delivery #10 (of 42 orders so far): fleet 6 at 334197, 23 steps into its life; heading to dock 334739. 🔥
+[Stream] Delivery #11 (of 42 orders so far): fleet 10 at 337621, 23 steps into its life; heading to dock 338040. 🔥
+[Stream] Delivery #12 (of 42 orders so far): fleet 2 at 127197, 25 steps into its life; heading to dock 127739. 🔥
+[Stream] Delivery #13 (of 42 orders so far): fleet 15 at 290816, 26 steps into its life; heading to dock 291599. 🔥
+[Stream] Delivery #14 (of 42 orders so far): fleet 17 at 295253, 27 steps into its life; heading to dock 295019. 🔥
+[Stream] Delivery #15 (of 43 orders so far): fleet 26 at 212464, 29 steps into its life; heading to dock 212100. 🔥
+[Stream] Delivery #16 (of 43 orders so far): fleet 36 at 319253, 29 steps into its life; heading to dock 332999. 🔥
+[Stream] Delivery #17 (of 43 orders so far): fleet 16 at 210242, 31 steps into its life; heading to dock 210360. 🔥
+[Stream] Delivery #18 (of 43 orders so far): fleet 39 at 89321, 31 steps into its life; heading to dock 89698. 🔥
+[Stream] Delivery #19 (of 43 orders so far): fleet 22 at 124257, 34 steps into its life; heading to dock 124259. 🔥
+[Stream] Delivery #20 (of 43 orders so far): fleet 18 at 336425, 35 steps into its life; heading to dock 336300. 🔥
+[Stream] Delivery #21 (of 43 orders so far): fleet 28 at 41698, 35 steps into its life; heading to dock 41459. 🔥
+[Stream] Delivery #22 (of 43 orders so far): fleet 3 at 376736, 37 steps into its life; heading to dock 376139. 🔥
+[Stream] Delivery #23 (of 43 orders so far): fleet 31 at 88240, 37 steps into its life; heading to dock 88019. 🔥
+[Stream] Delivery #24 (of 44 orders so far): fleet 5 at 270185, 39 steps into its life; heading to dock 250080. 🔥
+[Stream] Delivery #25 (of 44 orders so far): fleet 21 at 87530, 39 steps into its life; heading to dock 88019. 🔥
+[Stream] Delivery #26 (of 44 orders so far): fleet 34 at 334735, 39 steps into its life; heading to dock 334739. 🔥
+[Stream] Delivery #27 (of 44 orders so far): fleet 24 at 292014, 40 steps into its life; heading to dock 291599. 🔥
+[Stream] Delivery #28 (of 44 orders so far): fleet 25 at 378474, 40 steps into its life; heading to dock 377819. 🔥
+[Stream] Delivery #29 (of 44 orders so far): fleet 29 at 88256, 40 steps into its life; heading to dock 88019. 🔥
+[Stream] Fleet 22 left the floor at dock 124259 (life 1 ended after 49 steps; 39 on the floor).
+[Stream] Fleet 22#2 entered at dock 124259, heading for 334197 (45 orders issued so far).
+[Stream] Delivery #30 (of 46 orders so far): fleet 35 at 334260, 62 steps into its life; heading to dock 334560. 🔥
+[Stream] Fleet 13 left the floor at dock 6840 (life 1 ended after 65 steps; 39 on the floor).
+[Stream] Fleet 13#2 entered at dock 6840, heading for 46562 (46 orders issued so far).
+[Stream] Delivery #31 (of 47 orders so far): fleet 30 at 251225, 69 steps into its life; heading to dock 251760. 🔥
+[Stream] Fleet 35 left the floor at dock 334560 (life 1 ended after 72 steps; 39 on the floor).
+[Stream] Fleet 35#2 entered at dock 334560, heading for 258905 (47 orders issued so far).
+[Stream] Delivery #32 (of 47 orders so far): fleet 40 at 128825, 73 steps into its life; heading to dock 129300. 🔥
+[Stream] Delivery #33 (of 47 orders so far): fleet 14 at 46806, 75 steps into its life; heading to dock 46500. 🔥
+[Stream] Fleet 10 left the floor at dock 338040 (life 1 ended after 79 steps; 39 on the floor).
+[Stream] Fleet 10#2 entered at dock 338040, heading for 130327 (48 orders issued so far).
+[Stream] Delivery #34 (of 48 orders so far): fleet 4 at 292013, 81 steps into its life; heading to dock 291599. 🔥
+[Stream] Fleet 16 left the floor at dock 210360 (life 1 ended after 82 steps; 39 on the floor).
+[Stream] Fleet 16#2 entered at dock 210360, heading for 3609 (48 orders issued so far).
+[Stream] Delivery #35 (of 48 orders so far): fleet 23 at 124379, 82 steps into its life; heading to dock 124259. 🔥
+[Stream] Fleet 19 left the floor at dock 208799 (life 1 ended after 83 steps; 39 on the floor).
+[Stream] Fleet 27 left the floor at dock 5219 (life 1 ended after 83 steps; 38 on the floor).
+[Stream] Fleet 19#2 entered at dock 208799, heading for 56646 (48 orders issued so far).
+[Stream] Fleet 27#2 entered at dock 5219, heading for 378835 (48 orders issued so far).
+[Stream] Fleet 23 left the floor at dock 124259 (life 1 ended after 86 steps; 39 on the floor).
+[Stream] Fleet 28 left the floor at dock 41459 (life 1 ended after 86 steps; 38 on the floor).
+[Stream] Fleet 17 left the floor at dock 295019 (life 1 ended after 87 steps; 37 on the floor).
+[Stream] Delivery #36 (of 48 orders so far): fleet 20 at 296102, 87 steps into its life; heading to dock 296640. 🔥
+[Stream] Fleet 2 left the floor at dock 127739 (life 1 ended after 88 steps; 36 on the floor).
+[Stream] Fleet 23#2 entered at dock 124259, heading for 45399 (49 orders issued so far).
+[Stream] Fleet 26 left the floor at dock 212100 (life 1 ended after 90 steps; 36 on the floor).
+[Stream] Fleet 36 left the floor at dock 332999 (life 1 ended after 90 steps; 35 on the floor).
+[Stream] Fleet 29 left the floor at dock 88019 (life 1 ended after 94 steps; 34 on the floor).
+[Stream] Delivery #37 (of 49 orders so far): fleet 32 at 254884, 94 steps into its life; heading to dock 255240. 🔥
+[Stream] Delivery #38 (of 49 orders so far): fleet 37 at 208559, 94 steps into its life; heading to dock 208799. 🔥
+[Stream] Fleet 33 left the floor at dock 1680 (life 1 ended after 95 steps; 33 on the floor).
+[Stream] Fleet 34 left the floor at dock 334739 (life 1 ended after 95 steps; 32 on the floor).
+[Stream] Fleet 15 left the floor at dock 291599 (life 1 ended after 99 steps; 31 on the floor).
+[Stream] Fleet 28#2 entered at dock 41459, heading for 101694 (50 orders issued so far).
+[Stream] Delivery #39 (of 50 orders so far): fleet 38 at 167285, 99 steps into its life; heading to dock 167280. 🔥
+[Stream] Fleet 6 left the floor at dock 334739 (life 1 ended after 102 steps; 31 on the floor).
+[Stream] Fleet 3 left the floor at dock 376139 (life 1 ended after 104 steps; 30 on the floor).
+[Stream] Fleet 1 left the floor at dock 332999 (life 1 ended after 105 steps; 29 on the floor).
+[Stream] Fleet 17#2 entered at dock 295019, heading for 165977 (51 orders issued so far).
+[Stream] Delivery #40 (of 51 orders so far): fleet 35#2 at 258905, 39 steps into its life; heading to dock 251760. 🔥
+[Stream] Fleet 25 left the floor at dock 377819 (life 1 ended after 112 steps; 29 on the floor).
+[Stream] Fleet 21 left the floor at dock 88019 (life 1 ended after 115 steps; 28 on the floor).
+[Stream] Fleet 2#2 entered at dock 127739, heading for 48273 (52 orders issued so far).
+[Stream] Fleet 5 left the floor at dock 250080 (life 1 ended after 123 steps; 28 on the floor).
+[Stream] Fleet 39 left the floor at dock 89698 (life 1 ended after 124 steps; 27 on the floor).
+[Stream] Fleet 4 left the floor at dock 291599 (life 1 ended after 126 steps; 26 on the floor).
+[Stream] Fleet 8 left the floor at dock 248401 (life 1 ended after 127 steps; 25 on the floor).
+[Stream] Fleet 26#2 entered at dock 212100, heading for 169135 (53 orders issued so far).
+[Stream] Delivery #41 (of 53 orders so far): fleet 12 at 250860, 129 steps into its life; heading to dock 250080. 🔥
+[Stream] Fleet 31 left the floor at dock 46619 (life 1 ended after 135 steps; 25 on the floor).
+[Stream] Fleet 36#2 entered at dock 332999, heading for 207604 (54 orders issued so far).
+[Stream] Fleet 18 left the floor at dock 336300 (life 1 ended after 143 steps; 25 on the floor).
+[Stream] Fleet 14 left the floor at dock 46500 (life 1 ended after 147 steps; 24 on the floor).
+[Stream] Fleet 37 left the floor at dock 208799 (life 1 ended after 149 steps; 23 on the floor).
+[Stream] Fleet 29#2 entered at dock 88019, heading for 200874 (55 orders issued so far).
+[Stream] Fleet 9 left the floor at dock 82859 (life 1 ended after 155 steps; 23 on the floor).
+[Stream] Fleet 20 left the floor at dock 296640 (life 1 ended after 155 steps; 22 on the floor).
+[Stream] Fleet 33#2 entered at dock 1680, heading for 172141 (56 orders issued so far).
+[Stream] Delivery #42 (of 56 orders so far): fleet 13#2 at 46562, 96 steps into its life; heading to dock 46500. 🔥
+[Stream] Fleet 32 left the floor at dock 296640 (life 1 ended after 166 steps; 22 on the floor).
+[Stream] Fleet 34#2 entered at dock 334739, heading for 4686 (57 orders issued so far).
+[Stream] Delivery #43 (of 57 orders so far): fleet 16#2 at 3609, 87 steps into its life; heading to dock 3360. 🔥
+[Stream] Fleet 24 left the floor at dock 291599 (life 1 ended after 170 steps; 22 on the floor).
+[Stream] Fleet 30 left the floor at dock 251760 (life 1 ended after 171 steps; 21 on the floor).
+[Stream] Fleet 7 left the floor at dock 336300 (life 1 ended after 178 steps; 20 on the floor).
+[Stream] Fleet 15#2 entered at dock 291599, heading for 374821 (58 orders issued so far).
+[Stream] Fleet 38 left the floor at dock 167280 (life 1 ended after 181 steps; 20 on the floor).
+[Stream] Fleet 40 left the floor at dock 129300 (life 1 ended after 187 steps; 19 on the floor).
+[Stream] Fleet 6#2 entered at dock 334739, heading for 6722 (59 orders issued so far).
+[Stream] Fleet 3#2 entered at dock 376139, heading for 251311 (60 orders issued so far).
+[Stream] Fleet 12 left the floor at dock 250080 (life 1 ended after 200 steps; 20 on the floor).
+[Stream] Fleet 1#2 entered at dock 332999, heading for 86790 (61 orders issued so far).
+[Stream] Fleet 35#2 left the floor at dock 251760 (life 2 ended after 138 steps; 20 on the floor).
+[Stream] Fleet 13#2 left the floor at dock 46500 (life 2 ended after 147 steps; 19 on the floor).
+[Stream] Fleet 25#2 entered at dock 377819, heading for 88240 (62 orders issued so far).
+[Stream] Fleet 21#2 entered at dock 88019, heading for 254220 (63 orders issued so far).
+[Stream] Delivery #44 (of 63 orders so far): fleet 27#2 at 378835, 155 steps into its life; heading to dock 379498. 🔥
+[Stream] Fleet 5#2 entered at dock 250080, heading for 334735 (64 orders issued so far).
+[Stream] Delivery #45 (of 64 orders so far): fleet 10#2 at 130327, 168 steps into its life; heading to dock 131040. 🔥
+[Stream] Fleet 39#2 entered at dock 89698, heading for 250938 (65 orders issued so far).
+[Stream] Fleet 4#2 entered at dock 291599, heading for 292723 (66 orders issued so far).
+[Stream] Fleet 8#2 entered at dock 248401, heading for 334978 (67 orders issued so far).
+[Stream] Fleet 31#2 entered at dock 46619, heading for 5099 (68 orders issued so far).
+[Stream] Fleet 18#2 entered at dock 336300, heading for 4436 (69 orders issued so far).
+[Stream] Delivery #46 (of 69 orders so far): fleet 19#2 at 56646, 209 steps into its life; heading to dock 43080. 🔥
+[Stream] Fleet 16#2 left the floor at dock 3360 (life 2 ended after 212 steps; 26 on the floor).
+[Stream] Delivery #47 (of 69 orders so far): fleet 23#2 at 45399, 207 steps into its life; heading to dock 44939. 🔥
+[Stream] Fleet 14#2 entered at dock 46500, heading for 46111 (70 orders issued so far).
+[Stream] Fleet 27#2 left the floor at dock 379498 (life 2 ended after 223 steps; 26 on the floor).
+[Stream] Delivery #48 (of 70 orders so far): fleet 26#2 at 169135, 177 steps into its life; heading to dock 169139. 🔥
+[Stream] Delivery #49 (of 70 orders so far): fleet 2#2 at 48273, 189 steps into its life; heading to dock 48269. 🔥
+[Stream] Fleet 37#2 entered at dock 208799, heading for 48273 (71 orders issued so far).
+[Stream] Delivery #50 (of 71 orders so far): fleet 22#2 at 334197, 263 steps into its life; heading to dock 334739. 🔥
+[Stream] Delivery #51 (of 71 orders so far): fleet 28#2 at 101694, 215 steps into its life; heading to dock 88019. 🔥
+[Stream] Delivery #52 (of 71 orders so far): fleet 31#2 at 5099, 35 steps into its life; heading to dock 5219. 🔥
+[Stream] Fleet 2#2 left the floor at dock 48269 (life 2 ended after 198 steps; 26 on the floor).
+[Stream] Fleet 9#2 entered at dock 82859, heading for 167075 (72 orders issued so far).
+[Stream] Delivery #53 (of 72 orders so far): fleet 11#2 at 98454, 311 steps into its life; heading to dock 84599. 🔥
+[Stream] Delivery #54 (of 72 orders so far): fleet 36#2 at 207604, 184 steps into its life; heading to dock 207001. 🔥
+[Stream] Fleet 10#2 left the floor at dock 172440 (life 2 ended after 250 steps; 26 on the floor).
+[Stream] Fleet 20#2 entered at dock 296640, heading for 378835 (73 orders issued so far).
+[Stream] Fleet 32#2 entered at dock 296640, heading for 301745 (74 orders issued so far).
+[Stream] Fleet 24#2 entered at dock 291599, heading for 336638 (75 orders issued so far).
+[Stream] Delivery #55 (of 75 orders so far): fleet 29#2 at 200874, 203 steps into its life; heading to dock 207059. 🔥
+[Stream] Delivery #56 (of 75 orders so far): fleet 3#2 at 251311, 155 steps into its life; heading to dock 251939. 🔥
+[Stream] Fleet 19#2 left the floor at dock 43080 (life 2 ended after 275 steps; 28 on the floor).
+[Stream] Fleet 30#2 entered at dock 251760, heading for 296330 (76 orders issued so far).
+[Stream] Fleet 31#2 left the floor at dock 5219 (life 2 ended after 81 steps; 28 on the floor).
+[Stream] Fleet 26#2 left the floor at dock 169139 (life 2 ended after 235 steps; 27 on the floor).
+[Stream] Delivery #57 (of 76 orders so far): fleet 15#2 at 374821, 189 steps into its life; heading to dock 374280. 🔥
+[Stream] Fleet 7#2 entered at dock 336300, heading for 130437 (77 orders issued so far).
+[Stream] Fleet 28#2 left the floor at dock 88019 (life 2 ended after 274 steps; 27 on the floor).
+[Stream] Fleet 22#2 left the floor at dock 334739 (life 2 ended after 325 steps; 26 on the floor).
+[Stream] Fleet 38#2 entered at dock 167280, heading for 3258 (78 orders issued so far).
+[Stream] Delivery #58 (of 78 orders so far): fleet 14#2 at 46111, 80 steps into its life; heading to dock 46619. 🔥
+[Stream] Fleet 11#2 left the floor at dock 84599 (life 2 ended after 369 steps; 26 on the floor).
+[Stream] Delivery #59 (of 78 orders so far): fleet 25#2 at 88240, 169 steps into its life; heading to dock 88019. 🔥
+[Stream] Fleet 40#2 entered at dock 129300, heading for 295945 (79 orders issued so far).
+[Stream] Fleet 36#2 left the floor at dock 207001 (life 2 ended after 251 steps; 26 on the floor).
+[Stream] Fleet 23#2 left the floor at dock 44939 (life 2 ended after 303 steps; 25 on the floor).
+[Stream] Fleet 12#2 entered at dock 250080, heading for 124611 (80 orders issued so far).
+[Stream] Fleet 15#2 left the floor at dock 374280 (life 2 ended after 249 steps; 25 on the floor).
+[Stream] Fleet 29#2 left the floor at dock 207059 (life 2 ended after 280 steps; 24 on the floor).
+[Stream] Delivery #60 (of 80 orders so far): fleet 4#2 at 292723, 171 steps into its life; heading to dock 293339. 🔥
+[Stream] Delivery #61 (of 80 orders so far): fleet 5#2 at 334735, 201 steps into its life; heading to dock 334739. 🔥
+[Stream] Delivery #62 (of 80 orders so far): fleet 9#2 at 167075, 125 steps into its life; heading to dock 167399. 🔥
+[Stream] Delivery #63 (of 80 orders so far): fleet 33#2 at 172141, 294 steps into its life; heading to dock 172440. 🔥
+[Stream] Delivery #64 (of 80 orders so far): fleet 1#2 at 86790, 263 steps into its life; heading to dock 86339. 🔥
+[Stream] Fleet 25#2 left the floor at dock 88019 (life 2 ended after 256 steps; 23 on the floor).
+[Stream] Delivery #65 (of 80 orders so far): fleet 17#2 at 165977, 380 steps into its life; heading to dock 165601. 🔥
+[Stream] Fleet 14#2 left the floor at dock 46619 (life 2 ended after 195 steps; 22 on the floor).
+[Stream] Fleet 5#2 left the floor at dock 334739 (life 2 ended after 257 steps; 21 on the floor).
+[Stream] Fleet 3#2 left the floor at dock 251939 (life 2 ended after 304 steps; 20 on the floor).
+[Stream] Fleet 33#2 left the floor at dock 172440 (life 2 ended after 346 steps; 19 on the floor).
+[Stream] Delivery #66 (of 80 orders so far): fleet 20#2 at 378835, 189 steps into its life; heading to dock 379498. 🔥
+[Stream] Delivery #67 (of 80 orders so far): fleet 32#2 at 301745, 182 steps into its life; heading to dock 294900. 🔥
+[Stream] Delivery #68 (of 80 orders so far): fleet 38#2 at 3258, 142 steps into its life; heading to dock 3360. 🔥
+[Stream] Fleet 4#2 left the floor at dock 293339 (life 2 ended after 263 steps; 18 on the floor).
+[Stream] Delivery #69 (of 80 orders so far): fleet 18#2 at 4436, 239 steps into its life; heading to dock 5219. 🔥
+[Stream] Delivery #70 (of 80 orders so far): fleet 8#2 at 334978, 265 steps into its life; heading to dock 334739. 🔥
+[Stream] Delivery #71 (of 80 orders so far): fleet 24#2 at 336638, 188 steps into its life; heading to dock 336419. 🔥
+[Stream] Fleet 9#2 left the floor at dock 167399 (life 2 ended after 224 steps; 17 on the floor).
+[Stream] Delivery #72 (of 80 orders so far): fleet 21#2 at 254220, 314 steps into its life; heading to dock 253500. 🔥
+[Stream] Delivery #73 (of 80 orders so far): fleet 39#2 at 250938, 332 steps into its life; heading to dock 251760. 🔥
+[Stream] Fleet 8#2 left the floor at dock 334739 (life 2 ended after 315 steps; 16 on the floor).
+[Stream] Delivery #74 (of 80 orders so far): fleet 7#2 at 130437, 215 steps into its life; heading to dock 131098. 🔥
+[Stream] Fleet 1#2 left the floor at dock 86339 (life 2 ended after 384 steps; 15 on the floor).
+[Stream] Fleet 18#2 left the floor at dock 5219 (life 2 ended after 311 steps; 14 on the floor).
+[Stream] Fleet 38#2 left the floor at dock 3360 (life 2 ended after 223 steps; 13 on the floor).
+[Stream] Fleet 20#2 left the floor at dock 379498 (life 2 ended after 275 steps; 12 on the floor).
+[Stream] Fleet 32#2 left the floor at dock 294900 (life 2 ended after 270 steps; 11 on the floor).
+[Stream] Fleet 21#2 left the floor at dock 253500 (life 2 ended after 381 steps; 10 on the floor).
+[Stream] Delivery #75 (of 80 orders so far): fleet 40#2 at 295945, 222 steps into its life; heading to dock 296640. 🔥
+[Stream] Fleet 17#2 left the floor at dock 165601 (life 2 ended after 504 steps; 9 on the floor).
+[Stream] Delivery #76 (of 80 orders so far): fleet 37#2 at 48273, 315 steps into its life; heading to dock 48269. 🔥
+[Stream] Delivery #77 (of 80 orders so far): fleet 12#2 at 124611, 227 steps into its life; heading to dock 124259. 🔥
+[Stream] Fleet 24#2 left the floor at dock 336419 (life 2 ended after 278 steps; 8 on the floor).
+[Stream] Fleet 37#2 left the floor at dock 48269 (life 2 ended after 324 steps; 7 on the floor).
+[Stream] Fleet 7#2 left the floor at dock 131098 (life 2 ended after 281 steps; 6 on the floor).
+[Stream] Delivery #78 (of 80 orders so far): fleet 30#2 at 296330, 301 steps into its life; heading to dock 296698. 🔥
+[Stream] Fleet 39#2 left the floor at dock 251760 (life 2 ended after 436 steps; 5 on the floor).
+[Stream] Fleet 12#2 left the floor at dock 165659 (life 2 ended after 300 steps; 4 on the floor).
+[Stream] Fleet 40#2 left the floor at dock 296640 (life 2 ended after 341 steps; 3 on the floor).
+[Stream] Fleet 30#2 left the floor at dock 296698 (life 2 ended after 373 steps; 2 on the floor).
+[diag] 2/3 | 50_20_5_10_5_2 k=40 seed=0 | delivered 78 | lead 122.9 | 16371 robot-steps in the clear | 81.1s
+[Core] Derived per-map bounds (59.0, 114.0, 54.0) (CONFIG fallback was (50.0, 50.0, 10.0)).
+[Core] Stream: 10 floor(s) on axis Z, 120 dock(s) (12 per floor), 27000/27000 cells reach a dock.
+[Core] Spawned 60 discrete fleets into the warehouse.
+[Core] Optimal 1:1 assignment: 60/60 goals assigned, 0 fleets unassigned, 0 contested.
+[Stream] Delivery #1 (of 60 orders so far): fleet 11 at 338068, 9 steps into its life; heading to dock 338069. 🔥
+[Stream] Delivery #2 (of 60 orders so far): fleet 49 at 43494, 9 steps into its life; heading to dock 43199. 🔥
+[Stream] Delivery #3 (of 60 orders so far): fleet 1 at 298193, 11 steps into its life; heading to dock 291599. 🔥
+[Stream] Delivery #4 (of 60 orders so far): fleet 52 at 169920, 11 steps into its life; heading to dock 170700. 🔥
+[Stream] Fleet 11 left the floor at dock 338069 (life 1 ended after 12 steps; 59 on the floor).
+[Stream] Delivery #5 (of 60 orders so far): fleet 9 at 83552, 13 steps into its life; heading to dock 82859. 🔥
+[Stream] Delivery #6 (of 60 orders so far): fleet 33 at 1086, 13 steps into its life; heading to dock 1680. 🔥
+[Stream] Delivery #7 (of 60 orders so far): fleet 48 at 84653, 13 steps into its life; heading to dock 84599. 🔥
+[Stream] Delivery #8 (of 60 orders so far): fleet 8 at 248409, 15 steps into its life; heading to dock 248401. 🔥
+[Stream] Delivery #9 (of 60 orders so far): fleet 27 at 5998, 15 steps into its life; heading to dock 5219. 🔥
+[Stream] Fleet 11#2 entered at dock 338069, heading for 212451 (61 orders issued so far).
+[Stream] Delivery #10 (of 61 orders so far): fleet 7 at 335527, 19 steps into its life; heading to dock 336300. 🔥
+[Stream] Delivery #11 (of 61 orders so far): fleet 13 at 6722, 19 steps into its life; heading to dock 6840. 🔥
+[Stream] Delivery #12 (of 61 orders so far): fleet 44 at 87530, 21 steps into its life; heading to dock 88019. 🔥
+[Stream] Delivery #13 (of 61 orders so far): fleet 6 at 334197, 23 steps into its life; heading to dock 334739. 🔥
+[Stream] Delivery #14 (of 61 orders so far): fleet 10 at 337621, 23 steps into its life; heading to dock 338040. 🔥
+[Stream] Delivery #15 (of 61 orders so far): fleet 14 at 46806, 23 steps into its life; heading to dock 46500. 🔥
+[Stream] Delivery #16 (of 61 orders so far): fleet 34 at 266213, 23 steps into its life; heading to dock 251939. 🔥
+[Stream] Delivery #17 (of 61 orders so far): fleet 17 at 295253, 25 steps into its life; heading to dock 295019. 🔥
+[Stream] Delivery #18 (of 61 orders so far): fleet 19 at 208559, 25 steps into its life; heading to dock 208799. 🔥
+[Stream] Delivery #19 (of 61 orders so far): fleet 56 at 130437, 25 steps into its life; heading to dock 131098. 🔥
+[Stream] Delivery #20 (of 61 orders so far): fleet 42 at 270185, 27 steps into its life; heading to dock 250080. 🔥
+[Stream] Delivery #21 (of 61 orders so far): fleet 46 at 208015, 27 steps into its life; heading to dock 208799. 🔥
+[Stream] Delivery #22 (of 61 orders so far): fleet 26 at 212464, 29 steps into its life; heading to dock 212100. 🔥
+[Stream] Delivery #23 (of 61 orders so far): fleet 41 at 65753, 29 steps into its life; heading to dock 44939. 🔥
+[Stream] Delivery #24 (of 61 orders so far): fleet 21 at 128936, 30 steps into its life; heading to dock 129419. 🔥
+[Stream] Delivery #25 (of 61 orders so far): fleet 23 at 111173, 30 steps into its life; heading to dock 124259. 🔥
+[Stream] Delivery #26 (of 61 orders so far): fleet 16 at 210242, 31 steps into its life; heading to dock 210360. 🔥
+[Stream] Delivery #27 (of 61 orders so far): fleet 47 at 167519, 31 steps into its life; heading to dock 167399. 🔥
+[Stream] Delivery #28 (of 61 orders so far): fleet 51 at 127197, 31 steps into its life; heading to dock 127739. 🔥
+[Stream] Delivery #29 (of 61 orders so far): fleet 55 at 44694, 31 steps into its life; heading to dock 44939. 🔥
+[Stream] Delivery #30 (of 61 orders so far): fleet 39 at 89321, 32 steps into its life; heading to dock 89698. 🔥
+[Stream] Delivery #31 (of 61 orders so far): fleet 37 at 249774, 33 steps into its life; heading to dock 250199. 🔥
+[Stream] Delivery #32 (of 61 orders so far): fleet 59 at 309774, 33 steps into its life; heading to dock 296698. 🔥
+[Stream] Delivery #33 (of 61 orders so far): fleet 18 at 336425, 35 steps into its life; heading to dock 336300. 🔥
+[Stream] Delivery #34 (of 61 orders so far): fleet 28 at 41698, 36 steps into its life; heading to dock 41459. 🔥
+[Stream] Delivery #35 (of 61 orders so far): fleet 3 at 376736, 37 steps into its life; heading to dock 376139. 🔥
+[Stream] Delivery #36 (of 61 orders so far): fleet 31 at 88240, 37 steps into its life; heading to dock 88019. 🔥
+[Stream] Delivery #37 (of 62 orders so far): fleet 29 at 88256, 39 steps into its life; heading to dock 88019. 🔥
+[Stream] Delivery #38 (of 62 orders so far): fleet 40 at 128825, 39 steps into its life; heading to dock 129300. 🔥
+[Stream] Delivery #39 (of 62 orders so far): fleet 57 at 168114, 40 steps into its life; heading to dock 167399. 🔥
+[Stream] Delivery #40 (of 62 orders so far): fleet 53 at 130728, 41 steps into its life; heading to dock 131098. 🔥
+[Stream] Delivery #41 (of 62 orders so far): fleet 25 at 378474, 42 steps into its life; heading to dock 377819. 🔥
+[Stream] Delivery #42 (of 62 orders so far): fleet 2 at 85674, 43 steps into its life; heading to dock 86339. 🔥
+[Stream] Delivery #43 (of 62 orders so far): fleet 24 at 292014, 43 steps into its life; heading to dock 291599. 🔥
+[Stream] Delivery #44 (of 62 orders so far): fleet 54 at 130678, 55 steps into its life; heading to dock 131098. 🔥
+[Stream] Delivery #45 (of 63 orders so far): fleet 35 at 334260, 59 steps into its life; heading to dock 334560. 🔥
+[Stream] Delivery #46 (of 63 orders so far): fleet 60 at 2157, 60 steps into its life; heading to dock 1799. 🔥
+[Stream] Delivery #47 (of 63 orders so far): fleet 15 at 290816, 61 steps into its life; heading to dock 291599. 🔥
+[Stream] Fleet 13 left the floor at dock 6840 (life 1 ended after 67 steps; 59 on the floor).
+[Stream] Fleet 13#2 entered at dock 6840, heading for 6177 (63 orders issued so far).
+[Stream] Fleet 48 left the floor at dock 84599 (life 1 ended after 68 steps; 59 on the floor).
+[Stream] Fleet 48#2 entered at dock 84599, heading for 310553 (63 orders issued so far).
+[Stream] Fleet 35 left the floor at dock 334560 (life 1 ended after 69 steps; 59 on the floor).
+[Stream] Delivery #48 (of 63 orders so far): fleet 36 at 319253, 69 steps into its life; heading to dock 332999. 🔥
+[Stream] Delivery #49 (of 63 orders so far): fleet 30 at 251225, 70 steps into its life; heading to dock 251760. 🔥
+[Stream] Delivery #50 (of 63 orders so far): fleet 43 at 124379, 71 steps into its life; heading to dock 124259. 🔥
+[Stream] Delivery #51 (of 63 orders so far): fleet 5 at 346805, 72 steps into its life; heading to dock 332880. 🔥
+[Stream] Delivery #52 (of 63 orders so far): fleet 50 at 250023, 72 steps into its life; heading to dock 250080. 🔥
+[Stream] Fleet 43 left the floor at dock 124259 (life 1 ended after 75 steps; 58 on the floor).
+[Stream] Delivery #53 (of 63 orders so far): fleet 38 at 167285, 77 steps into its life; heading to dock 167280. 🔥
+[Stream] Fleet 10 left the floor at dock 338040 (life 1 ended after 79 steps; 57 on the floor).
+[Stream] Fleet 47 left the floor at dock 167399 (life 1 ended after 79 steps; 56 on the floor).
+[Stream] Fleet 35#2 entered at dock 334560, heading for 295253 (64 orders issued so far).
+[Stream] Delivery #54 (of 64 orders so far): fleet 22 at 124257, 79 steps into its life; heading to dock 124259. 🔥
+[Stream] Fleet 8 left the floor at dock 248401 (life 1 ended after 82 steps; 56 on the floor).
+[Stream] Fleet 16 left the floor at dock 210360 (life 1 ended after 83 steps; 55 on the floor).
+[Stream] Fleet 27 left the floor at dock 5219 (life 1 ended after 83 steps; 54 on the floor).
+[Stream] Delivery #55 (of 64 orders so far): fleet 20 at 296102, 83 steps into its life; heading to dock 296640. 🔥
+[Stream] Fleet 19 left the floor at dock 208799 (life 1 ended after 84 steps; 53 on the floor).
+[Stream] Fleet 22 left the floor at dock 124259 (life 1 ended after 84 steps; 52 on the floor).
+[Stream] Fleet 33 left the floor at dock 1680 (life 1 ended after 85 steps; 51 on the floor).
+[Stream] Fleet 17 left the floor at dock 295019 (life 1 ended after 86 steps; 50 on the floor).
+[Stream] Fleet 28 left the floor at dock 41459 (life 1 ended after 87 steps; 49 on the floor).
+[Stream] Fleet 14 left the floor at dock 46500 (life 1 ended after 88 steps; 48 on the floor).
+[Stream] Delivery #56 (of 64 orders so far): fleet 45 at 334735, 89 steps into its life; heading to dock 334739. 🔥
+[Stream] Fleet 52 left the floor at dock 170700 (life 1 ended after 90 steps; 47 on the floor).
+[Stream] Fleet 55 left the floor at dock 44939 (life 1 ended after 90 steps; 46 on the floor).
+[Stream] Fleet 26 left the floor at dock 212100 (life 1 ended after 91 steps; 45 on the floor).
+[Stream] Fleet 41 left the floor at dock 86339 (life 1 ended after 91 steps; 44 on the floor).
+[Stream] Fleet 21 left the floor at dock 129419 (life 1 ended after 92 steps; 43 on the floor).
+[Stream] Fleet 29 left the floor at dock 88019 (life 1 ended after 93 steps; 42 on the floor).
+[Stream] Fleet 51 left the floor at dock 127739 (life 1 ended after 93 steps; 41 on the floor).
+[Stream] Fleet 34 left the floor at dock 251939 (life 1 ended after 95 steps; 40 on the floor).
+[Stream] Fleet 44 left the floor at dock 88019 (life 1 ended after 96 steps; 39 on the floor).
+[Stream] Fleet 49 left the floor at dock 43199 (life 1 ended after 97 steps; 38 on the floor).
+[Stream] Fleet 43#2 entered at dock 124201, heading for 128104 (65 orders issued so far).
+[Stream] Delivery #57 (of 65 orders so far): fleet 4 at 292013, 102 steps into its life; heading to dock 291599. 🔥
+[Stream] Fleet 3 left the floor at dock 376139 (life 1 ended after 103 steps; 38 on the floor).
+[Stream] Fleet 46 left the floor at dock 208799 (life 1 ended after 105 steps; 37 on the floor).
+[Stream] Delivery #58 (of 65 orders so far): fleet 32 at 254884, 105 steps into its life; heading to dock 255240. 🔥
+[Stream] Fleet 40 left the floor at dock 129300 (life 1 ended after 106 steps; 36 on the floor).
+[Stream] Fleet 37 left the floor at dock 250199 (life 1 ended after 108 steps; 35 on the floor).
+[Stream] Fleet 23 left the floor at dock 124259 (life 1 ended after 110 steps; 34 on the floor).
+[Stream] Fleet 59 left the floor at dock 296698 (life 1 ended after 113 steps; 33 on the floor).
+[Stream] Delivery #59 (of 65 orders so far): fleet 58 at 375840, 113 steps into its life; heading to dock 375960. 🔥
+[Stream] Fleet 25 left the floor at dock 377819 (life 1 ended after 114 steps; 32 on the floor).
+[Stream] Delivery #60 (of 65 orders so far): fleet 12 at 250860, 114 steps into its life; heading to dock 250080. 🔥
+[Stream] Fleet 58 left the floor at dock 375960 (life 1 ended after 117 steps; 31 on the floor).
+[Stream] Fleet 60 left the floor at dock 1799 (life 1 ended after 117 steps; 30 on the floor).
+[Stream] Fleet 6 left the floor at dock 334739 (life 1 ended after 118 steps; 29 on the floor).
+[Stream] Fleet 10#2 entered at dock 338040, heading for 83040 (66 orders issued so far).
+[Stream] Fleet 7 left the floor at dock 336300 (life 1 ended after 122 steps; 29 on the floor).
+[Stream] Fleet 42 left the floor at dock 291480 (life 1 ended after 125 steps; 28 on the floor).
+[Stream] Fleet 1 left the floor at dock 291599 (life 1 ended after 126 steps; 27 on the floor).
+[Stream] Fleet 36 left the floor at dock 332999 (life 1 ended after 128 steps; 26 on the floor).
+[Stream] Fleet 50 left the floor at dock 250080 (life 1 ended after 128 steps; 25 on the floor).
+[Stream] Fleet 9 left the floor at dock 82859 (life 1 ended after 132 steps; 24 on the floor).
+[Stream] Fleet 31 left the floor at dock 46619 (life 1 ended after 137 steps; 23 on the floor).
+[Recovery] Initiating Spatial-Temporal Collapse for 2 fleet(s) [54, 56] (0 nearby warning-zone fleets left undisturbed)...
+[Recovery] Tier 1: Spatial Escape Successful. Moved 54:(59.0, 110.5, 18.0)->(59.0, 109.0, 18.0), 56:(59.0, 113.5, 18.0)->(58.0, 114.0, 18.0)
+[Loop] Integrity manually restored via Spatial-Temporal Recovery.
+[Stream] Fleet 56 left the floor at dock 131098 (life 1 ended after 138 steps; 22 on the floor).
+[Stream] Fleet 57 left the floor at dock 167399 (life 1 ended after 139 steps; 21 on the floor).
+[Stream] Fleet 47#2 entered at dock 167399, heading for 44939 (67 orders issued so far).
+[Stream] Fleet 2 left the floor at dock 86339 (life 1 ended after 145 steps; 21 on the floor).
+[Stream] Fleet 20 left the floor at dock 296640 (life 1 ended after 145 steps; 20 on the floor).
+[Stream] Fleet 45 left the floor at dock 334739 (life 1 ended after 145 steps; 19 on the floor).
+[Stream] Fleet 5 left the floor at dock 332880 (life 1 ended after 148 steps; 18 on the floor).
+[Stream] Fleet 18 left the floor at dock 336300 (life 1 ended after 157 steps; 17 on the floor).
+[Stream] Fleet 8#2 entered at dock 248401, heading for 336595 (68 orders issued so far).
+[Stream] Fleet 24 left the floor at dock 291599 (life 1 ended after 160 steps; 17 on the floor).
+[Stream] Delivery #61 (of 68 orders so far): fleet 11#2 at 212451, 141 steps into its life; heading to dock 212219. 🔥
+[Stream] Fleet 53 left the floor at dock 89698 (life 1 ended after 164 steps; 16 on the floor).
+[Stream] Fleet 32 left the floor at dock 255240 (life 1 ended after 166 steps; 15 on the floor).
+[Stream] Fleet 38 left the floor at dock 167280 (life 1 ended after 167 steps; 14 on the floor).
+[Stream] Fleet 39 left the floor at dock 89698 (life 1 ended after 167 steps; 13 on the floor).
+[Stream] Fleet 4 left the floor at dock 291599 (life 1 ended after 179 steps; 12 on the floor).
+[Stream] Fleet 54 left the floor at dock 131098 (life 1 ended after 179 steps; 11 on the floor).
+[Stream] Fleet 16#2 entered at dock 210360, heading for 141294 (69 orders issued so far).
+[Stream] Fleet 15 left the floor at dock 291599 (life 1 ended after 182 steps; 11 on the floor).
+[Stream] Fleet 30 left the floor at dock 251760 (life 1 ended after 182 steps; 10 on the floor).
+[Stream] Fleet 12 left the floor at dock 250080 (life 1 ended after 183 steps; 9 on the floor).
+[Stream] Fleet 27#2 entered at dock 5219, heading for 401 (70 orders issued so far).
+[Stream] Delivery #62 (of 70 orders so far): fleet 13#2 at 6177, 141 steps into its life; heading to dock 6898. 🔥
+[Stream] Fleet 19#2 entered at dock 208799, heading for 43262 (71 orders issued so far).
+[Stream] Fleet 11#2 left the floor at dock 212219 (life 2 ended after 205 steps; 10 on the floor).
+[Stream] Delivery #63 (of 71 orders so far): fleet 43#2 at 128104, 137 steps into its life; heading to dock 127560. 🔥
+[Stream] Fleet 22#2 entered at dock 124259, heading for 41999 (72 orders issued so far).
+[Stream] Delivery #64 (of 72 orders so far): fleet 48#2 at 310553, 175 steps into its life; heading to dock 289859. 🔥
+[Stream] Fleet 33#2 entered at dock 1680, heading for 295945 (73 orders issued so far).
+[Stream] Delivery #65 (of 73 orders so far): fleet 35#2 at 295253, 191 steps into its life; heading to dock 295019. 🔥
+[Stream] Fleet 13#2 left the floor at dock 6898 (life 2 ended after 209 steps; 11 on the floor).
+[Stream] Fleet 17#2 entered at dock 289801, heading for 165978 (74 orders issued so far).
+[Stream] Delivery #66 (of 74 orders so far): fleet 47#2 at 44939, 155 steps into its life; heading to dock 44939. 🔥
+[Stream] Fleet 47#2 left the floor at dock 44939 (life 2 ended after 156 steps; 11 on the floor).
+[Stream] Fleet 28#2 entered at dock 41459, heading for 331245 (75 orders issued so far).
+[Stream] Fleet 43#2 left the floor at dock 127560 (life 2 ended after 203 steps; 11 on the floor).
+[Stream] Delivery #67 (of 75 orders so far): fleet 16#2 at 141294, 133 steps into its life; heading to dock 127739. 🔥
+[Stream] Fleet 14#2 entered at dock 46500, heading for 305766 (76 orders issued so far).
+[Stream] Fleet 48#2 left the floor at dock 372659 (life 2 ended after 261 steps; 11 on the floor).
+[Stream] Fleet 35#2 left the floor at dock 295019 (life 2 ended after 251 steps; 10 on the floor).
+[Stream] Fleet 52#2 entered at dock 170700, heading for 103133 (77 orders issued so far).
+[Stream] Delivery #68 (of 77 orders so far): fleet 22#2 at 41999, 105 steps into its life; heading to dock 41459. 🔥
+[Stream] Fleet 55#2 entered at dock 44939, heading for 375883 (78 orders issued so far).
+[Stream] Delivery #69 (of 78 orders so far): fleet 17#2 at 165978, 81 steps into its life; heading to dock 165601. 🔥
+[Stream] Fleet 16#2 left the floor at dock 127739 (life 2 ended after 196 steps; 11 on the floor).
+[Stream] Fleet 26#2 entered at dock 212100, heading for 331321 (79 orders issued so far).
+[Stream] Delivery #70 (of 79 orders so far): fleet 19#2 at 43262, 165 steps into its life; heading to dock 43080. 🔥
+[Stream] Delivery #71 (of 79 orders so far): fleet 27#2 at 401, 197 steps into its life; heading to dock 59. 🔥
+[Stream] Fleet 41#2 entered at dock 86339, heading for 331598 (80 orders issued so far).
+[Stream] Fleet 22#2 left the floor at dock 41459 (life 2 ended after 163 steps; 12 on the floor).
+[Stream] Delivery #72 (of 80 orders so far): fleet 28#2 at 331245, 145 steps into its life; heading to dock 331259. 🔥
+[Stream] Fleet 19#2 left the floor at dock 43080 (life 2 ended after 253 steps; 11 on the floor).
+[Stream] Delivery #73 (of 80 orders so far): fleet 8#2 at 336595, 315 steps into its life; heading to dock 336419. 🔥
+[Stream] Fleet 27#2 left the floor at dock 59 (life 2 ended after 286 steps; 10 on the floor).
+[Stream] Fleet 17#2 left the floor at dock 165601 (life 2 ended after 222 steps; 9 on the floor).
+[Stream] Delivery #74 (of 80 orders so far): fleet 14#2 at 305766, 187 steps into its life; heading to dock 291480. 🔥
+[Stream] Delivery #75 (of 80 orders so far): fleet 52#2 at 103133, 174 steps into its life; heading to dock 89698. 🔥
+[Stream] Delivery #76 (of 80 orders so far): fleet 10#2 at 83040, 407 steps into its life; heading to dock 82801. 🔥
+[Stream] Fleet 28#2 left the floor at dock 372659 (life 2 ended after 230 steps; 8 on the floor).
+[Stream] Fleet 8#2 left the floor at dock 336419 (life 2 ended after 373 steps; 7 on the floor).
+[Stream] Fleet 10#2 left the floor at dock 82801 (life 2 ended after 418 steps; 6 on the floor).
+[Stream] Delivery #77 (of 80 orders so far): fleet 33#2 at 295945, 288 steps into its life; heading to dock 296640. 🔥
+[Stream] Fleet 14#2 left the floor at dock 291480 (life 2 ended after 263 steps; 5 on the floor).
+[Stream] Fleet 52#2 left the floor at dock 89698 (life 2 ended after 244 steps; 4 on the floor).
+[Stream] Delivery #78 (of 80 orders so far): fleet 55#2 at 375883, 225 steps into its life; heading to dock 376139. 🔥
+[Stream] Delivery #79 (of 80 orders so far): fleet 26#2 at 331321, 221 steps into its life; heading to dock 331201. 🔥
+[Stream] Fleet 26#2 left the floor at dock 331201 (life 2 ended after 265 steps; 3 on the floor).
+[Stream] Delivery #80 (of 80 orders so far): fleet 41#2 at 331598, 262 steps into its life; heading to dock 331259. 🔥
+[diag] 3/3 | 50_20_5_10_5_2 k=60 seed=0 | delivered 80 | lead 79.9 | 11636 robot-steps in the clear | 65.1s
+
+=== 50_20_5_10_5_2: 42925 robot-steps in the clear
+  overall: Learner on the route 96.0% | heads 76.0%
+     25 robots: n  14918 | Learner  96.6% | heads  78.1%
+     40 robots: n  16371 | Learner  95.5% | heads  74.6%
+     60 robots: n  11636 | Learner  95.7% | heads  75.2%
+  by neighbours in the choice's graph (graph distance):
+       0: n  33341 (77.7%) | Learner  99.8% | heads  80.0%
+       1: n   8034 (18.7%) | Learner  83.2% | heads  63.3%
+       2: n   1384 ( 3.2%) | Learner  78.6% | heads  57.7%
+     3-4: n    166 ( 0.4%) | Learner  85.5% | heads  45.2%
+  by graph distance to the nearest robot:
+      <=4: n   1586 | Learner  77.2% | heads  60.0%
+      4-6: n   1656 | Learner  79.2% | heads  58.0%
+      6-8: n   2830 | Learner  83.2% | heads  65.6%
+     8-10: n   3512 | Learner  86.1% | heads  62.4%
+     none: n  33341 | Learner  99.8% | heads  80.0%   (no robot within the radius)
+  by the route's equally short moves:
+      1 move: n  41014 | Learner  96.1% | heads  75.5%
+    2+ moves: n   1911 | Learner  93.7% | heads  85.8%
+  the next-state mismatch (all robots, every step): neighbours per robot, graph 0.21 against Manhattan 0.31 (phantom +0.10); robots whose neighbour set differs: 9.3%
+  robots in the clear whose stored next state would have had phantom neighbours: 9.3%

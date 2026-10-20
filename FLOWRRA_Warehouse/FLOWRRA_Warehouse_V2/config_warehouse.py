@@ -647,7 +647,7 @@ CONFIG = {
         # Give the stored NEXT state the same edge features as the state the
         # choice was made in (found while building 3c: it kept only the bare
         # mask, so value targets never saw a pairwise number). Off = old storage.
-        "next_state_edge_features": False,
+        "next_state_edge_features": True,
         # Build the stored NEXT state's attention graph the way the choice's was
         # built (build log entry 43, found 14 October). The choice uses graph
         # distance (proximity.adjacency_metric "graph"); the next state, from
@@ -879,7 +879,7 @@ CONFIG = {
                 "warmup_frac": 0.0625,     # 80 episodes: 5; 12 (dry run): 3
                 "tail_frac": 0.1875,       # the last 15 of 80 (2 of 12) at scale_end
                 "scale_start": 3.0,        # at the switch: the Learner wins nearly every clear choice
-                "scale_end": 0.0,          # the teacher disappears; deployment uses this
+                "scale_end": 2.0,          # the teacher disappears; deployment uses this
             },
             "beta": 0.0,                   # the fixed warm start before gap_min gaps: no voice
             "weight": 1.0,

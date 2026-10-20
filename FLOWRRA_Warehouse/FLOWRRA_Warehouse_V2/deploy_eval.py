@@ -18,6 +18,18 @@ WHAT IT ANSWERS
   (install_route_default; build log entry 25). Rules, ladder, holds and the veto
   apply after it, as for every arm.
 
+MAPF BASELINES ON OUR FLOOR (build log entry 44; mapf_drivers.py)
+  --arms ...,RULES,PIBT,RHCR-PP,RHCR-PIBT   (RHCR-*+naive: the naive rescue, once
+  its rule is agreed). The planners from baselines_mapf.py are the drivers; the
+  world (map, book, greedy dispatcher, docks, rescue handover, keyed failures
+  and people) and physical safety (gap, guard, bubbles, direction-aware braking,
+  never into a robot that stays put, people a hard no-go, collision recovery)
+  are the same for every arm. Our brain (route by default, corridor entry,
+  priority, the ladder, livelock escape) is off for a baseline arm only. Rows
+  gain arm_kind, planner_ms_per_step (reported, not charged), and for RHCR
+  planner_replans / planner_offplan; L3 is NaN for a baseline (no ladder).
+  --rhcr-window 20 --rhcr-replan-every 5 (timesteps, one hop each; benchmark_all's).
+
 THE SAME DAY FOR EVERY ARM
   An instance is (map, fleet count, seed). From it come: the scenario file (the
   seed-th file of that map, sorted), the first k fleets of that file, the order
@@ -72,6 +84,10 @@ import core_warehouse
 from core_warehouse import FLOWRRA
 from node_warehouse import precompute_goal_distances_compact
 
+KEYED_DRAWS = True      # --keyed-draws (main sets it); the order-leak fix, entry 43
+RHCR_WINDOW = 20        # --rhcr-window, timesteps (benchmark_all's default)
+RHCR_REPLAN = 5         # --rhcr-replan-every, timesteps (benchmark_all's default)
+
 FAIR_COLS = ["stream_book_fill", "stream_book_lead_mean", "collisions", "ladder_l3_fired",
              "obstacle_near_miss_steps", "orders_per_hour", "guard_stops", "guard_pairs_short"]
 
@@ -96,6 +112,16 @@ def apply_safety_mode(mode: str) -> None:
         sf[k] = on
     CONFIG.setdefault("conflict", {})["route_by_default"] = on
     CONFIG.setdefault("reward_decomposition", {})["presence_charge"] = not on
+
+
+def apply_world(fixes: str, orphans: str) -> None:
+    """Build log entry 44, for every arm alike. fixes "on": safety.node_snap_eps
+    1e-4 and safety.bubble_floor_fix (the float stall and the convoy crawl);
+    "off": the old world. orphans "pickup": errors.orphans_need_pickup."""
+    sf = CONFIG.setdefault("safety", {})
+    sf["node_snap_eps"] = 1e-4 if fixes == "on" else 0.0
+    sf["bubble_floor_fix"] = (fixes == "on")
+    CONFIG.setdefault("errors", {})["orphans_need_pickup"] = (orphans == "pickup")
 
 
 # ----------------------------------------------------------------------------- instances
@@ -207,23 +233,53 @@ def run_one(inst: Dict[str, Any], arm: str, agent, epsilon: float, max_steps: in
     # pin them per instance so every arm draws the same waves, failures and debris.
     core_warehouse._WAVE_EPISODES = s % 1_000_000
     core_warehouse._OBSTACLE_EPISODES = s % 1_000_000
+    # THE ORDER-LEAK FIX (build log entry 43): every failure, wave and people
+    # draw keyed by (instance seed, what, step, who), so arms whose robots
+    # differ still meet the same events wherever their floors allow.
+    CONFIG.setdefault("keyed_draws", {})["seed"] = s if KEYED_DRAWS else None
     # A ":noroute" arm (build log entry 42, the router's graduation): route by
     # default OFF in the env for this arm only -- the network drives the clear.
     _ccfg = CONFIG.setdefault("conflict", {})
     _route_saved = _ccfg.get("route_by_default", False)
     if env_route_off:
         _ccfg["route_by_default"] = False
+    # A MAPF baseline (mapf_drivers.py, build log entry 44): the same world and
+    # physical safety, our brain (route, corridor entry, priority, ladder,
+    # livelock escape) off while its env is built.
+    from mapf_drivers import BASELINE_ARMS, brain_off, make_driver
+    is_base = isinstance(agent, str) and agent in BASELINE_ARMS
+    _brain = brain_off() if is_base else None
+    if _brain is not None:
+        _brain.__enter__()
+    # "+naive" arms: the same rescuer choice, no re-dispatch (errors.naive_rescue).
+    _ecfg = CONFIG.setdefault("errors", {})
+    _naive_saved = _ecfg.get("naive_rescue", False)
+    _ecfg["naive_rescue"] = bool(is_base and agent.endswith("+naive"))
     try:
-        env = FLOWRRA(inst["G"], inst["pos_dict"], inst["missions"], mode="training",
-                      goal_distance_maps=inst["gdm"], shared_pool_mode=True,
-                      goal_pool=dict(inst["goal_pool"]), order_bank=inst["bank"],
-                      order_seed=s, order_floor_window=None)
+        if inst.get("lifelong") is not None:
+            # LIFELONG (kiva_eval.py, Follower's protocol): each fleet's goal
+            # sequence is fixed in advance; on arrival it takes the next one at
+            # once. No order book, no docks, no pool.
+            env = FLOWRRA(inst["G"], inst["pos_dict"], inst["missions"], mode="training",
+                          goal_distance_maps=inst["gdm"], shared_pool_mode=False,
+                          lifelong_goals=inst["lifelong"])
+        else:
+            env = FLOWRRA(inst["G"], inst["pos_dict"], inst["missions"], mode="training",
+                          goal_distance_maps=inst["gdm"], shared_pool_mode=True,
+                          goal_pool=dict(inst["goal_pool"]), order_bank=inst["bank"],
+                          order_seed=s, order_floor_window=None)
     finally:
+        if _brain is not None:
+            _brain.__exit__(None, None, None)
+        _ecfg["naive_rescue"] = _naive_saved
         _ccfg["route_by_default"] = _route_saved
     if agent == "RULES":
         from drive_shortest_path import ShortestPathDriver
         driver = ShortestPathDriver(env, "never", 0.5, 0)
         eps = 0.0                                 # a rules backup does not explore on the job
+    elif is_base:
+        driver = make_driver(agent, env, RHCR_WINDOW, RHCR_REPLAN)
+        eps = 0.0                                 # planners do not explore
     else:
         driver = agent
         eps = epsilon
@@ -262,7 +318,7 @@ def run_one(inst: Dict[str, Any], arm: str, agent, epsilon: float, max_steps: in
            "minutes_to_finish_book": (done / 60.0) if done >= 0 else float("nan")}
     row.update(b)
     keep = ("ladder_", "obstacle_", "stream_", "orders_", "wave_", "incomplete_", "guard_",
-            "router_")
+            "router_", "lifelong_")
     row.update({k: v for k, v in est.items() if k.startswith(keep) and k not in row})
     # Route by default inside the env (conflict.route_by_default, build log
     # entry 29): its own counters, when this arm did not add the outside hook.
@@ -272,6 +328,11 @@ def run_one(inst: Dict[str, Any], arm: str, agent, epsilon: float, max_steps: in
     for k in ("errors_injected", "handovers_completed", "brake_duty_cycle"):
         if k in est:
             row[k] = est[k]
+    row["arm_kind"] = "baseline" if is_base else ("rules" if agent == "RULES" else "network")
+    if is_base:
+        # No ladder runs for a baseline: L3 is not zero, it does not exist.
+        row["ladder_l3_fired"] = float("nan")
+        row.update(driver.planner_stats())
     return row
 
 
@@ -324,10 +385,34 @@ def main():
     ap.add_argument("--safety", choices=["config", "on", "off"], default="config",
                     help="build log entry 29's switches: as in the config, all on, or all off "
                          "(off reproduces the step before them exactly)")
+    ap.add_argument("--keyed-draws", choices=["on", "off"], default="on",
+                    help="on: failures, waves and people keyed per instance, step and robot "
+                         "(the order-leak fix, entry 43); off: the old shared streams, to "
+                         "reproduce CSVs written before the fix")
     ap.add_argument("--check", action="store_true",
                     help="run the first instance of the first arm twice and report whether they match")
+    ap.add_argument("--world-fixes", choices=["on", "off"], default="on",
+                    help="build log entry 44's two physics fixes, for every arm: snap a robot "
+                         "within 0.0001 hops of a node onto it, and a bubble that ends at "
+                         "min_gap does not brake a pair at min_gap or more. off: the old "
+                         "world, to reproduce CSVs written before")
+    ap.add_argument("--assignment", choices=["config", "greedy", "hungarian"], default="config",
+                    help="the spawn-time goal assignment for every arm (CONFIG assignment.mode): "
+                         "config = as the config says (what every earlier run used); greedy = "
+                         "each fleet takes its nearest open goal; hungarian = one optimal match")
+    ap.add_argument("--orphans", choices=["pickup", "book"], default="pickup",
+                    help="pickup: a stranded order can be delivered only after its load is "
+                         "fetched from the dead robot (entry 44, 'handover, not reissue'); "
+                         "book: the old world, where it went back to the book")
+    ap.add_argument("--rhcr-window", type=int, default=20,
+                    help="RHCR-* arms: planning window, timesteps (one hop each)")
+    ap.add_argument("--rhcr-replan-every", type=int, default=5,
+                    help="RHCR-* arms: replan every this many timesteps (and whenever the floor changes)")
     ap.add_argument("--out", default="deploy_eval.csv")
     args = ap.parse_args()
+    global KEYED_DRAWS, RHCR_WINDOW, RHCR_REPLAN
+    KEYED_DRAWS = (args.keyed_draws == "on")
+    RHCR_WINDOW, RHCR_REPLAN = args.rhcr_window, args.rhcr_replan_every
 
     # Conditions: the command line, not the config.
     CONFIG.setdefault("stream", {})["enabled"] = True
@@ -341,6 +426,9 @@ def main():
     # pressure): keep it equal to the steps we actually run.
     CONFIG.setdefault("training", {})["max_steps_per_episode"] = args.max_steps
     apply_safety_mode(args.safety)
+    apply_world(args.world_fixes, args.orphans)
+    if args.assignment != "config":
+        CONFIG.setdefault("assignment", {})["mode"] = args.assignment
 
     from main_runner_warehouse import MapCache
     from benchmark_flowrra import build_agent
@@ -362,9 +450,18 @@ def main():
 
     route_labels = {a.strip() for a in args.route_arms.split(",") if a.strip()}
     arms: List[Tuple[str, Any, bool]] = []
+    from mapf_drivers import baseline_name, BRAIN_OFF, BASELINE_ARMS
+    BASELINE_ARMS_SET = set(BASELINE_ARMS)
     for spec in [a.strip() for a in args.arms.split(",") if a.strip()]:
         if spec.upper() == "RULES":
             arms.append(("RULES", "RULES", False, False))
+            continue
+        base = baseline_name(spec)
+        if base is not None:
+            arms.append((base, base, False, False))
+            print(f"[deploy] arm {base}: MAPF baseline on our floor (mapf_drivers.py)"
+                  + (f", window {args.rhcr_window}, replan every {args.rhcr_replan_every} timesteps"
+                     if base.startswith("RHCR") else ", per step"))
             continue
         label, path = spec.split("=", 1)
         # "label=path:noroute": the env's route by default OFF for this arm
@@ -388,6 +485,21 @@ def main():
           f"{bool(_sf.get('bubbles_by_kind'))}, hops {bool(_sf.get('hops_everywhere'))}, "
           f"route in env {bool((CONFIG.get('conflict') or {}).get('route_by_default'))}, "
           f"route explore {bool((CONFIG.get('conflict') or {}).get('route_explore'))} (training only)")
+    print(f"[deploy] keyed draws {args.keyed_draws} (failures, waves and people keyed per "
+          f"instance, step and robot; entry 43)")
+    _lrn = ((CONFIG.get("training", {}) or {}).get("learner", {}) or {})
+    print(f"[deploy] world fixes {args.world_fixes} (node snap "
+          f"{CONFIG['safety']['node_snap_eps']}, bubble floor fix "
+          f"{CONFIG['safety']['bubble_floor_fix']}) | orphans {args.orphans} "
+          f"(need a pickup: {CONFIG['errors']['orphans_need_pickup']}) | entry 44")
+    print(f"[deploy] assignment {CONFIG['assignment']['mode']} | router floor (scale_end) "
+          f"{(_lrn.get('router', {}) or {}).get('scale_end')} | next_state_edge_features "
+          f"{CONFIG['gnn'].get('next_state_edge_features')} | base_speed "
+          f"{CONFIG['warehouse']['base_speed']}")
+    if any(a[0] in BASELINE_ARMS_SET for a in arms):
+        print("[deploy] baseline arms: our brain OFF ("
+              + ", ".join(".".join(k) + "=" + str(v) for k, v in BRAIN_OFF.items())
+              + "); world and physical safety as above, the same for every arm")
     print(f"[deploy] {len(insts)} instances x {len(arms)} arms | failures={args.failures} "
           f"people={args.people} | book {args.book} over {args.release} steps | "
           f"{args.max_steps} steps | epsilon {args.epsilon} (RULES 0)")

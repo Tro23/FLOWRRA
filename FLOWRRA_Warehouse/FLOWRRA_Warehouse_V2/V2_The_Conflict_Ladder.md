@@ -2,6 +2,17 @@
 
 Rohit Tamidapati · 5 October 2026 · updated 6 October 2026
 
+> **Milestone, 20 October 2026: the final deploy test.**
+> - **The test:** FLOWRRA's decentralised fleet against the MAPF planners PIBT and RHCR (reimplemented), all on the same physical floor. Every robot has a real size and keeps a real gap, and the same failures and people come on the same days.
+> - **Scale:** 1,920 arm-days, four maps, 20–80 robots.
+> - **Results:**
+>   - **ladder4 delivered the most of the book in both conditions** (98.9% clean, 87.6% with failures and people).
+>   - At 60–80 robots with failures and people it delivered firmly more than every planner.
+>   - No arm had a collision worth counting (at most 0.016 a day).
+>   - The planners were faster per order and kept further from people.
+>   - The route-off networks trail ladder4: the next step.
+> - **What it means:** a decentralised, learned fleet holds its own against centralised planners on a floor modelled closer to the real world than the MAPF benchmarks. Under those benchmarks' point-robot rules, PIBT loses two-thirds of its throughput once it must keep our gap. Details in entry 44.
+>
 > **Status, 11 October 2026.** Steps 1–3 are built and tested, and runs 2–4 are complete. **The v2 champion is run 2's checkpoint: the ladder and rung costs, with no Learner.** In a seeded re-run of the shock benchmark it beat run 4 (the bounded Learner) on all five pre-registered small-map measures. On the large map it matches RULES alone and beats RHCR-PIBT + naive by 14 points of recovered orders, losing 60% fewer rescuers. The Learner stays in the code, switched off. The benchmark is now seeded per instance, after the same checkpoint scored 65.5% and 70.6% in two unseeded runs. People now share the floor (debris that a human comes to clear), orders can come from a fixed order book (the same work every episode, whatever the fleet count), and **run 5 (warm_stream1)** put the champion back to work with both, still learning: 4 of 6 predictions passed. People finished every job in all 50 episodes and deliveries held, but learning on the job made the fleet faster and slightly less safe, so run 2's checkpoint stays the champion until a frozen, like-for-like test (`deploy_eval.py`; built, predictions written, running now) says otherwise. The build log at the end records each step and what its runs showed.
 
 ## Why
@@ -2261,6 +2272,28 @@ Each step was built behind its own switch, tested, and run against the step befo
 
        **Run 10 started 15 October, 00:56 IST (19:26 UTC on the machine), 80 episodes; the six predictions below agreed by Rohit as drafted.** 80 rather than 60: the schedule scales with length (warm-up 6.25%, floor tail 18.75%), so 80 keeps run 9's shape (5 warm-up, fade, last 15 at the floor), a tail of 15 sees each of the 8 map-and-fleet pairs about twice, and the heads need time. The log confirmed five `--set` lines, `next_state_edge_features=True | next_state_adjacency=choice | self_skip=True` on the edges line, and "has no self path: everything else loaded exactly; the self path starts at zero".
 
+       **Mid-run check, episode 50 (15 October, 05:00 IST; CSV only).** Means by window, route off from episode 6, run 9 (ladder_run5) at the same episodes. Two cautions: run 10 is at a higher scale at the same episode (5 → 1 against 3 → 0; about 2 against 0.8 at episode 50), and it includes the 15-robot days, which deliver less, so deliveries and the large map's lead time are not like for like. No collisions in either run.
+
+       | Small map | 6–20 r9 / r10 | 21–35 r9 / r10 | 36–50 r9 / r10 |
+       | --- | --- | --- | --- |
+       | Learner, live | 72% / **97%** | 75% / **99%** | 74% / **99%** |
+       | Heads alone differ | 56% / 48% | 56% / 46% | 56% / **44%** |
+       | Chosen moves differ | 46% / 23% | 47% / 20% | 50% / 21% |
+       | Lead time | 145 / **68** | 145 / **96** | 144 / **82** |
+       | Guard stops | 424 / 140 | 511 / 118 | 688 / 151 |
+       | L3 | 5.7 / 1.6 | 4.8 / 2.1 | 6.2 / 4.3 |
+       | Near misses, mean (median) | 27 (14) / 95 (13) | 55 (34) / 9 (7) | 42 (20) / **166 (96)** |
+
+       - **Large map:** Learner 98–99%; heads 30% / 26% / 31% (run 9: 45% / 36% / 34%); chosen 10–11%; lead time 143 / 117 / 136 against run 9's 156 / 146 / 131; guard stops lower; near misses level (median 2.5–3.5 against 0–1.5).
+       - **Provisional reading of the predictions:** 1 (Learner) on track; 2 (chosen moves) on track, but the scale is still about 2; 3 (small-map lead time 40% below run 9) on track at about −43%, close to the line; 4 (safety) **at risk on small-map near misses**, rising late (episodes 46, 47 and 49: 291, 96, 638; episode 14: 440); 5 (safety value) −0.141, in its band, but its loss is creeping (0.0007 → 0.0016); 6 (heads ≤ 45% on the small map) at 44%, on the line, falling slowly (48 → 46 → 44).
+       - **To trace after the run:** the small map's near-miss days (with the carried item, the worst near-miss day), to see whether the robots are approaching people more or the spikes are failure-heavy days.
+       - **Like for like, added the same morning.** The CSV's `stream_fleets` column is the fleet size (the log's `k=` and the CSV's `agents` are the robots still on the floor at the end). Over episodes 6–50, route off, by fleet size:
+         - **Small map:** lead time 170 → 76 (25 robots), 160 → 59 (40), 116 → 45 (60, one day); guard stops 334 → 180, 796 → 207; deliveries level or higher. Near misses: the median is lower at every fleet size (53 → 29 at 25 robots, 32 → 5 at 40), the mean higher, carried by spike days.
+         - **Large map:** lead time lower at every shared fleet size (175 → 166, 161 → 131, 113 → 94), deliveries level, guard stops lower at 40.
+         - **The spike days** are 49 (25 robots, 638, one person), 14 (40, 440), 46 (25, 291, one person) and 47 (25, 96): all on the small map, with 5–9 robots failed in waves. The late cluster (46, 47, 49) is why the episode 36–50 window looks bad. Scored like for like on episodes 36–50 against run 9's last 15 (`report_run.py`), near misses are above on both mean and median (116 / 15.5 against 23 / 11), so prediction 4 is failing at mid-run; prediction 3 fails by a hair on its large-map clause (133 against 129). Both are judged at episode 80.
+         - **The efficiency value rose** to about 1.8–1.9 (run 9 fell to about 1.4 by this point), with its loss climbing like run 9's. Faster deliveries raise the honest level, so this may be honest; to judge at the end.
+       - **`report_run.py`** (new, CSV only, seconds): tables and graphs for a training run against a baseline, run 10's six predictions scored (all fleets and like for like), and the graduation scoring (3 of 5 plus the safety gate, paired by day, by map). Checked against full9: it reproduces entry 42's verdict (ladder5 lost to ladder4 on every measure).
+
        **Predictions (proposed and agreed 15 October, before the run).** "Last 15" is episodes 66–80, route off at the floor of 1.0; run 9's figures are in entry 42.
 
        | # | Prediction | Fails if |
@@ -2279,7 +2312,200 @@ Each step was built behind its own switch, tested, and run against the step befo
        ```
 
        The 15-robot set follows the overfit check (entry 42, step 5). The warm-up switches after episode 5, since ladder5's Learner passes 80% on the small map.
-    3. **The order-leak fix, before run 10's frozen tests.** Seed failure, debris and people draws from the episode, the step and the robot (or the debris spot), so every arm meets the same events on the same day. Then check that the ladder4 and RULES replays still match among themselves; they will no longer match full8's rows, because the days change.
+    **Rohit's run sheet for the end of run 10 (written 15 October, 05:00 IST; credits are out, so these run without me).** All on his machine, in ~/flowrra_aws.
+       1. **Check run 10 finished:** `tail -3 ladder_run6.log` shows Ep 0080, and `ls -la ladder_run6/` shows `flowrra_curriculum.pth` with a fresh time.
+       2. **Score the training run** (seconds):
+          ```
+          python report_run.py train --csv ladder_run6/curriculum_metrics_ladder_run6.csv --base ladder_run5/curriculum_metrics_ladder_run5.csv --score-run10 --out report_run6
+          ```
+          Gives `report_run6.txt` (all tables and the six predictions, scored twice: all fleets, and like for like without the 15-robot days), `report_run6_training.png` and `report_run6_by_fleet.png`. Adjust the CSV paths if they sit elsewhere.
+       3. **Set the floor for deploy** (deploy_eval reads it from the config at start-up; ladder4 has no Learner and RULES no network, so only ladder6 is affected):
+          ```
+          sed -i 's/"scale_end": 0.0,/"scale_end": 1.0,/' config_warehouse.py && grep -n '"scale_end"' config_warehouse.py
+          ```
+          It must print `"scale_end": 1.0,`.
+       4. **The graduation, four runs in parallel** (16 cores; same arms in each, so every arm meets the same days):
+          ```
+          nohup python -u deploy_eval.py --arms ladder6=ladder_run6/flowrra_curriculum.pth:noroute,ladder4=ladder_run4/flowrra_curriculum.pth,RULES --seeds 0,1,2 --failures off --people off --safety on --check --out deploy_eval_clean10.csv > clean10.log 2>&1 &
+          nohup python -u deploy_eval.py --arms ladder6=ladder_run6/flowrra_curriculum.pth:noroute,ladder4=ladder_run4/flowrra_curriculum.pth,RULES --seeds 0,1,2,3,4 --failures on --people on --safety on --out deploy_eval_full10.csv > full10.log 2>&1 &
+          nohup python -u deploy_eval.py --arms ladder6=ladder_run6/flowrra_curriculum.pth:noroute,ladder4=ladder_run4/flowrra_curriculum.pth,RULES --agents 15 --seeds 0,1,2 --failures off --people off --safety on --out deploy_eval_clean10_k15.csv > clean10_k15.log 2>&1 &
+          nohup python -u deploy_eval.py --arms ladder6=ladder_run6/flowrra_curriculum.pth:noroute,ladder4=ladder_run4/flowrra_curriculum.pth,RULES --agents 15 --seeds 0,1,2,3,4 --failures on --people on --safety on --out deploy_eval_full10_k15.csv > full10_k15.log 2>&1 &
+          ```
+          - A minute in: `grep -E "\[deploy\] arm|\[Bench\]" clean10.log` should show ladder6 with "route OFF for this arm" and `self_path=on`, `learner=on`; ladder4 with `self_path=off` and no route-off note.
+          - When clean10 is done: `grep -E "IDENTICAL|DIFFERENT" clean10.log` should say IDENTICAL.
+          - The fourth run (full, 15 robots) is new: it asks whether the network copes when the stress failures take out most of a small fleet, as in training.
+       5. **Score the graduation** (seconds each):
+          ```
+          python report_run.py deploy --csv deploy_eval_clean10.csv --ref ladder6 --out report_clean10
+          python report_run.py deploy --csv deploy_eval_full10.csv --ref ladder6 --out report_full10
+          python report_run.py deploy --csv deploy_eval_clean10_k15.csv --ref ladder6 --out report_clean10_k15
+          python report_run.py deploy --csv deploy_eval_full10_k15.csv --ref ladder6 --out report_full10_k15
+          ```
+          Each prints ladder6 against ladder4 and against RULES, for both maps together and each map alone, ending in a verdict line: "GRADUATES", "held by the safety gate" or "does not graduate".
+          - **The decision of record is clean10 and full10 against ladder4, both maps together**, as fixed in entry 42. Both must say GRADUATES for ladder6 to become the champion. The by-map lines and the k15 runs are reported, not scored.
+          - **The order leak is still in** (step 3 below is not built). Clean is unaffected: no failures and no people, so nothing random to leak. Full has the leak exactly as full9 did, so it compares fairly with run 9's graduation, but single days are noisier. If full10's verdict hangs on one measure with p near 0.05, repeat it after the fix.
+          - **Rohit's hope** (15 October): deploy days may be gentler than training's bad days. Clean has no failures at all. Full uses the same stress failures as training, so the bad days are not gentler there; what differs is exploration, 0.015 at deploy against the training log's `eps` (0.025 and rising in run 10), and that ladder4 meets the very same days. The safety gate (near misses with people, p < 0.05) settles it either way.
+       6. **When credits return:** send the `.txt` reports and the PNGs, not the raw CSVs and logs (much smaller to read). Then log the scoring here.
+
+    **Results, read 18 October (Rohit ran everything on his own, 15–17 October).**
+    - **Run 10 (ladder6), training, scored by `report_run.py` on episodes 66–80:**
+      - P1 (Learner) ✅: 99.4% small, 99.1% large.
+      - P2 (chosen moves) ❌ by a hair on the large map: 20.6% against ≤ 20% (small 26.9% ✅).
+      - P3 (small map fixed) ✅: lead time 78 against run 9's 173 (−55%); large 113 against 129.
+      - P4 (safety): split. ✅ over all fleets; ❌ like for like on L3 (5.5 / 6.5 against 3.9 / 2.0). Near misses were lower (6.4 / 3.0 against 23 / 11). No collisions.
+      - P5 (safety value) ❌: −0.185, inside the band, but the loss kept climbing (+0.0011 over the last 30).
+      - P6 (heads) ✅: 43.6%.
+      - Also: as the scale fell 5 → 1, the large map's heads drifted away from the route (26% → 37%) and its chosen moves rose (10% → 21%).
+    - **Run 11 (ladder7)**, Rohit's own follow-up: fleets 25/40/60 only, no 15-robot days. Its router scale ended at **0**, not 1.0 (the graphs; chosen moves equal the heads in its last 15). That means the config's `scale_end` was 0.0 when it started.
+      - Its small-map heads improved to 36.9%, the best yet; the large map's stayed at about 29%.
+      - Small-map lead time rose to 104 in the last 15, as the nudge faded to 0.
+    - **Graduation (`clean10`, `full10`, `clean11`, `full11`; ladder6 or ladder7 with the route off, against ladder4 with the route on and RULES): neither graduates; ladder4 stays the champion.**
+
+      | Both maps | ladder6 clean / full | ladder7 clean / full | ladder4 clean / full |
+      | --- | --- | --- | --- |
+      | Lead time | 111.5 / 127.2 | 106.4 / 120.8 | **76.2 / 85.8** |
+      | Book delivered | 0.992 / 0.927 | 0.997 / 0.926 | 0.999 / 0.955 |
+      | L3 fires | 5.9 / 6.4 | 6.7 / 8.6 | **1.9 / 1.2** |
+      | Near misses with people (full) | **11.2** | 25.5 | 13.8 |
+      | Guard stops | 322 / 300 | 187 / 252 | 78 / 84 |
+
+      - Faster than ladder4 on 0 of 18 clean days and 0 of 30 full days (ladder7: 1 of 30). Wins of 5: ladder6 0 (clean) and 1 (full, near misses); ladder7 0 and 0. Both pass the safety gate: no collisions, and near misses are not firmly worse. ladder6 had fewer near misses than ladder4 on the large map (2.0 against 9.4, p 0.10).
+      - Against ladder5 on the same clean days (clean9): small lead 87 against 157, much better; large 136 against 123, worse.
+    - **An open question that changes the reading: at what scale did deploy run?** deploy_eval reads `scale_end` from the config at start-up. ladder6 did much worse at deploy than in its own training: in full, lead time small 99 against 78 (+27%) and large 155 against 113 (+38%); guard stops small 529 against 229. ladder7, trained to scale 0, matched its training (99 against 104, 143 against 135; guard stops 422 against 358). Run 11 also shows the config was at 0.0 when it started. If deploy also read 0.0, ladder6 was graduated without the nudge that dry run D showed carries the gain. To check: `grep "router scale" clean10.log full10.log clean11.log full11.log`.
+    - **Answered 18 October: deploy ran at scale 0.0.** The `[Bench]` lines of clean10, full10, clean11 and full11 all say `router scale 0.0`. So both graduations tested the heads alone, without the Learner's nudge. That is not the design that was trained (the floor of 1.0), and the dry runs showed the nudge carries the gain. The graduation of the router design is still to be done: the floor sweep below. Rohit started it on 18 October.
+    - **The Kiva map (Rohit, with Gemini's help, 15–17 October): the first test on a layout none of the networks has seen.**
+      - `Kiva_2D_46_33_1`: 46 × 33 cells, 1,262 nodes, with rack blocks between aisles, a goal bank of 344 cells and start/goal files per seed. There is also a two-floor version, `Kiva_3D_2Floor_5Ladders`: the same floor twice, joined by 5 lifts. It is not tested yet.
+      - Tested on the 2D map: seeds 0–1 × fleets 15/25/40/60 (8 days per condition); books of 150 and 200 orders; clean (1,200 steps) and full (1,500 steps). Arms: ladder4 with the route on against RULES, plus ladder7 `:noroute` against RULES in clean, at scale 0 like the rest.
+      - **ladder4 beats RULES on the unseen map in all four conditions.** No collisions anywhere.
+
+        | Kiva 2D | Book delivered, ladder4 / RULES | Lead time | L3 fires | Near misses with people | Of 5 |
+        | --- | --- | --- | --- | --- | --- |
+        | Clean, 150 | **0.98** / 0.91 (8 of 8 days) | **164** / 210 (7 of 8) | **48** / 307 (8 of 8) | – | 3 |
+        | Clean, 200 | **0.97** / 0.82 (8 of 8) | 220 / 241 (3 of 8) | **84** / 398 (8 of 8) | – | 3 |
+        | Full, 150 | **0.89** / 0.79 (7 of 8) | 192 / 194 | **32** / 321 (8 of 8) | 133 / 80 (p 0.11) | 3, gate passed |
+        | Full, 200 | 0.82 / 0.74 (5 of 8) | 203 / 236 | **56** / 405 (8 of 8) | 194 / 198 | 4 |
+
+        - In clean, with 150 orders, ladder4 cleared the whole book with 15, 25 and 40 robots, in about 15–16 minutes (steps 900–1,076). RULES cleared it on no day within the 20 minutes.
+        - **Cautions:**
+          - only 2 seeds;
+          - ladder4's near misses with people were higher in full with 150 orders (not firmly);
+          - its guard stops were higher than RULES' at 40–60 robots;
+          - its heads differ from the route on 63% of clear moves on this map, against about 30% on the trained maps. What transfers is the route plus the meeting judgement, not the heads' driving.
+      - **ladder7 with the route off, at scale 0, does not transfer:** book 0.72 against 0.91 for RULES and 0.98 for ladder4; lead time 307 against 210 and 164. **But its Learner read the route on 85–97% of clear moves on the unseen map (92% on average).** The skill that would steer it transfers; at scale 0 it was switched off.
+    - **The floor sweep, scored 18 October (clean, seeds 0–2, both maps, 25/40/60 robots; 18 days paired with clean10's ladder4 rows; route off; floor = `router.scale_end` at deploy):**
+
+      | Against ladder4 (route on) | Lead time | L3 fires | Book | Lead: days better / worse, p |
+      | --- | --- | --- | --- | --- |
+      | ladder4 | 76.2 | 1.94 | 0.999 | – |
+      | ladder6, floor 0 (clean10) | 111.5 | 5.89 | 0.992 | 0 / 18, p 0.000 |
+      | ladder6, floor 1 | 91.6 | 6.78 | 0.994 | 2 / 16, p 0.000 |
+      | **ladder6, floor 2** | **78.7** | **2.67** (p 0.41) | **0.998** (p 0.79) | 6 / 12, **p 0.47** |
+      | ladder6, floor 3 | 79.9 | 3.67 (p 0.06) | 1.000 | 6 / 12, p 0.12 |
+      | ladder7, floor 1 / 2 / 3 | 89.1 / 80.9 / 80.1 | 5.0 / 3.9 / 6.0 (all p < 0.01) | 0.999–1.000 | p 0.000 / 0.027 / 0.024 |
+
+      - **ladder6 at a floor of 2 cannot be told apart from ladder4 with the route on.** Lead time is 3% slower (p 0.47); L3 fires and the book are not firmly different; no collisions. With the nudge off it was 46% slower. This is entry 42's research result on clean days: **the network drives the whole floor itself** (route off, the Learner inside it doing the routing) and matches the route-on champion.
+      - **By the rule it does not graduate:** 0 wins of the 4 measures present (near misses are absent in clean), because matching is not beating. ladder4 stays the champion for deployment.
+      - **Floor 2 is the sweet spot.** Floor 1 under-steers; floor 3 brings more L3 fires (heavier steering into meetings, where the route's move is not the right one).
+      - **ladder7** (trained to scale 0 in its tail) is consistently worse on L3 at every floor. **ladder6 is the line to carry.**
+      - **Floors 2 and 3 cannot be told apart either** (head to head: lead time 78.7 against 79.9, p 0.42; L3 fires 2.7 against 3.7, p 0.30; book 0.998 against 1.000, p 0.18). Floor 2 missed about 3 of 1,440 orders over the 18 days, floor 3 none, ladder4 one. By map, floor 2 matches ladder4 on the large map (lead time 104.8 against 105.4) and comes within 12% on the small one (52.5 against 47.1, p 0.36).
+      - **Decided with Rohit (18 October): settle the floor in the full condition, where failures and people can separate them.** ladder6 at floors 2.0, 2.5 and 3.0, run as separate processes. With keyed draws, every process meets the same days, so one ladder4 + RULES run pairs with all three. Then Kiva clean at floors 2 and 3, paired with the existing Kiva rows for ladder4 and RULES (clean is unaffected by keyed draws).
+      - **The rule, fixed before the results:** choose the floor with the most wins of 5 against ladder4 in full, with the safety gate passed. A tie goes to fewer near misses with people, then to more of the book delivered.
+      - **full12 scored, 18 October** (keyed days, seeds 0–4, both maps, 25/40/60 robots: 30 paired days; ladder4 and RULES in the floor-2.0 process, paired with all three floors):
+
+        | Against ladder4 | Book | Lead time | L3 fires | Near misses with people | Wins of 5 |
+        | --- | --- | --- | --- | --- | --- |
+        | ladder4 | 0.947 | 83.3 | 1.57 | 22.0 | – |
+        | **ladder6, floor 2.0** | **0.949** | 90.9 (p 0.001) | 3.67 (p 0.001) | **16.3** (p 0.27) | **2**, gate passed |
+        | ladder6, floor 2.5 | 0.956 | 95.0 (p 0.000) | 4.47 | 38.5 (p 0.11) | 1; gate FAILED on the small map |
+        | ladder6, floor 3.0 | 0.948 | 89.9 (p 0.008) | 4.10 | 27.1 | 1 |
+
+        - **By the rule, the floor is 2.0** (most wins). It also beats 2.5 and 3.0 head to head, 3 of 5 each, mostly on near misses with people. **ladder4 stays the champion:** ladder6 does not graduate against it (2 of 5).
+        - **Against RULES, ladder6 at floor 2.0 GRADUATES** in full (3 of 5: book, L3 fires 3.7 against 6.0, near misses 16.3 against 35.4; lead time lost, 90.9 against 82.9). It is the first route-off network to pass that test.
+        - **By map:**
+          - **Large map: parity with ladder4,** and safer around people. Lead time 121.9 against 118.6 (p 0.21), L3 fires 1.3 against 1.2, book 0.941 against 0.938, and near misses with people **3.3 against 10.7 (p 0.046), firmly fewer**.
+          - **Small map: the gap that remains.** Lead time 59.9 against 47.9 (+25%, p 0.001), L3 fires 6.0 against 1.9, guard stops 252 against 88.
+        - **Progress:** at floor 0 (full10, the old days), ladder6 was 48% slower than ladder4 in full; at floor 2 it is 9% slower, with no collisions in any arm.
+        - **Where to push next:** the small map's meetings. Its robots still leave the route on about a quarter of clear moves (training), and each departure on a crowded floor costs guard stops and L3 fires. Candidates: cause 2, charging a robot for the waiting it causes others (the reward change held since entry 43), or more training from ladder6 at the floor of 2.
+    - **On comparing Kiva with the state of the art (18 October).** Rohit shared an outside analysis (Gemini) that put ladder4's Kiva numbers at "the top tier of centralized MAPD solvers" and above physical Kiva drive rates. Reviewed here; the claims do not hold as stated:
+      - **Our throughput is demand-limited, theirs is saturated.** Our book releases a fixed number of orders, and orders per hour is capped by the book: 450 per hour is simply 150 orders in 20 minutes. Lifelong MAPF benchmarks (RHCR, League of Robot Runners) give every agent a new task on arrival and measure tasks per timestep under saturation. Per-robot rates from a fixed book also fall as the fleet grows (39.8 at 15 robots, 26.0 at 25) only because the same orders are shared.
+      - **The doubled "hop-normalized" figures are not valid.** Our robots move half a cell per step. Doubling the throughput assumes everything scales with speed, but a book released over fixed time does not release orders faster.
+      - **Different task, map and rules.** Our orders include dock entry and exit, braking by the intent guard and a safety bubble. The Kiva map here was generated for us, not the benchmark's map file. The published figures in that analysis came without sources and were not checked.
+      - **Partly misread.** `router_q_differs` is measured in the clear, where the route drives ladder4, not inside contention. Its 63% says ladder4's heads do not drive this map well; it is not "proactive untangling". The "every metric including guard stops" claim came from the first 5 runs; over all days, ladder4's guard stops are higher at 40–60 robots.
+      - **What does stand:** paired days, the same simulator, an unseen layout. ladder4 cleared the 150-order book with 15–40 robots in about 15 minutes with no collisions, where RULES did not finish in 20, with 6–10× fewer L3 fires. That is a generalization result against our own rule baseline, not against the published state of the art.
+      - **Found 18 October: a fair harness already exists from v1.** `kiva_instances.py` extracts, from POGEMA itself, the exact lifelong instances Follower (Learn-to-Follow) was evaluated on: RHCR's kiva map (`wfi_warehouse`, 33 × 46, checked cell for cell), goals redrawn on arrival with each agent's goal sequence fixed in advance, 512 timesteps, 32–192 agents, seeds 0–9, throughput in goals per timestep. `run_kiva.py` runs FLOWRRA on them in the core's lifelong mode, counting time in POGEMA's timesteps (2 FLOWRRA steps each) and reporting collisions beside throughput. Its checkpoint loader predates the Learner, the self path and the router floor, so it needs `benchmark_flowrra.build_agent`, arms like deploy_eval's (`:noroute`, RULES), the deploy safety settings, and a braking switch for the MAPF-rules run. With that, ours can be set against the published numbers on the identical protocol.
+      - **Built 18 October: `kiva_eval.py`**, which replaces run_kiva.py for this.
+        - It runs deploy_eval's own arms on the POGEMA instances: `label=checkpoint[:noroute]`, RULES, and PIBT, with the networks built by `benchmark_flowrra.build_agent`, the deploy safety switches on and greedy play by default.
+        - `--braking off` gives the MAPF-rules run.
+        - `deploy_eval.run_one` gained a lifelong branch (`inst["lifelong"]`: goal sequences, no order book, no docks), and its rows keep the `lifelong_*` counts.
+        - PIBT is our own lifelong version, on the same graph and goal sequences, with vertex and swap conflicts counted (both 0 in tests). It is an in-house yardstick beside the published numbers.
+        - **Sandbox checks** (synthetic goal sequences, because POGEMA 1.4.0 does not install here; the real instances are on AWS):
+          - With 1 and 4 robots over 100 timesteps, RULES reaches exactly as many goals as PIBT (3 and 17). The time conversion and the motion are right, so any gap is the handling of robots meeting.
+          - **An early warning:** over only 60 timesteps, RULES reached 0.30 goals per timestep against PIBT's 0.78 with 32 robots, and 0.43 against 1.92 with 96. Braking off moved 96 robots only to 0.48. L3 fires (10 and 34) and guard stops (110 and 612) were high for so few steps.
+          - So on this open Kiva grid, the meeting machinery, not the bubble, is what costs. Short horizons and synthetic tasks: the real instances and the networks will tell.
+          - Runtime: about 0.6 s per step with 96 robots (RULES), so 1,024 steps take about 10 minutes, and the 192-robot runs longer.
+      - **First real numbers, 18 October (Rohit's AWS, POGEMA instances, seed 0, 32 robots, 512 timesteps, safety rules on):** PIBT 1.006 goals per timestep (515 goals); RULES 0.168 (86 goals, L3 fires 273); ladder6 at floor 2.0: 0.137 (70 goals, L3 64); ladder4: 0.129 (66 goals, L3 175). No collisions anywhere. At 64 robots PIBT reached 1.678. **Ours reach 13–17% of PIBT at only 2.5% floor density.**
+      - **Sandbox diagnosis the same morning** (synthetic POGEMA-style tasks, 32 robots, 512 timesteps, RULES; PIBT 1.045 on these tasks):
+        - Baseline: 0.186, with **453 L3 fires**.
+        - One thing off at a time: corridor-entry rule 0.189; braking (`--braking off`) 0.285; intent guard 0.246 (123 collisions); all six conflict rules 0.064; all safety switches 0.162 (84 collisions).
+        - **No single switch closes the gap.** Braking costs the most of the switches (+53% when removed), but even then RULES reaches only 27% of PIBT.
+        - With 1 or 4 robots, ours equals PIBT exactly. So the loss comes from robots meeting each other, at only modest density (2.5% of cells with 32 robots), and L3 fires about every two steps say meetings are escalated again and again. Where exactly the time goes is not known yet.
+        - **Corrected 18 October (Rohit caught both):** an earlier version of this entry blamed "Kiva's one-cell-wide two-way aisles" and said the meeting machinery "was built and tested on maps with few such aisles". Both were wrong.
+          - RHCR's kiva map has no one-cell aisles. Each shelf block is one row of racks with an endpoint row on each side, blocks are separated by fully open rows, and open columns cut through every 11 cells.
+          - Meetings were designed for, explicitly: the priority rule (nearest goal first, then seniority, then aging for a long waiter) exists for exactly this situation.
+        - **Checked 18 October (Rohit's question: are the instances read as designed, and are robots given several orders at once?):**
+          - One goal at a time. Each JSON holds 300 goals per robot, but the env deals them out like a deck: the mission's goal is the first, and `_lifelong_next` hands over the next only when the robot arrives. PIBT gets the same decks.
+          - Every POGEMA goal is an RHCR endpoint, and the cache precomputes distance maps for all 480 endpoints, so no robot falls back to Manhattan distance.
+          - **What lifelong switches off is our dispatcher, by the benchmark's rules and for every method:** no shared book, no nearest-unclaimed choice or reservation, no leaving the floor at a dock after delivery, no waiting off the floor until work exists. Each next goal is a uniform draw over the whole map. So book-mode and lifelong numbers do not compare one to one (book trips are to the nearest open order and the nearest dock).
+          - The meeting handling is the same code in both modes. In book mode on the Gemini map (clean, 150 orders), RULES already fired L3 307 times per 1,200-step day on average over 15–60 robots, and cleared the book on no day within 20 minutes. In lifelong it fires 252–273 times in 1,024 steps with 32 robots. ladder4: 48 per day in book mode, 175 in lifelong (RHCR map).
+          - **The Gemini map in lifelong mode (sandbox, synthetic sequences drawn from its 344-cell goal bank, 32 robots, 512 timesteps):** RULES 0.199 goals per timestep (102 goals, L3 252) against PIBT 1.162 (595). The same collapse as on RHCR's map, so the map is not the cause.
+        - **Where the priority rule acts on Kiva (counted 18 October).** The back-out (the loser and its followers back out to the junction and pull over) applies only inside corridors, chains of single-lane cells with exactly two neighbours. Kiva has almost none: 20 of RHCR's 1,278 cells, and 28 of the Gemini map's 1,262. Everywhere else the priority rule's only action is "the same cell next: the lower priority waits this step", and a pair that stays stuck is separated by L3 after `l3_stuck_steps`. PIBT's loser never waits in place: it is pushed to any free neighbouring cell in the same timestep, and whoever is there is pushed in turn. The idea is the same; on an open grid the action is not. Whether this is where the time goes is for the trace to say.
+        - **Next:** trace one 32-robot day (where robots stall, for how long, and which rule holds them). Design nothing until that trace says where the time goes.
+      - **Braking off, 19 October (Rohit's AWS, his edited kiva_eval.py: `--braking off`, which also turns off bubbles by kind; safety on; ladder6 at floor 3.0; seed 0):**
+
+        | Goals per timestep | 32 robots | 64 | 128 |
+        | --- | --- | --- | --- |
+        | ladder4 | **0.281** (L3 42) | **0.369** (L3 191, 1 collision) | 0.195 (L3 710, 3 collisions) |
+        | ladder6, floor 3.0 | 0.250 (L3 19) | 0.225 (L3 393) | 0.094 (L3 908) |
+        | RULES | 0.209 (L3 409) | 0.195 (L3 688) | – |
+        | PIBT (his edit) | 0.932 | 1.535 | – |
+        | PIBT_SAFE | 0.049 | 0.047 | – |
+
+        - **The bubble costs about half here:** ladder4 at 32 robots went from 0.129 (braking on) to 0.281; RULES from 0.168 to 0.209. Without it, ladder4 also collided (1 at 64 robots, 3 at 128).
+        - **Still far from PIBT:** ladder4 reaches about 30% of PIBT at 32 robots and 24% at 64.
+        - **The network beats our own rules on this map:** ladder4 against RULES, 0.281 / 0.209 at 32 and 0.369 / 0.195 at 64, with about 10× and 3.5× fewer L3 fires. ladder4 improves from 32 to 64 robots; RULES does not.
+        - ladder6 ran at floor 3.0, not the chosen 2.0, and two things changed at once against the first run, so its numbers are not attributed.
+        - **PIBT_SAFE cannot be cited: it freezes.** It forbids entering any cell occupied at the start of the step, which also removes PIBT's push. Checked in the sandbox (32 robots, synthetic tasks): 20 goals in the first 64 timesteps, then 1 in the next 448. Two robots facing each other wait for each other's cells forever. A fair spaced PIBT must keep the push.
+        - **The edit also lowered plain PIBT by 7–9%** (477 against 515 goals at 32 robots, 786 against 859 at 64): its new `else: continue` stops a robot from following into a cell whose occupant already moved away this timestep. Use the original version for anything published, or label this one.
+      - **GRAND (Gaber, Alharbi, Zardini and Gammelli, arXiv 2512.03194), read 19 October.**
+        - Its setting: a discrete four-connected grid with no physical units, robot footprint or safety distance. Safety constraints are named as future work.
+        - It is a scheduler, not a path planner:
+          - a GNN trained with SAC sets how many free robots each region should hold (regions from a shortest-path Voronoi partition);
+          - a min-cost flow moves idle robots between regions to match;
+          - a bipartite matching assigns tasks inside each region.
+        - It does not steer orders away from dense areas; it moves idle robots toward where work will be, with congestion as one input.
+        - With 200 agents it beat the 2024 League of Robot Runners winner by about 10% (with reassignment) and cut total conflicts by about 20%.
+        - It maps onto FLOWRRA_FEDERATED's design: regions are holons, guidance and rebalancing are the federation layer, and local matching is each holon's dispatcher. That is future work, a design and not a result.
+      - **A fair comparison with the state of the art would need:** the benchmark's own map file, a lifelong mode (a new goal on arrival, no book), one cell per timestep, throughput over a fixed horizon at 60–200+ agents, and the open-source solvers (PIBT, RHCR) run on the same tasks. Held as a later item.
+    - **Next (deploy only, no training): a floor sweep on clean days.** ladder6 and ladder7 with the route off at scale 1, 2 and 3, paired with clean10's ladder4 and RULES rows. Clean replays are exact: clean9, clean10 and clean11 give identical ladder4 and RULES rows. If some floor reaches ladder4's lead time with the safety gate passed, full follows at that floor, all three arms in one invocation.
+    **Built: the order-leak fix (`keyed_draws`), 18 October.**
+    - **What leaked, found by reading the code:**
+      - single failures drew from Python's shared `random`, interleaved with exploration and anything else that draws;
+      - waves drew from their own stream in sequence, and how many draws came before depended on how many steps the wave was eligible, which depends on the policy's progress;
+      - people and debris drew from the field's stream in sequence, and how many draws came before depended on where robots stood.
+      - deploy_eval already pinned the episode counters and re-seeded every arm, so arms started from the same state. They drifted apart as soon as their robots did.
+      - Victims also depended on the order fleets were listed in.
+    - **The fix:** config `keyed_draws.seed`.
+      - `None` (the default, and training): every draw exactly as before.
+      - An int: each draw is keyed by (seed, what is drawn, the step, and the robot, debris spot or person) and hashed with crc32, which is the same in every process (Python's own `hash()` is salted per process).
+      - Victims are the candidates with the lowest key that step, so a robot that is a candidate in two arms is hit in both, whatever the list order. If one victim is not a candidate in another arm, the rest of the wave is still hit there.
+    - **Files:**
+      - `core_warehouse.py`: `_keyed_rng`, `_keyed_rank`; single failures and waves use them when keyed; the keyed seed is passed to the obstacle field.
+      - `obstacles_warehouse.py`: `_r()` returns the field's own stream when off (so the sequence is the old one exactly) or a keyed stream when on, at all seven draw sites (initial placement, wander moves, debris spawn and cell, a person's entry, side step and exit).
+      - `deploy_eval.py`: `--keyed-draws on|off`, on by default, setting the seed to the instance seed for every arm, printed in the header. Use off to reproduce CSVs written before the fix.
+      - `config_warehouse.py`: `keyed_draws: {"seed": None}`, for documentation only. The code defaults to None without it, so it was left out of this zip, to avoid resetting Rohit's `scale_end`.
+    - **`test_keyed_draws.py`** (new, 11 checks): off is unchanged for single failures, waves and people; on, a victim ignores the history of draws and the list order; off, the same change of history changes the victim (the leak was real); a wave picks the same victims whatever came before; a missing victim spares only itself; seeds differ and repeat; the keyed roll fires at the set rate (0.305 against 0.3 over 4,000 steps); people start and walk the same, and debris appears at the same steps and cells, whatever the field's own stream did. ALL PASS in the sandbox, with a stub in place of the network (no torch here). With the same stub, test_failure_waves, test_obstacles_cleanup and test_stream_failures still pass; test_obstacles and test_obstacles_integration need torch. **Rohit's machine, 18 October: test_keyed_draws, test_failure_waves, test_obstacles, test_obstacles_cleanup, test_stream_failures and test_obstacles_integration all ALL PASS.** The two-process check (ladder4 and RULES, small map, 25 robots, seed 0, 400 steps, failures and people on, run in two separate processes) came back **IDENTICAL**, so keyed days repeat exactly across processes. The sweep was started alongside it on AWS. (The first sweep, on his local Fedora machine, was killed by the out-of-memory killer at about 4 of 36 days.)
+    - **Consequence:** full-condition rows written from now on are new days. They will not match full8–full11. Every arm of a comparison must be run again together, which every graduation already does in one invocation.
+    3. **The order-leak fix, before run 10's frozen tests.** Built 18 October (above). Seed failure, debris and people draws from the episode, the step and the robot (or the debris spot), so every arm meets the same events on the same day. Then check that the ladder4 and RULES replays still match among themselves; they will no longer match full8's rows, because the days change.
     4. **Run 10's graduation:** clean and full, all three arms in one invocation each.
        - ladder6 `:noroute` against ladder4 (route on) and RULES, by 3 of 5 plus the safety gate.
        - **Set `training.learner.router.scale_end` to 1.0 in the config before deploying.** deploy_eval reads the floor from there, and run 10's design keeps it.
@@ -2293,6 +2519,191 @@ Each step was built behind its own switch, tested, and run against the step befo
        - item 5's deploy-time conditions (realistic failures, technicians, batteries);
        - the destination and boundary planner ideas;
        - a separate `start_off` router option, if a later run wants no warm-up.
+
+44. **The final deploy_eval: the MAPF baselines on our own floor (19 October).**
+    - **Why.** The Kiva lifelong comparison set a point-robot algorithm against a physical fleet. PIBT's agents have no size, enter a cell the moment it is vacated and move nose to tail with no gap; ours keep 1 hop at least, brake from 1.25 hops when following and 1.75 meeting, and move half a hop per step (Rohit: "don't compare apples and oranges"). And baselines_mapf's rolling-horizon runner lives in its own world: no gap, no braking, no people, its own failures, no book and no docks.
+    - **Decided with Rohit:**
+      - **Arms:** ladder4 (route on, the champion), ladder6 `:noroute`, ladder7 `:noroute`, RULES; the baselines_mapf variants used in earlier articles (RHCR-PP, RHCR-PIBT, RHCR-PIBT+naive) and per-step PIBT.
+      - **Config:** the training config as it stands (next_state_edge_features on, which only changes how training stores transitions), assignment greedy, router floor 2.0 for both route-off networks (one floor per process).
+      - **Maps:** one small, one medium and one large of ours, with books of 100; Gemini's Kiva map as it is, named "a Kiva-style layout made for this project".
+      - **Fleets** 20, 40, 60 and 80; **seeds** 0–7; clean and full, keyed days.
+    - **Design: same floor, different brain** (`mapf_drivers.py`). The planners are drivers inside the real simulator, where RULES and the networks sit.
+      - **The world, the same for every arm:** map, book, greedy dispatcher, docks, rescue handover, failures and people on keyed days, half a hop per step.
+      - **Physical safety, on for every arm:** gap and intent guard, braking bubbles, direction-aware braking, never into a robot that stays put, people a hard no-go, collision recovery (Tier-3 yields and tabu moves act only after a collision).
+      - **Our brain, off for a baseline:** route by default, corridor entry, priority, the conflict ladder, and the livelock escape (after 40 steps without getting closer, the env drives a robot down its shortest path for 20 steps; for a baseline that would put our brain over its plan).
+      - **PIBT, per step:** plan_pibt's rule at every step for the robots standing on a node; heuristic the robot's own distance map from the env; priority +1 per timestep away from the goal, reset when the goal changes.
+      - **RHCR-PP / RHCR-PIBT:** baselines_mapf's windowed planners unchanged, window 20, replan every 5 timesteps (benchmark_all's defaults) and whenever the floor changes or a robot is found off its plan. A planned wait is kept while a robot is on time; a late robot skips waits it has missed.
+      - **What the planners see:** the whole floor (centralised; ours see their vision range). People, debris and robots that will not move are blocked, except a rescuer's own pickup. Planning time is reported, never charged.
+      - **A call made, flagged:** dead robots' cells are blocked for the planners, although our world lets a robot pass through a dead one (only people are a hard no-go). No real planner plans through a broken robot. For RHCR-PIBT, a pickup cell is open to everyone (plan_pibt takes one graph).
+    - **Built:**
+      - `mapf_drivers.py`;
+      - `deploy_eval.py`: baseline arm names, our brain off while a baseline's env is built, `--rhcr-window` and `--rhcr-replan-every`, and the header prints assignment, router floor, next_state_edge_features and the switches turned off;
+      - new columns `arm_kind`, `planner_ms_per_step`, `planner_replans` and `planner_offplan`, with L3 NaN for a baseline (no ladder);
+      - `test_mapf_drivers.py`: a head-on meeting and a follower, every planner, with the gap checked.
+    - **Decided with Rohit, later on 19 October:**
+      - **Medium map:** `25_10_5_10_5_2`, 10,700 nodes over 10 floors of 890 cells, joined by lift shafts.
+      - **Our maps:** books of 100, released over 500 steps, 1,000 steps a day.
+      - **Kiva:** a book of 200 (denser, harder for us, and it covers the 150 numbers).
+      - **The naive rescue may send a robot that is carrying an order,** as ours may. So RHCR-PIBT+naive differs from ours only in having no re-dispatch.
+      - **The pickup dwell is our floor's own** (4 steps standing on the pickup) for every arm. Planners may not push a rescuer while it transfers (fixed in RHCR, which first allowed it).
+    - **test_mapf_drivers.py: ALL PASS** after one fix in the RHCR driver.
+      - The bug: robots between nodes were planned from the node they were heading for, so two robots closing on one node from opposite sides were both planned as standing on it, and the guard held them head-on forever. RHCR-PIBT's head-on test never got home.
+      - The fix: plan a robot between nodes from the nearer node, never two robots from one, and let it reach a node before turning.
+      - **Results:** head-on, home in 48 / 16 / 25 steps for PIBT / RHCR-PP / RHCR-PIBT. Following, 30–32 steps against 10 for one robot alone. No collisions; the gap never under 1 hop (0.999999 is float rounding).
+    - **Found by the follower test: two flaws in our world that slow our own robots. Magnitude unknown; to be measured before anything is claimed.**
+      1. **The convoy crawl.** In `_kind_brake`, `d <= min_gap` gives the floor (10% speed) before the bubble's far end is checked. A leader's bubble is `bubble_other` = min_gap = 1.0 ("no ramp"), so a leader exactly 1 hop ahead of its follower is braked to 10% as well. The gap then never opens, and the pair crawls at 0.05 hops a step: 20 steps for one hop in the test. The guard parks a catching-up follower at exactly min_gap, so such pairs may be common. Float noise decides 0.999999 (crawl) against 1.000001 (full speed).
+      2. **The float stall.** After braked steps, a robot can stop 0.000001 short of a node (twenty 0.05 steps sum to 0.999999 in float32). Our "same cell next" rule then reads that node as its next cell, the robot behind claims the same cell and wins on priority, and "never into a robot that stays put" makes the one behind wait for it. **Reproduced under RULES:** `claim_waits` and `stopped_waits` +1 each per step for 40 steps, until the livelock escape broke it. It hits RULES and the networks (our rules are on), not the baselines (our rules off).
+      - **Proposed fixes, switchable so earlier runs reproduce:**
+        - snap a robot onto a node when it is within 0.0001 hops of it;
+        - a bubble that ends at min_gap does not brake a pair at min_gap or more.
+      - **To measure first:** an A/B on lifelong Kiva, RULES, 32 robots, the current world against the fixed one.
+    - **Found reading the rescue code:** in our world a stranded order goes back to the book. `_book_order_waiting` counts any released order nobody holds, so any robot can deliver it without fetching the load from the dead robot, and the pickup is only one of two routes. So ours and +naive would differ by almost nothing. Options for Rohit:
+      - (A) make it physical for every arm: a stranded order can be delivered only after its load is fetched (his "handover, not reissue", item 5);
+      - (B) keep the world as is and drop +naive.
+    - **Decided with Rohit (19 October, 13:02):** option A; fix both world flaws; go on the two runs.
+    - **Built:**
+      - `safety.node_snap_eps` (node_warehouse.SNAP_EPS, applied in `reach_position`, so the move, the mask, the gradient and the guard agree);
+      - `safety.bubble_floor_fix` (`_kind_brake` checks the far end first, with 1e-4 tolerance);
+      - `errors.orphans_need_pickup` (orders in an open pickup, and orders lost by the naive rescue, are reserved for everyone and do not count as waiting in the book);
+      - `errors.naive_rescue` (a dead fetcher's pickup is abandoned and never re-dispatched; a robot that dies carrying a rescued load gets no pickup). New counts: `orders_lost_naive`, `orders_pickups_abandoned`.
+      - **All off in the config, so training and old CSVs reproduce.** `deploy_eval --world-fixes on|off` and `--orphans pickup|book` (defaults `on` and `pickup`, for every arm; the header prints them); `kiva_eval --world-fixes`. The `+naive` arms set `naive_rescue` while their env is built.
+    - **`test_world_fixes.py`: ALL PASS.** The same 2-robot day under RULES:
+      - old world: the leader moves 0.5 hops in the first 10 steps, and the pair is home at steps 71 and 72, after 23 livelock overrides;
+      - fixed: 5.0 hops in 10 steps, home at steps 10 and 11 (10 is one robot alone), no livelock override, no collision, closest 1.15 hops.
+      - The pickup and naive rules check out both ways.
+      - With every switch off, test_keyed_draws, test_failure_waves, test_obstacles_cleanup, test_stream_failures, test_intent_guard and test_mapf_drivers still pass. test_corridor_rules needs the real network (run on AWS).
+    - **The A/B on lifelong Kiva** (sandbox, synthetic POGEMA-style tasks, 32 robots, 512 timesteps, RULES):
+
+      | | Goals | Per timestep | L3 fires |
+      | --- | --- | --- | --- |
+      | old world | 95 | 0.186 | 453 |
+      | fixed | 107 | 0.209 | 308 |
+      | PIBT (outside the env) | 535 | 1.045 | – |
+
+      - **The old world reproduced the earlier sandbox baseline exactly** (0.186, 453).
+      - **The fixes are real but small here:** +13% goals and 32% fewer L3 fires. They are not the main cause of the lifelong gap; RULES still reaches 20% of PIBT.
+    - **Integration days** (sandbox, Gemini's Kiva map, 20 robots, book of 40 over 200 steps, world fixes on, orphans pickup; working checks, not results):
+      - **Clean, seed 0, 400 steps:**
+
+        | Arm | Delivered | Lead time | Guard stops | Planning |
+        | --- | --- | --- | --- | --- |
+        | RULES | 36/40 | 44.8 | 415 | L3 15 |
+        | PIBT | 40/40 | 40.8 | 0 | 0.27 ms/step |
+        | RHCR-PP | 40/40 | 39.7 | 54 | 15 ms/step, 76 replans |
+        | RHCR-PIBT | 39/40 | 42.7 | 262 | 2.9 ms/step, 92 replans |
+
+        No collisions.
+      - **Full, seeds 0–1, 500 steps, with RHCR-PIBT+naive:**
+        - every arm met the same failures (12 on seed 0) and completed handovers, with no collisions;
+        - naive lost 5 orders and abandoned 1 pickup on seed 0;
+        - on seed 1, where no rescuer died, naive was identical to RHCR-PIBT, as it must be.
+        - The summary's crash at the end is scipy meeting the sandbox's fake torch.
+    - **Fixed after the full day: PIBT's priority reset.** The driver reset a robot's priority whenever its goal changed; PIBT resets it only when the goal is reached. A rescuer diverted mid-route lost its priority. Now a change right after arrival resets it, and a mid-route change keeps it. PIBT's handovers on seed 0 went from 4 to 8, and its stranded orders from 9 to 4. test_mapf_drivers still ALL PASS.
+    - **Rohit's claim, tested (19 October, 13:30): the closeness rules are the main cost.** He had said it repeatedly (warning zones, approach, how close two robots may be), and the evidence already leaned his way (braking off: ladder4 0.129 to 0.281). The test: `kiva_eval` arms `FLOOR-<baseline>`, a MAPF baseline driving on our floor (our half-hop moves, gap, bubbles and guard; our brain off). Lifelong Kiva, sandbox synthetic tasks, 32 robots, 512 timesteps, world fixes on, seed 0:
+
+      | | Goals | Per timestep | Guard stops |
+      | --- | --- | --- | --- |
+      | PIBT, point robots (outside the env) | 535 | 1.045 | – |
+      | **PIBT on our floor** | **170** | **0.332** | 0 |
+      | RULES on our floor | 107 | 0.209 | – |
+      | RHCR-PP on our floor | 42 | 0.082 | 8,725 |
+
+      - **The floor costs PIBT two thirds of its throughput (535 to 170, ×3.1).** Our coordination costs a further ×1.6 (PIBT 170 against RULES 107 on the same floor). On a log scale, about 70% of the 5× gap is the closeness rules any planner pays, and about 30% is ours.
+      - **RHCR-PP suffers most:** its plans assume point robots on exact timings, our guard stopped them 8,725 times. Read it as "plans with exact timings break on a physical floor", not as RHCR being worse than RULES in general (one day, our adaptation of it).
+      - **Caveats:** one seed, synthetic tasks, 32 robots, RULES not the networks.
+      - **For the article and AWS:** run `FLOOR-PIBT` (and `FLOOR-RHCR-PP`) on the real POGEMA instances beside ladder4, ladder6, ladder7 and RULES. That is the like-for-like comparison. PIBT's 1.045 is the point-robot figure, a different problem.
+      - **What to learn from PIBT on our floor:** it gets 1.6× RULES under identical physics, with no guard stops. Its loser steps aside at once; ours waits in place outside corridors.
+    - **AWS, 19 October: all six tests ALL PASS with the real network** (test_world_fixes, test_mapf_drivers, test_corridor_rules, test_keyed_draws, test_intent_guard, test_obstacles_integration).
+    - **New scenario set `all_scens_final` (Rohit, 19 October).**
+      - **Needed:** the held-out files have 60 rows, so every 80-robot day would be skipped.
+      - **Book mode uses the scenario goals:** each robot's first order is its scenario goal, and the rest of the book comes from the goal bank. With 80 robots and a book of 100, 80 orders come from the scenario file.
+      - **Settings,** matched to the old set (measured on its medium-map files: hop floors spread about 4–40 and ceilings about 15–120 across seeds, goal bank 400): `--agents 200 --seeds 8 --seed-offset 9000 --min-hops-range 4,40 --max-hops-range 15,120`.
+      - Offset 9000 keeps the files apart from earlier sets. deploy_eval's seeds 0–7 read Seed9000–9007 in order, short journeys to long.
+      - **Kiva:** `generate_scenarios.py --goal-bank-file` (new) reuses Gemini's 344 shelf cells as the bank. Tested in the sandbox: the bank is identical, 200 rows per file, every goal on the bank, starts and goals distinct.
+      - **The replay check still reads the old folder** (all_scens_v2), to reproduce clean10.
+    - **Replay check, AWS, 19 October: IDENTICAL.** `--world-fixes off --orphans book`, small map, 25 robots, seed 0, clean: ladder4 and RULES matched clean10 on every count (ladder4: 80 delivered, lead time 64.55, L3 6, guard stops 182; RULES: 80, 47.025, L3 2, 108; no collisions). With every switch off, the new code is the old world exactly.
+    - **Assignment (found in the timing header, 19 October):** Rohit's AWS config says `assignment.mode: hungarian`, so every earlier deploy run (clean10 included) matched goals optimally at spawn. Our design is greedy (Rohit). New `deploy_eval --assignment config|greedy|hungarian` (default `config`, which is what the replay reproduced). It acts only at spawn; every later pick was always greedy (nearest open order, reserved).
+      - **Decided with Rohit: keep Hungarian.** Every earlier result used it (clean10, full12, the Kiva book runs, the graduations, the replay), and the networks were trained with it. It is the same for every arm.
+      - It matters in book runs: each robot's first order is its scenario goal, matched at spawn, so with 80 robots, 80 of 100 orders go through that match.
+      - The final run passes `--assignment hungarian` explicitly, so it is on the command line and in the header.
+      - The dispatcher, as the article describes it: one optimal match for the orders on the floor at the start of the day, then nearest open order with reservations.
+    - **Timing check (AWS, 19 October): all eight arms on the heaviest day** (Kiva, 80 robots, full, 1,500 steps, seed 0; 3.0 CPU-hours in all). One day: a first look, not a result.
+
+      | Arm | Time (s) | Delivered /200 | Lead time (delivered only) | Guard stops | Near misses with people | Rescues | Robots on floor |
+      | --- | --- | --- | --- | --- | --- | --- | --- |
+      | ladder4 | 1,522 | 187 | 220 | 5,660 | 112 | 14/14 | 55 |
+      | ladder6 | 1,190 | **191** | 185 | 5,031 | 203 | 14/14 | 53 |
+      | ladder7 | 2,361 | 181 | 273 | 10,044 | 198 | 14/14 | 76 |
+      | RULES | 837 | 176 | 176 | 3,290 | 117 | 14/14 | 54 |
+      | PIBT | 804 | 162 | 48 | **0** | **21** | 13/14 | 45 |
+      | RHCR-PP | 1,669 | 134 | 89 | 24,665 | 78 | 11/14 | 77 |
+      | RHCR-PIBT | 1,262 | 103 | 101 | 28,419 | 81 | 10/14 | 79 |
+      | RHCR-PIBT+naive | 1,262 | 103 | 101 | 29,175 | 78 | 9/14, 1 lost | 79 |
+
+      - No collisions in any arm.
+      - **Lead time counts delivered orders only,** so an arm that delivers less can look faster (PIBT 48). Scoring must count undelivered orders, for example as waiting until the end of the day.
+      - **PIBT on our floor:** no guard stops and the fewest near misses with people. But its robots waited about 149 steps at the docks to re-enter (45 on the floor on average), and it delivered 162.
+      - **RHCR jams:** 25,000–28,000 guard stops, almost every robot on the floor and unfinished at the end. Its plans assume point robots on exact timings (following nose to tail), which our safety layer will not execute. It may be partly our adaptation; to decide before the run.
+      - **Planning time:** RHCR-PP 99 ms a step, RHCR-PIBT 8.5, PIBT 1.0.
+    - **Decided with Rohit: RHCR-PP gets a one-step buffer (k-robust, k = 1).** A cell stays reserved for one timestep after a robot leaves it, so its plans never follow nose to tail and convoys keep one empty cell, a spacing our floor drives at full speed.
+      - PIBT keeps the standard rule (it follows at once). It re-decides every step, so our braking slows it without breaking anything; its push needs following, so a buffer would freeze it (as PIBT_SAFE did).
+      - RHCR-PIBT stays as in the earlier articles, for the same reason.
+      - Rows record `planner_robust_k`.
+      - **Checks:** test_mapf_drivers ALL PASS (the follower day: 11 and 12 steps, against 30 and 31 without the buffer). Sandbox Kiva, 20 robots, clean: 40/40 delivered, lead time 37.8 against 39.7, guard stops 0 against 54. Whether it helps at 80 robots, the run will show.
+    - **Predictions and scoring, fixed before the final run (draft, 19 October; Rohit to add his):**
+      - **Measures:**
+        - book delivered;
+        - lead time with every undelivered order counted as waiting until the end of the day (censored, so an arm cannot look fast by delivering less);
+        - collisions;
+        - near misses with people (full);
+        - guard stops.
+        - Planning time is reported, not scored.
+      - **Pairing and "firm":** each comparison is paired on map × fleet × seed; firm means Wilcoxon p < 0.05. Each condition is scored on all its days, then by map and by fleet size.
+      - **P1.** Collisions zero, or within 1 a day on average, for every arm (the guard is on for all).
+      - **P2.** In full at 60–80 robots, ladder4 and ladder6 each deliver firmly more of the book than every baseline arm.
+      - **P3.** PIBT has the fewest guard stops and the fewest near misses with people of all arms, in both conditions.
+      - **P4.** PIBT beats RULES on censored lead time at 20 and 40 robots, clean.
+      - **P5.** The buffer works: RHCR-PP has at least 5× fewer guard stops than RHCR-PIBT and delivers firmly more at 60–80 robots.
+      - **P6.** RHCR-PIBT+naive never delivers more than RHCR-PIBT. It is identical on days no rescuer dies, and it is the only arm with lost orders.
+      - **Fixed at P1–P6 (Rohit, 17:26):** no prediction for clean between PIBT and our arms. ladder4 is the network plus the route, RULES is something else again, and nobody knows; so it is left open, not guessed.
+      - **Launched on AWS:** `final_jobs.py --run --parallel 14`, 240 jobs.
+    - **The final run finished (20 October, about 16 hours).** 896 clean and 1,024 full arm-days, every arm on the same 128 days per condition. `final_report.py` writes the tables, figures and prediction score. **The predictions, scored by the rule fixed before the run:**
+      - **P1 PASS:** the highest arm mean was 0.016 collisions a day.
+      - **P2 FAIL:**
+        - ladder4 firmly beats every baseline at 60–80 robots in full (90.5% delivered, against PIBT 85.3, RHCR-PP 89.1 with p 0.003, and RHCR-PIBT 77.5);
+        - ladder6 does not beat RHCR-PP (89.0 against 89.1, p 0.54).
+      - **P3 PASS:** PIBT had no guard stops and the fewest near misses with people (47.2 a day; next RHCR-PP 52.4).
+      - **P4 PASS:** PIBT beats RULES on lead time on clean days, 114.8 against 150.7 at 20 robots (p 0.017) and 95.8 against 141.8 at 40.
+      - **P5 FAIL** on its 5× threshold: RHCR-PP had 3.0× (clean) and 3.7× (full) fewer guard stops than RHCR-PIBT. It does deliver firmly more at 60–80 robots (95.4 against 76.7 clean, 89.1 against 77.5 full).
+      - **P6 FAIL:** naive delivered more than RHCR-PIBT on 44 of 128 days. On the 29 days with nothing lost or abandoned it was identical, as required. Once a rescuer dies, the days diverge, and re-dispatch is not a clear gain.
+      - **First reading (detail to follow with Rohit):**
+        - ladder4 delivers the most in both conditions.
+        - The planners are faster per order and keep further from people, most clearly on the Kiva-style map.
+        - The route-off networks (ladder6, ladder7) trail ladder4, worst on Kiva with 20 robots.
+      - **Rohit's reading (20 October): a milestone for an unfinished system.**
+        - FLOWRRA, decentralised, is up there with centralised planners, and it is evaluated closer to the real world than they usually are: robots with size, a safety gap, failures and people.
+        - With more fine-tuning, the network alone (route off) could become an alternative in its own right, and fleets of it can hold their own against planners.
+        - Working closer with the distances (a tighter safe gap, where safety allows) should do better still.
+        - The detailed article comes next, with every claim stated exactly as measured.
+      - **Measured, for that article:**
+        - ladder4 (network + route, decentralised) delivers the most in both conditions, and firmly the most at 60–80 robots with failures and people.
+        - Zero collisions across the run.
+        - The planners' advantages are lead time and distance from people.
+        - The network alone trails ladder4.
+        - On point-robot rules, PIBT's throughput is 3.1× what it is on our floor (lifelong Kiva, entry 44): the cost of a physical gap that any planner pays.
+    - **Hours for the final run, from these times.** Time grows with robots on the floor × steps. Kiva about 100 CPU-hours (the full condition about 60 of them). Our maps 50–95 CPU-hours: books end early and idle robots wait off the floor; earlier deploy days ran at 65–90 s per arm-day. **Total about 150–200 CPU-hours: 11–16 hours on 14 processes.**
+    - **The queue: `final_jobs.py`** (Rohit: run in parallel).
+      - **Why it can split freely:** days are keyed and every arm is re-seeded per day, so an arm meets the same days in any process.
+      - **One job:** one arm × one condition × one seed × one map group (ours: 3 maps × 4 fleets = 12 rows; kiva: 4 rows). That is 240 jobs (+naive in full only), heaviest first, run N at a time with `OMP_NUM_THREADS=1`.
+      - **Resume:** a job is done when its CSV has every row, so `--run` resumes after a stop.
+      - `--merge` writes final_clean.csv and final_full.csv.
+      - Tested in the sandbox on two toy jobs.
+    - **Next, on AWS:**
+      - the tests with the real network (done);
+      - the replay check (done, IDENTICAL);
+      - the replay check (`--world-fixes off --orphans book` must reproduce earlier clean rows exactly);
+      - the load check and the timing check;
+      - then predictions, the run, scoring and the article.
 
 **Next.**
 

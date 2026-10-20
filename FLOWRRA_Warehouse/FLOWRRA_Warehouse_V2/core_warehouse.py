@@ -595,6 +595,11 @@ class FLOWRRA:
             _WAVE_EPISODES += 1
             self._wave_rng = random.Random(
                 int(_w.get("seed", 0)) * 1_000_003 + _WAVE_EPISODES)
+        # THE ORDER-LEAK FIX (config keyed_draws): None keeps every draw above
+        # and below exactly as it was; an int keys each failure, wave and
+        # people draw by (seed, what, step, who) -- see _keyed_rng.
+        _kd = (CONFIG.get("keyed_draws", {}) or {}).get("seed")
+        self._keyed_seed: Optional[int] = None if _kd is None else int(_kd)
 
         # Fleets that have errored and stopped moving. Immobile from the moment
         # they enter this set; the mission response waits for confirmation.
@@ -670,7 +675,7 @@ class FLOWRRA:
             _OBSTACLE_EPISODES += 1
             _oseed = int(_ocfg.get("seed", 0)) * 1_000_003 + _OBSTACLE_EPISODES
         self.obstacle_field = _obstacles_from_config(
-            self.G, self.grid_pos_dict, CONFIG, seed=_oseed)
+            self.G, self.grid_pos_dict, CONFIG, seed=_oseed, keyed_seed=self._keyed_seed)
         if self.obstacle_field is not None:
             # Keep clear of fleet starts and every goal in the pool: an episode
             # must not begin with a fleet standing inside a human, or with a
@@ -1087,6 +1092,19 @@ class FLOWRRA:
         # while every choice used them. On: the next state gets the same edge
         # features, from the after-move verdicts. Off: exactly the old storage.
         self.next_state_edges = bool(CONFIG["gnn"].get("next_state_edge_features", False))
+        # NEXT-STATE ADJACENCY (gnn.next_state_adjacency, build log entry 43,
+        # found 14 October): the choice's attention graph is built on GRAPH
+        # distance when proximity.adjacency_metric is "graph" (the phantom-pair
+        # fix of 2026-09-13), but the stored NEXT state -- from which every value
+        # target is computed -- still used the Manhattan builder: fleets behind a
+        # rack or on another floor, out of reach, attended to each other in s'
+        # but not in s. A fifth instance of the phantom-pair defect, in storage.
+        # "choice": the next state uses the same builder as the choice.
+        # "manhattan": exactly the old storage (every run up to run 9).
+        self.next_state_adjacency = str(CONFIG["gnn"].get("next_state_adjacency", "manhattan"))
+        if self.next_state_adjacency not in ("manhattan", "choice"):
+            raise ValueError(f"gnn.next_state_adjacency must be 'manhattan' or 'choice', "
+                             f"got {self.next_state_adjacency!r}")
         self.ladder_self_backoffs = 0
         self.ladder_backoff_watched = 0
         self.rung_stats = {k: 0.0 for k in (
@@ -2355,7 +2373,9 @@ class FLOWRRA:
         # Late errors are structurally unrecoverable -- see max_step_fraction.
         if self.step_count > self.error_max_step_fraction * self.max_steps_per_episode:
             return
-        if random.random() >= self.error_prob_per_step:
+        roll = (random.random() if self._keyed_seed is None
+                else self._keyed_rng("error").random())
+        if roll >= self.error_prob_per_step:
             return
 
         # Only fleets genuinely under way. Erroring one still sitting on its
@@ -2365,8 +2385,25 @@ class FLOWRRA:
         if not candidates:
             return
 
-        victim = random.choice(candidates)
+        if self._keyed_seed is None:
+            victim = random.choice(candidates)
+        else:
+            # The candidate with the lowest key this step: the same robot in
+            # every arm whenever it is a candidate in both, whatever the list order.
+            victim = min(candidates, key=lambda n: self._keyed_rank("error_victim", n.id))
         self._stop_fleet(victim)
+
+    def _keyed_rng(self, tag: str, *keys: Any) -> random.Random:
+        """THE ORDER-LEAK FIX: a fresh stream for ONE draw, keyed by (keyed seed,
+        what is drawn, this step, who). crc32, not hash(): Python salts str
+        hashes per process, crc32 is the same everywhere."""
+        key = f"{self._keyed_seed}|{tag}|{self.step_count}|" + "|".join(str(k) for k in keys)
+        return random.Random(zlib.crc32(key.encode()))
+
+    def _keyed_rank(self, tag: str, fleet_id: Any) -> int:
+        """A robot's place in this step's draw order for `tag`: a uniform random
+        permutation of the fleet that does not depend on list order."""
+        return zlib.crc32(f"{self._keyed_seed}|{tag}|{self.step_count}|{fleet_id}".encode())
 
     def _error_candidates(self) -> List[Any]:
         """
@@ -2457,15 +2494,22 @@ class FLOWRRA:
         progress = self._wave_progress()
         if not (self.wave_progress_start <= progress <= self.wave_progress_end):
             return
-        if self._wave_rng.random() >= self.wave_prob_per_step:
+        roll = (self._wave_rng.random() if self._keyed_seed is None
+                else self._keyed_rng("wave").random())
+        if roll >= self.wave_prob_per_step:
             return
         candidates = self._error_candidates()
         if not candidates:
             return
 
-        k = min(len(candidates),
-                self._wave_rng.randint(self.wave_size_min, self.wave_size_max))
-        victims = self._wave_rng.sample(candidates, k)
+        if self._keyed_seed is None:
+            k = min(len(candidates),
+                    self._wave_rng.randint(self.wave_size_min, self.wave_size_max))
+            victims = self._wave_rng.sample(candidates, k)
+        else:
+            k = min(len(candidates),
+                    self._keyed_rng("wave_size").randint(self.wave_size_min, self.wave_size_max))
+            victims = sorted(candidates, key=lambda n: self._keyed_rank("wave_victim", n.id))[:k]
         # Counted BEFORE stopping: _stop_fleet releases a rescuer's assignment.
         mid_rescue = [v.id for v in victims if v.id in self._pickup_assignment]
         self.waves_fired += 1
@@ -6506,7 +6550,16 @@ class FLOWRRA:
             for node in self.nodes:
                 next_node_features.append(self._perceive(node))
             next_node_features_array = np.array(next_node_features, dtype=np.float32)
-            next_adj_mat = self._build_adjacency()
+            if self.next_state_adjacency == "choice" and self.adjacency_metric == "graph":
+                # The same graph the choice used, on the positions after the move.
+                # Refreshed here so the index matches exactly the floor s' is
+                # perceived from, whatever ran since the post-move refresh (and
+                # when that refresh is off). Idempotent: the next step refreshes
+                # again at its start, from the same positions.
+                self.proximity.refresh(self.nodes, excluded_ids=self.immobile_nodes)
+                next_adj_mat = self._build_adjacency_graph()
+            else:
+                next_adj_mat = self._build_adjacency()
             if self.next_state_edges and (self.edge_feature_dim > 0 or self.pair_rel_dim > 0):
                 next_adj_mat = self._build_edge_features(next_adj_mat, verdicts=_after_v)
 

@@ -196,6 +196,59 @@ LADDER_CONTEXT = False
 # treats the fleet as standing on. Vehicles stop and turn at nodes.
 NODE_ALIGNED = False
 
+
+def reach_position(node, action: int, speed: float) -> np.ndarray:
+    """
+    Where ACTION at SPEED actually takes NODE: one increment along the action's
+    axis and, with NODE_ALIGNED, the stop on the next node and the turn snap.
+    apply_discrete_action() moves the fleet here; get_valid_action_mask() and
+    get_goal_gradient() judge the move by it.
+
+    THE LINE-END TRAP THIS FIXES (2026-10-11, found by trace_fleet.py; build
+    log entry 25). The mask and the gradient used to test the UN-clamped
+    position, current_pos + delta * speed, while the move itself stopped on the
+    next node. They agree whenever the fleet sits on the half-cell lattice,
+    which an unbraked fleet always does. A braked fleet does not: at 0.35
+    cells/step it can end up at z = 11.65 on a line whose last node is z = 12.
+    A full 0.5 step tests z = 12.15, past the end of the line, so the move was
+    marked impossible -- although the move would have stopped on 12. The fleet
+    could only back off or wait; its next move toward the goal brought it back
+    to the same spot. The livelock escape reads the same gradient, so it could
+    not help. In the trace: 112 of 2,796 champion fleet-steps (4%), 9 fleets;
+    fleet 22 spent about 40 of its 87 steps in the loop. RULES, which rarely
+    brakes, rarely met it.
+
+    Only off-lattice positions near the end of a line (or a gap in it) change:
+    on the lattice the un-clamped step never passes the next node, so the
+    verdict is the same as before. With NODE_ALIGNED off this is exactly the
+    old computation.
+
+    Needs only node.current_pos and node.is_structurally_valid, so the stubs in
+    the tests still work.
+    """
+    delta = ACTION_DELTAS.get(action, np.zeros(3, dtype=np.float32))
+    pos = node.current_pos + (delta * speed)
+    if NODE_ALIGNED and action != 0:
+        _ax = int(np.argmax(np.abs(delta)))
+        _p = np.array(node.current_pos, dtype=np.float64, copy=True)
+        for _k in range(3):                      # turn: snap the old axes
+            if _k != _ax:
+                _r = np.round(_p[_k])
+                if abs(float(_p[_k] - _r)) <= 0.1 + 1e-6:
+                    _p[_k] = _r
+        _d = float(delta[_ax])
+        _t = _p[_ax] + _d * float(speed)
+        _c = float(_p[_ax])                      # next node along the move
+        _nxt = (np.floor(_c + 1e-9) + 1.0) if _d > 0 else (np.ceil(_c - 1e-9) - 1.0)
+        if (_d > 0 and _t > _nxt + 1e-9) or (_d < 0 and _t < _nxt - 1e-9):
+            _t = _nxt                            # would overshoot: stop on it
+        _p[_ax] = _t
+        _prop = _p.astype(np.asarray(node.current_pos).dtype)
+        if node.is_structurally_valid(_prop, action):
+            pos = _prop
+    return pos
+
+
 class ArrayDistanceMap:
     """
     A BFS distance map backed by an int32 array instead of a dict.
@@ -738,26 +791,11 @@ class FleetNode:
         self.last_pos = self.current_pos.copy()
 
         proposed_delta = ACTION_DELTAS.get(action, np.zeros(3, dtype=np.float32))
-        proposed_pos = self.current_pos + (proposed_delta * self.speed)
-        if NODE_ALIGNED and action != 0:
-            _ax = int(np.argmax(np.abs(proposed_delta)))
-            _p = np.array(self.current_pos, dtype=np.float64, copy=True)
-            for _k in range(3):                      # turn: snap the old axes
-                if _k != _ax:
-                    _r = np.round(_p[_k])
-                    if abs(float(_p[_k] - _r)) <= 0.1 + 1e-6:
-                        _p[_k] = _r
-            _d = float(proposed_delta[_ax])
-            _t = _p[_ax] + _d * float(self.speed)
-            _c = float(_p[_ax])                      # next node along the move
-            _nxt = (np.floor(_c + 1e-9) + 1.0) if _d > 0 else (np.ceil(_c - 1e-9) - 1.0)
-            if (_d > 0 and _t > _nxt + 1e-9) or (_d < 0 and _t < _nxt - 1e-9):
-                _t = _nxt                            # would overshoot: stop on it
-            _p[_ax] = _t
-            _prop = _p.astype(np.asarray(self.current_pos).dtype)
-            if self.is_structurally_valid(_prop, action):
-                proposed_pos = _prop
-        
+        # Where this move actually goes (node-aligned stop and turn included).
+        # Shared with get_valid_action_mask() and get_goal_gradient(): see
+        # reach_position() for the line-end trap that sharing it fixes.
+        proposed_pos = reach_position(self, action, self.speed)
+
         if not self.is_structurally_valid(proposed_pos, action):
             # Hit a wall! Kill momentum.
             self.direction = np.zeros(3, dtype=np.float32)
@@ -817,7 +855,10 @@ class FleetNode:
         mask[0] = True
         obstacles = self.static_obstacles or ()
         for action in range(1, len(ACTION_DELTAS)):
-            proposed_pos = self.current_pos + (ACTION_DELTAS[action] * reference_speed)
+            # The position the move would actually reach (FIXED 2026-10-11: was
+            # the un-clamped step, which trapped braked fleets near the end of a
+            # line -- see reach_position()).
+            proposed_pos = reach_position(self, action, reference_speed)
             if not self.is_structurally_valid(proposed_pos, action):
                 continue
             if obstacles and self._entering_cell(action) in obstacles:
@@ -1104,7 +1145,9 @@ class FleetNode:
 
             # Validity is checked against the move the fleet would ACTUALLY make
             # (one base_speed increment, which may be a half-edge)...
-            if not self.is_structurally_valid(self.current_pos + delta * self.speed, action):
+            # FIXED 2026-10-11: judged at the position the move would actually
+            # reach, as the mask and the move itself are (reach_position()).
+            if not self.is_structurally_valid(reach_position(self, action, self.speed), action):
                 continue  # wall -> 0.0, indistinguishable from "no help", which is correct
 
             # ...but the distance lookup probes the bounding GRID CELL in that

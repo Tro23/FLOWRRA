@@ -1,121 +1,143 @@
 # FLOWRRA Warehouse
 
-**Decentralized coordination for warehouse vehicle fleets.** A rule-based orchestrator (RULES) and a learned graph policy share the work of moving fleets through multi-level warehouses. They also handle recovery when vehicles fail mid-delivery, and they do it without a central replanning step.
+**Decentralised coordination for warehouse fleets.** Every fleet (one vehicle) decides locally, from what it perceives within 5 graph hops. The set of all fleets on the floor is treated as one holon that learns to keep itself whole while it works. A learned graph policy and a ladder of path-aware rules share the work, through deliveries, hardware failures and people on the floor, with no central replanning step.
 
 FLOWRRA (Flow Recognition Reconfiguration Agent) is an independent research project by [DhaaRn](https://dhaarn.com). This folder holds its warehouse work.
 
-> **Start here: [`FLOWRRA_Warehouse_V2/`](FLOWRRA_Warehouse_V2/) is the current version.** Everything else in this folder belongs to the previous version and is kept as a fixed reference point.
+> **Start here: [`FLOWRRA_Warehouse_V2/`](FLOWRRA_Warehouse_V2/) is the current version.** The full write-up is the article, [`Flowrra_Article.md`](FLOWRRA_Warehouse_V2/Flowrra_Article.md), and every step and run is recorded in the build log, [`V2_The_Conflict_Ladder.md`](FLOWRRA_Warehouse_V2/Journey_in_Writing/V2_The_Conflict_Ladder.md). Everything outside `FLOWRRA_Warehouse_V2/` belongs to the previous version and is kept as a fixed reference point.
 
 ---
-<div align="center"> 
-  <img src="Flowrra_animation.gif" alt="FLOWRRA in Warehouse" width="750"/> <br></br>
+
+<div align="center">
+  <img src="FLOWRRA_Warehouse_V2/Final_Report/flowrra_kiva_day.gif" alt="ladder4 on the Kiva-style map with failures and people, 60 fleets" width="750"/>
+  <br><sub><b>The whole day.</b> ladder4 on the Kiva-style map: 60 fleets, seed 3, hardware failures and people on the floor. A variant of a scored day, with a book of 150 orders instead of 200: 142 of 150 delivered. Replayed with <code>record_day.py</code> and <code>render_day.py</code>.</sub>
+  <br><br>
+  <img src="FLOWRRA_Warehouse_V2/Final_Report/flowrra_kiva_closeup.gif" alt="Close-up of the same day, every step from 380 to 850" width="750"/>
+  <br><sub><b>Close-up, every step from 380 to 850 of the same day:</b> fleets yielding, retracing and ordering themselves around failures and people.</sub>
 </div>
 
-## Headline result: recovering from vehicle failures
+## Headline result: same floor, different brains (October 2026)
 
-Each vehicle decides locally from what it perceives within 5 graph hops. When a vehicle dies with an order on board, another vehicle takes the order over, and the rest of the floor keeps moving.
+**The test.** FLOWRRA ran against the MAPF planners PIBT and RHCR on the same simulated floor, inside the same safety boundary.
 
-The benchmark tests how well that works under heavy failure. It has **48 paired instances**: 2 maps × 25, 40 and 60 vehicles × 8 seeds (0, 3–9). In every episode **9 vehicles are killed in 3 waves**. Every method runs the same instances with the same task allocation.
+**The safety boundary.** In every system compared, FLOWRRA's included, a fleet is a point on the graph. FLOWRRA adds a boundary around each point, which acts as its footprint:
+- a minimum gap of 1 hop;
+- warning bubbles of 1.0–1.75 hops;
+- braking from 1.5 hops;
+- an intent guard that checks every move before anyone moves.
 
-- **Small map:** `25_5_2_5_2_1`, 1,435 nodes
-- **Large map:** `50_20_5_10_5_2`, 27,000 nodes, multi-level
+Every arm drove inside that boundary. The planners kept the same world (failures, people, docks, rescues) with FLOWRRA's own decision rules switched off.
 
-Both maps come from the 3D MAPF warehouse dataset (Wang, Veerapaneni, Wu, Li & Likhachev, ICAPS 2024).
+**The days**
+- **Maps:**
+  - three multi-level warehouses from the 3D MAPF warehouse dataset (Wang, Veerapaneni, Wu, Li & Likhachev, ICAPS 2024): `25_5_2_5_2_1`, `25_10_5_10_5_2` and `50_20_5_10_5_2`;
+  - a Kiva-style layout made for this project (`Kiva_2D_46_33_1`, 46 × 33 cells).
+- **Fleets and seeds:** 20, 40, 60 and 80 fleets; seeds 0–7.
+- **Two conditions:** *clean*, and *full* (hardware failures and people clearing debris).
+- **Demand:** a book of 100 orders released over 500 steps (200 on the Kiva-style map).
+- **In all:** 1,920 arm-days. Every arm meets exactly the same day.
 
-| small / large map | RHCR-PIBT + nearest-idle recovery | FLOWRRA (policy + RULES, frozen weights) | RULES orchestrator alone |
+| Arm | Delivered, clean | Delivered, full | Lead time, full (steps) | Near misses with people, full (per day) | Guard stops, full (per day) |
+|---|---|---|---|---|---|
+| **ladder4** (FLOWRRA champion, route on) | **98.9%** | **87.6%** | 192 | 77.4 | 1,175 |
+| ladder6 (network alone, route off) | 94.2% | 82.1% | 234 | 74.7 | 1,138 |
+| ladder7 (network alone, route off) | 93.6% | 82.8% | 241 | 61.5 | 1,476 |
+| RULES (FLOWRRA's rules, no network) | 95.5% | 87.5% | 191 | 84.0 | 500 |
+| PIBT | 98.4% | 79.2% | 188 | **47.2** | **0** |
+| RHCR-PP (k = 1) | 94.8% | 86.3% | **165** | 52.4 | 1,284 |
+| RHCR-PIBT | 75.2% | 74.6% | 270 | 79.4 | 4,694 |
+
+**What it shows**
+- **ladder4 delivered the most of the book in both conditions.**
+- **Where coordination is hardest, it delivered firmly more than every planner.** With failures and people at 60–80 fleets:
+  - ladder4 90.5%;
+  - RHCR-PP 89.1% (paired Wilcoxon, p = 0.003);
+  - PIBT 85.3%;
+  - RHCR-PIBT 77.5%.
+- **The network alone is already a serious option, with little training** (a few hundred episodes).
+  - At 60–80 fleets under failures, ladder6 delivered 89.0%, level with the best planner, RHCR-PP at 89.1% (p = 0.54).
+  - ladder7 had the highest mean of any arm on the small and medium maps under failures (91.5%, 90.5%).
+- **The planners were faster per order and kept further from people.** That is where FLOWRRA has work to do.
+- **No arm averaged more than 0.016 collisions a day.**
+- **The price of physical operation.** On RHCR's own Kiva map, keeping a safety boundary costs PIBT a factor of 3.1 in throughput: 1.045 goals per timestep under the usual point model, 0.332 inside the boundary (one seed). Results under the point model do not show this cost.
+
+**What we claim, and what we do not.**
+- **The claim:** under conditions modelled on real operation, a decentralised holon with a learned policy delivered as much as central planners overall, and more at high density under disruption. That makes decentralised, learned control a serious option for physical fleets.
+- **What we do not claim:** that learning beats planning in general.
+  - The planners were faster and kept further from people.
+  - FLOWRRA's rules alone came within 0.1 points of the champion under disruption.
+  - The baselines were implemented from their papers, not the authors' code.
+  - Everything here is simulation.
+
+**Data and detail**
+- **Per-day results:** [`final_clean.csv`](FLOWRRA_Warehouse_V2/Final_Report/final_clean.csv) and [`final_full.csv`](FLOWRRA_Warehouse_V2/Final_Report/final_full.csv), one row per arm × map × fleet size × seed.
+- **Tables and figures:** [`Final_Report/`](FLOWRRA_Warehouse_V2/Final_Report/), made by `final_report.py`.
+- **The setup, every measure and the full reasoning:** the article, §5.
+- **The predictions written before the run, and how each scored:** the build log, entry 44.
+
+---
+
+## How the brain evolved: from the failure benchmark to the Conflict Ladder
+
+*The failure-shock benchmark, 5 October 2026, before the Conflict Ladder.*
+
+**The benchmark.** Before the redesign, a harder failure benchmark tested recovery:
+- 48 paired instances: 2 maps × 25, 40 and 60 vehicles × 8 seeds;
+- 9 vehicles killed in 3 waves in every episode.
+
+| small / large map | RHCR-PIBT + nearest-idle recovery | FLOWRRA then (policy + RULES) | RULES alone |
 |---|---|---|---|
 | Stranded orders recovered | 70.4% / 70.8% | 70.0% / 66.8% | **87.4% / 85.2%** |
 | Rescue vehicles lost per episode | 2.67 / 2.62 | 1.50 / 1.71 | **0.25 / 1.08** |
 | Orders completed overall | 92.3% / 92.5% | 93.0% / 93.0% | **95.0% / 97.0%** |
-| Replanning time per episode | 2.2 s / 47.2 s | none (no replanning step) | none (no replanning step) |
 
-The comparison of RULES against RHCR-PIBT + nearest-idle uses paired Wilcoxon signed-rank tests. For recovery, p = 0.0009 on the small map and p = 0.0013 on the large one. For rescue vehicles lost, p < 0.001 on both maps, with 91% fewer losses on the small map and 59% fewer on the large one.
+**The result.** The rules carried the recovery, and the learned policy of that time did not add value on top of them. A first fix (teacher_run1) did not hold up.
 
-![FLOWRRA V2 benchmark synthesis](FLOWRRA_Warehouse_V2/flowrra_complete_benchmark_synthesis.png)
+**What came of it.** The redesign was **[The Conflict Ladder](FLOWRRA_Warehouse_V2/Journey_in_Writing/V2_The_Conflict_Ladder.md)**:
+- RULES became path-aware rungs;
+- a Learner head learns their judgement;
+- safety pays by rung;
+- values are learned from the moves the system actually made.
 
-*The benchmark at a glance. In the recovery panel, the two right-most bars ("Train") come from training logs, not from this benchmark. See the note below.*
+In the final test above, the champion delivered 3.4 points more than RULES alone on clean days, and was level with it under failures.
 
-**About the baseline.** `RHCR-PIBT` is a rolling-horizon planner that follows the mechanism of Li et al. (AAAI 2021). It was reimplemented in Python for this harness; it is not the authors' tuned C++ code. "Nearest-idle recovery" sends each stranded order to the nearest idle vehicle.
-
-### What this shows, and what it doesn't
-
-- **The orchestrator carries the recovery.** Its rules (below) keep the corridors around a failure moving. That lets rescuers reach stranded orders without becoming casualties themselves.
-- **The learned policy doesn't yet add value on top of the rules under failure shocks.** With the policy in the loop, recovery is 67–70%, below the rules alone (paired p = 0.003 on the small map and p < 0.001 on the large one). A first fix did not hold up, and a redesign is in progress; see the next section.
-- **No replanning pause is not the same as no compute.** FLOWRRA spends decision time on every step rather than in replanning bursts. A per-step compute comparison against central replanning, broken down by map size, is on the roadmap.
-- **The article's 95% figure.** "Evolution towards Harmony" reports 95% recovery, which comes from training logs: 191 of 201 stranded orders were delivered over 150 episodes, with exploration still on. That is about 1.3 stranded orders per episode, against 8–9 per episode here. It is a different, lighter regime and can't be compared with the table above.
-
-**Data:** [`benchmark_new_all_2.csv`](FLOWRRA_Warehouse_V2/benchmark_new_all_2.csv) has one row per method × instance. The summary is in [`summary_table_for_article.csv`](FLOWRRA_Warehouse_V2/summary_table_for_article.csv), and the figures come from [`generate_benchmark_figures.py`](FLOWRRA_Warehouse_V2/generate_benchmark_figures.py).
-
-### Known issue, in progress: the policy under failure shocks
-
-> **Update, 5 October 2026: the first fix did not hold up, and a redesign is in progress.**
-> After 150 training episodes (teacher_run1, with failure waves), the frozen policy + RULES recovered **56.5%** of stranded orders on the small map and **48.9%** on the large one, on the same 48 instances. That is below RULES alone (87.4% / 85.2%, paired p ≤ 0.017) and below the policy before the fix (70.0% / 66.8%).
->
-> Of the three predictions below, the first held: proposed and executed waits converged during training. The other two failed. Recovery hops rose to 107 and 184 instead of falling toward the rules' 23 and 49, and the frozen policy fell well short of RULES alone.
->
-> What went wrong, in short: the extra loss term pushed on values that no experience could correct, so they drifted, and the learned recovery head diverged with them. The redesign, **[The Conflict Ladder](FLOWRRA_Warehouse_V2/V2_The_Conflict_Ladder.md)**, keeps RULES' judgement but carries it through path-aware RULES rungs and a separate Learner head instead of the values. Its predictions are written in that document before its runs. Both results will be written up here together.
-
-With the learned policy in the loop, recovery under failure shocks is 67–70%, below the 85–87% the rules reach alone. We're treating this as an issue to fix. The working hypothesis has two parts.
-
-**The policy has had no way to learn from being overridden.** When RULES overrides the policy, training records the action RULES executed. The action the policy proposed is never recorded, so the policy is never told its choice was vetoed, and it keeps preferring moves RULES has to veto. Training logs are consistent with this. In warning zones, the network proposes waiting 12–17% of the time while waits are executed 61–70% of the time, and the gap does not close over 60 episodes (cold_run25).
-
-**The policy hasn't practised this regime.** Training saw about 1.3 stranded orders per episode; the benchmark has 8–9. Under the policy, rescuers also take the long way: 84 hops to reach a stranded order, against 23 for the rules on the small map. That leaves them exposed when the next failure wave hits.
-
-**The first fix (tried in teacher_run1):**
-
-1. A training signal from every override. On steps where RULES overrides the policy, an extra loss term pushes the value of the rules' action above the value of the policy's own proposal (as in DQfD, Hester et al., 2018). This moves RULES' judgement into the policy's weights.
-2. Training with failure waves, on seeds the benchmark doesn't use.
-
-**How it will be judged (decided before the runs):**
-
-- The gap between proposed and executed waits should shrink during training.
-- Recovery hops should fall toward the rules'.
-- Frozen policy + RULES should match or beat RULES alone on the same 48 instances.
-
-The result is in the update at the top of this section.
-
----
-
-## Continuous operation (training runs, not yet a frozen benchmark)
-
-In rolling-order operation, the learned policy has shown measurable value on top of the rules. These numbers come from paired training runs, not yet from a frozen benchmark.
-
-**Rolling orders** on map `50_5_5_10_5_2` (6,300 cells, 10 floors), 60 vehicles, 60 paired episodes. Details: [`COLD_RUN25_ANALYSIS.md`](FLOWRRA_Warehouse_V2/COLD_RUN25_ANALYSIS.md).
-
-| | before the conflict redesign (cold_run24) | V2 (cold_run25) |
-|---|---|---|
-| Deliveries per episode | 131.7 | **191.6** (+45%, better in 60 of 60) |
-| Collisions per 100 deliveries | 48 | **19** |
-
-At this density, V2 reached 47% of the conflict-free ideal on the ±3 order window (48% in episodes 24–50). A shortest-path driver running the same rules reached 42%. The conflict-free ideal is what the fleet would deliver if no two vehicles ever met; nothing reaches it in dense traffic. The 42% comes from the driver's capacity runs ([`BENCHMARK.md`](FLOWRRA_Warehouse_V2/BENCHMARK.md)), so a frozen, paired comparison is the next step.
-
-**Fixed missions** on map `25_5_2_5_2_1`, 46 vehicles, 60 identical instances. Details: [`Cold_Run23.md`](FLOWRRA_Warehouse_V2/Cold_Run23.md).
-
-| | before (cold_run23) | V2 (aws_run1) |
-|---|---|---|
-| Completion | 0.876 | **0.983** |
-| Episodes with every order delivered | 0 of 60 | **29 of 60** |
-| Collisions per episode | 8.25 | **2.28** |
+The data for this earlier benchmark is in [`benchmark_new_all_2.csv`](FLOWRRA_Warehouse_V2/Benchmark/benchmark_new_all_2.csv), with figures from [`generate_benchmark_figures_v2.py`](FLOWRRA_Warehouse_V2/reports_during_process/generate_benchmark_figures_v2.py). An earlier training-run comparison, with rolling orders, is in [`COLD_RUN25_ANALYSIS.md`](FLOWRRA_Warehouse_V2/Journey_in_Writing/COLD_RUN25_ANALYSIS.md).
 
 ---
 
 ## What changed in V2
 
-The full reasoning is in the article and in V2's design notes.
+The full reasoning is in the article (§3) and in V2's design notes.
 
-- **RULES orchestrator.** Six conflict rules, each behind its own switch:
-  - **Path-based warnings:** pairs of vehicles are classified by where they are heading over an 8-hop route horizon (head-on, blocked, contested…), not by how close they are.
-  - **Directional braking:** a vehicle brakes only while the gap is shrinking, so steady convoys keep moving.
-  - **Corridor entry:** a vehicle won't enter a single-lane stretch while another vehicle inside is coming toward it.
-  - **Priority:** the vehicle nearest its goal goes first, adjusted for waiting time (`hops − 0.25 × wait_steps`). The loser backs out and pulls over.
-  - **Yield to stopped vehicles** and **node-aligned moves.**
+- **Two environments.** The set of fleets is environment A, a holon whose integrity (0 any collision, 0.5 any warning, 1 clear) sits in every fleet's state. The floor, orders, failures and people are environment B.
+- **Decide, guard, move.** Every fleet proposes its move from the same snapshot. Conflicts are grouped into independent components (union-find), and contested ones are resolved jointly by Hungarian assignment with order-invariant tie-breaks. The intent guard checks every landing, then all fleets move at once, at half a hop per step. See [`Simultaneous_Step.md`](FLOWRRA_Warehouse_V2/Journey_in_Writing/Simultaneous_Step.md).
+- **The Conflict Ladder.** Rules resolve the conflicts that remain:
+  - **L0:** ordering, braking, corridor holds;
+  - **L1:** retrace;
+  - **L2:** pull over;
+  - **L3:** the fundamental recovery tiers (spatial escape, temporal rewind, right-of-way yield).
 
-  See [`CONFLICT_DESIGN.md`](FLOWRRA_Warehouse_V2/CONFLICT_DESIGN.md), [`conflict_warehouse.py`](FLOWRRA_Warehouse_V2/conflict_warehouse.py) and [`corridor_warehouse.py`](FLOWRRA_Warehouse_V2/corridor_warehouse.py).
-- **Simultaneous step.** Every vehicle proposes its move from the same snapshot. Conflicts are grouped into independent components (union-find), and contested components are resolved jointly by Hungarian assignment with order-invariant tie-breaks. No vehicle wins a cell just by coming earlier in a list. See [`Simultaneous_Step.md`](FLOWRRA_Warehouse_V2/Simultaneous_Step.md) and `measure_order_dependence.py`.
-- **Reward: five heads down to three.** The heads are safety, delivery and efficiency. Each head learns on its own reward component, and they are weighted 6 : 4 : 1 at action selection only. Safety penalises closing speed inside a shrinking gap, not mere proximity. See [`Reward_Design.md`](FLOWRRA_Warehouse_V2/Reward_Design.md).
-- **Gibbs affordance field.** Floor density is modelled as P(cell) ∝ exp(−E(cell)/T), normalised with log-sum-exp. Perception uses graph distance (5 hops), so a vehicle behind a rack no longer counts as a neighbour. See `density_warehouse.py` and `proximity_warehouse.py`.
-- **Recovery fixes.** The rescue path now works in continuous (stream) mode, and the recovery cost is charged once (it used to be charged twice). See `test_stream_failures.py`.
-- **Measurement.** Each episode records how often the network proposed waiting and how often a wait was actually executed. That lets the policy be judged apart from the rules. See [`WHAT_CHANGED.md`](FLOWRRA_Warehouse_V2/WHAT_CHANGED.md).
+  Triggers are structural, and each rung has a cost charged to the fleets whose moves made it necessary. See [`V2_The_Conflict_Ladder.md`](FLOWRRA_Warehouse_V2/Journey_in_Writing/V2_The_Conflict_Ladder.md) and [`CONFLICT_DESIGN.md`](FLOWRRA_Warehouse_V2/Journey_in_Writing/CONFLICT_DESIGN.md).
+- **Path awareness.** Warnings come from paths that close over an 8-hop route horizon, not from mere proximity. The field carries each fleet's own route ahead and its neighbours' routes. See [`Path_Awareness.md`](FLOWRRA_Warehouse_V2/Journey_in_Writing/Path_Awareness.md).
+- **Heads with one job each.**
+  - Safety, delivery and efficiency forecast consequences, weighted 6 : 4 : 1 at choice time only.
+  - A Learner head learns the system's judgement and acts only as a bounded preference.
+  - The recovery head is parked.
+
+  See the article, §3.8.
+- **SARSA on the move made.** Each transition waits one step, so values learn from what the system actually did. The whole step goes to the learner as one joint transition. See the article, §3.10.
+- **The affordance field and the Gibbs frame:**
+  - **How it is now.** The field is A = mask / (1 + R): reachability within 5 graph hops, with spatio-temporal splats (max-stamped, decaying on a fast channel and a slow one with a 32-step half-life) and swept paths of peers. Two Gibbs quantities are measured and in every fleet's state: the local action entropy S, and throughput pressure T = 1 / (1 + orders left / steps left) in the temperature's place.
+  - **How we want it to be.** The exponential field P(cell) = exp(−E/T) / Z, with a partition function shared across the floor (log-sum-exp), the global spatial entropy, and F = E − T·S as the objective. It matters most where two fleets can pass side by side.
+
+  See `density_warehouse.py`.
+- **Physics and safety.** Speed changes with the situation: slowing in warning zones, braking behind a fleet closing ahead, holding speed on the final approach, picking up again once clear. Failures are modelled on VDA 5050: a failed fleet stops dead and reports an error, and its load is handed over to a rescuer.
+- **World fixes (October 2026), applied to every arm:**
+  - node snap (a fleet stalled just short of a node);
+  - bubble floor (a follower exactly 1 hop behind was braked to a crawl);
+  - orphaned orders wait for a pickup.
+
+  See `test_world_fixes.py`.
 
 ---
 
@@ -123,31 +145,38 @@ The full reasoning is in the article and in V2's design notes.
 
 ```
 FLOWRRA_Warehouse/
-├── FLOWRRA_Warehouse_V2/        current version: code, tests, design notes, V2 benchmark data
-├── FLOWRRA_Benchmark/           previous version's failure benchmark: scripts, CSV, figures
-├── all_scens_v2/                scenarios used by the previous version
-├── ckpt_pilot2/, ckpt_pilot3/   previous-version checkpoints
-├── training_figures/, figs_dist/  previous-version training and distance figures
-├── Flowrra_animation.mp4        animation of a run (animated_flowrra.py)
+├── FLOWRRA_Warehouse_V2/        the current version
+│   ├── Flowrra_Article.md       the article: the whole system and the final test
+│   ├── Flowrra_Architecture.html  one step of the system, phase by phase (made by make_ouroboros.py)
+│   ├── *.py                     all runnable code, side by side (see the table below)
+│   ├── Final_Report/            the final test: per-day CSVs, tables, figures, the two GIFs
+│   ├── Journey_in_Writing/      the build log (V2_The_Conflict_Ladder.md) and the design notes
+│   ├── ladder_run1/, ladder_run4/, ladder_run6/, ladder_run7/, ...   checkpoints and training metrics, one folder per run
+│   ├── all_scens_final/         the final test's scenarios (seeds 0-7 per map)
+│   ├── kiva_instances/          lifelong Kiva instances extracted from POGEMA
+│   ├── deploy_files/            earlier deploy_eval results
+│   ├── Benchmark/               the earlier failure benchmark: data and BENCHMARK.md
+│   ├── reports_during_process/  reports, figures and config snapshots from individual runs
+│   └── test_files/              the tests
+├── FLOWRRA_Benchmark/           previous version's failure benchmark
+├── Flowrra_animation.gif / .mp4  previous version's animation
 └── *.py, *.csv                  previous-version code and results
 ```
 
-The previous benchmark in `FLOWRRA_Benchmark/` used different maps (`25_10_5_10_5_2`, `50_20_5_10_5_2`), 50 vehicles, 10 seeds and no RULES arm. Its numbers can't be compared directly with V2's.
-
-**Inside `FLOWRRA_Warehouse_V2/`:**
+**The code in `FLOWRRA_Warehouse_V2/`:**
 
 | Area | Files |
 |---|---|
-| Simulator and policy | `core_warehouse.py`, `node_warehouse.py`, `loop_warehouse.py`, `density_warehouse.py`, `agent_warehouse.py`, `encoder_warehouse.py`, `recovery_warehouse.py`, `proximity_warehouse.py`, `obstacles_warehouse.py` |
-| RULES | `conflict_warehouse.py`, `corridor_warehouse.py` |
-| Configuration | `config_warehouse.py`, plus the `config_benchmark_*.py` snapshots used for specific runs |
+| Simulator and policy | `core_warehouse.py`, `node_warehouse.py`, `loop_warehouse.py`, `density_warehouse.py`, `agent_warehouse.py`, `encoder_warehouse.py`, `recovery_warehouse.py`, `proximity_warehouse.py`, `obstacles_warehouse.py`, `guard_warehouse.py` |
+| RULES and the ladder | `conflict_warehouse.py`, `corridor_warehouse.py` |
+| Configuration | `config_warehouse.py` |
 | Training | `main_runner_warehouse.py` |
-| Benchmarks | `benchmark_all_new.py`, `benchmark_flowrra_new.py`, `baselines_mapf_new.py`, `drive_shortest_path.py`, `benchmark_report.py`, `generate_benchmark_figures.py` |
-| Kiva / published maps | `convert_grid_map.py`, `kiva_instances.py`, `run_kiva.py` |
-| Diagnostics | `check_identity.py`, `lesion_harness.py`, `radius_study.py`, `measure_order_dependence.py`, `profile_step.py` |
-| Tests | `test_*.py` |
-| Design notes | `CONFLICT_DESIGN.md`, `Simultaneous_Step.md`, `Reward_Design.md`, `Stream_Design.md`, `Path_Awareness.md`, `Target_Network.md`, `Calibration.md`, `DESIGN_PROPOSAL.md`, `FLOWRRA_QuickReference.md`, `Flowrra_Architecture.html` |
-| Benchmarks and runs | `BENCHMARK.md`, `WHAT_CHANGED.md`, `Cold_Run23.md`, `COLD_RUN25_ANALYSIS.md` |
+| The final test | `deploy_eval.py`, `mapf_drivers.py` (PIBT and RHCR as drivers on our floor), `drive_shortest_path.py` (RULES), `final_jobs.py`, `final_report.py`, `record_day.py`, `render_day.py` |
+| Earlier benchmarks | `benchmark_all.py`, `benchmark_flowrra.py`, `baselines_mapf.py`, `benchmark_report.py`, `analyse_run.py` |
+| Kiva and lifelong | `convert_grid_map.py`, `kiva_instances.py`, `kiva_eval.py`, `run_kiva.py` |
+| Scenarios | `generate_scenarios.py`, `check_scenario_overlap.py`, `mapcheck.py` |
+| Diagnostics | `check_identity.py`, `lesion_harness.py`, `radius_study.py`, `measure_order_dependence.py`, `profile_step.py`, `profile_phases.py`, `correlate_ray_repulsion.py`, `five_measure_rule.py` |
+| The architecture page | `make_ouroboros.py` -> `Flowrra_Architecture.html` |
 
 ---
 
@@ -156,66 +185,80 @@ The previous benchmark in `FLOWRRA_Benchmark/` used different maps (`25_10_5_10_
 Install Python 3 and the dependencies:
 
 ```bash
-pip install numpy pandas networkx torch scipy matplotlib seaborn
+pip install numpy pandas networkx torch scipy matplotlib seaborn plotly pillow
 cd FLOWRRA_Warehouse/FLOWRRA_Warehouse_V2
 ```
 
-Kiva runs also need `pogema`. It's safest to install it in a separate environment, because it pins numpy 1.26.
+Kiva lifelong runs also need `pogema`. It's safest to install it in a separate environment, because it pins numpy 1.26.
 
-**Tests.** Each test file ends with `ALL PASS`:
-
-```bash
-for t in test_*.py; do python "$t"; done
-```
-
-**Maps.** The maps aren't stored in this repo. They come from the 3D MAPF warehouse dataset, which is linked from the [mapf.info benchmarks page](https://mapf.info/index.php/Main/Benchmarks). The scripts read each map as a nodes CSV and an edges CSV from `all_maps/`, and read scenarios from an `all_scens*/` folder. `generate_scenarios.py` builds the scenarios.
-
-**Turning RULES on.** The six conflict switches are off by default in `config_warehouse.py`, so earlier runs stay reproducible. `config_benchmark_rules.py` has all six on: copy it over `config_warehouse.py`. Scripts that accept overrides can also take them directly (`drive_shortest_path.py --arm`, `run_kiva.py --set`).
-
-**The failure benchmark** (the headline table):
+**Tests.** Run them from `FLOWRRA_Warehouse_V2/`, so they find the modules beside them. Each test file ends with `ALL PASS`:
 
 ```bash
-python benchmark_all_new.py --maps 25_5_2_5_2_1,50_20_5_10_5_2 \
-    --agents 25,40,60 --seeds 0,3,4,5,6,7,8,9 \
-    --methods FLOWRRA,RULES,RHCR-PIBT+naive \
-    --fail --fail-waves W1,W2,W3 --fail-agents 3 \
-    --checkpoint CHECKPOINT.pth --out benchmark_new_all_2.csv
+for t in test_files/test_*.py; do PYTHONPATH=. python "$t"; done
 ```
 
-**Training.** Run `python main_runner_warehouse.py --help` to see every option. For example, this is the fixed-mission reference run:
+**Maps and scenarios.**
+- The maps aren't stored in this repo. Download the 3D MAPF warehouse dataset (Wang et al., ICAPS 2024), linked from the [mapf.info benchmarks page](https://mapf.info/index.php/Main/Benchmarks), and put each map's nodes and edges CSVs in `all_maps/`.
+- The final test's scenarios are in `all_scens_final/`. `generate_scenarios.py` regenerates them, or makes new ones.
+
+**The final test** (240 jobs; about 16 hours on 14 processes):
 
 ```bash
-python main_runner_warehouse.py --seed 0 --maps 25_5_2_5_2_1 --scens-dir all_scens_v3 \
-    --episodes 60 --agent-sets 46 --max-steps 800
+python final_jobs.py --list                                    # the jobs, and which are done
+nohup python final_jobs.py --run --parallel 14 > final_queue.log 2>&1 &
+python final_jobs.py --status
+python final_jobs.py --merge                                   # -> final_clean.csv, final_full.csv
+python final_report.py --clean final_clean.csv --full final_full.csv --out Final_Report
 ```
 
-Add `--cold-start` when training from scratch.
+**Replay a scored day.** `--check` confirms the replay is identical to the scored day:
 
-**Capacity runs, reports and Kiva.** See [`BENCHMARK.md`](FLOWRRA_Warehouse_V2/BENCHMARK.md).
+```bash
+python record_day.py --arm ladder4 --map Kiva_2D_46_33_1 --fleets 60 --seed 3 --cond full --check Final_Report/final_full.csv
+python render_day.py day_ladder4_Kiva_2D_46_33_1_k60_s3_full.json.gz --gif
+```
+
+`--book`, `--max-failures` and `--extra-steps` make variants of a day, and every frame's title says so. The GIFs above were made with `--book 150 --extra-steps 600`.
+
+**Training.** Run `python main_runner_warehouse.py --help` to see every option. The commands for each run are in the build log.
+
+**Turning RULES on for earlier configs.** `reports_during_process/config_benchmark_rules.py` is the config snapshot with all six conflict switches on.
+
+**Capacity runs, reports and Kiva.** See [`BENCHMARK.md`](FLOWRRA_Warehouse_V2/Benchmark/BENCHMARK.md).
 
 ---
 
 ## Roadmap
 
-1. **Continuous-flow benchmark against RULES:** frozen weights, paired episodes, failures on.
-2. **Obstacles:** people in aisles and unmapped blockages, the cases a planner can't prepare for.
-3. **The policy earning its place:** [The Conflict Ladder](FLOWRRA_Warehouse_V2/V2_The_Conflict_Ladder.md). RULES become path-aware escalating rungs, a Learner head learns their judgement, and Safety pays by rung. Every training run is judged against RULES on the same instances.
-4. **Learning while deployed:** the policy keeps learning in operation, with the orchestrator as its safety guardrail.
-5. **Kiva, using Follower's lifelong protocol:** throughput on their exact 60 instances, reported together with the physics difference (POGEMA has no braking or collisions).
-6. **Compute microbenchmark:** per-step decision cost against central replanning, by map size.
-7. **Workshop paper** on the orchestrator ablation.
+1. **Federated holons.** Holons that grow and shrink, and rebalance fleets between zones of the floor, keeping each zone at equilibrium, in the spirit of GRAND. Throughput pressure then becomes per zone.
+2. **The full Gibbs field:** the exponential field with a shared partition function, the global spatial entropy, and F = E − T·S as the objective.
+3. **A learned boundary, then an exact collapse:** exit cells for every fleet in a jam, then a space-time solve between the two boundaries.
+4. **A boundary that scales with speed:** from hop scale towards centimetres where that is safe, as real AGVs' speed-dependent safety fields do.
+5. **The network alone:** more training for the route-off networks, which already match the best planner at high density under failures.
+6. **Lifelong capacity:** the boundary-cost test across seeds, on POGEMA's own instances, with FLOWRRA's networks beside the planners.
+7. **The world:** fleets that enter and leave the floor; batteries, with charging served by the same leave-and-return dynamics as the docks; and hardware.
 
 ---
 
 ## About
 
-FLOWRRA is an independent research project by Rohit Tamidapati ([DhaaRn](https://dhaarn.com)). I designed the system and the experiments, and I built it with heavy AI assistance. I hold the work to a few practices: system design, informational flow, policy transformation, frozen benchmarks, paired comparisons, predictions written down before runs, and correcting the record in public when a result doesn't hold.In short, The inuitive one.
+FLOWRRA is an independent research project by Rohit Tamidapati ([DhaaRn](https://dhaarn.com)). I designed the system and the experiments, and I built it with heavy AI assistance.
 
-I'd love to do this kind of work inside a team facing these problems at scale. If you run a fleet and want to see how FLOWRRA behaves on your layout, or have a view on how it should be tested, I'd like to hear from you through [dhaarn.com](https://dhaarn.com) or [ rohittamidapati@gmail.com ] .
+I hold the work to a few practices:
+- system design and informational flow;
+- policy transformation;
+- frozen benchmarks and paired comparisons;
+- predictions written down before runs;
+- correcting the record in public when a result doesn't hold.
+
+In short, the intuitive one.
+
+I'd love to do this kind of work inside a team facing these problems at scale. If you run a fleet and want to see how FLOWRRA behaves on your layout, or have a view on how it should be tested, I'd like to hear from you through [dhaarn.com](https://dhaarn.com) or [ rohittamidapati@gmail.com ].
 
 **Writing**
 
-- [FLOWRRA in Warehouse: Evolution towards Harmony](https://rohittamidapati.substack.com/p/flowrra-in-warehouse-evolution-towards) covers V2.
+- [`Flowrra_Article.md`](FLOWRRA_Warehouse_V2/Flowrra_Article.md) covers the whole system and the final test.
+- [FLOWRRA in Warehouse: Evolution towards Harmony](https://rohittamidapati.substack.com/p/flowrra-in-warehouse-evolution-towards) covers V2 before the Conflict Ladder.
 - [FLOWRRA: Flow Recognition Reconfiguration Agent](https://open.substack.com/pub/rohittamidapati/p/flowrra-flow-recognition-reconfiguration) covers the concept.
 
 ## License

@@ -1,0 +1,1787 @@
+"""
+config_warehouse.py -- RUN 9: ladder_run5, THE LEARNER AS THE ROUTER, WARM from
+ladder4, the v2 champion (2026-10-14).
+
+Run 8 (ladder_run4, SARSA) became the champion (build log 39-41). At meetings
+the network has reached RULES (fewer stand-offs, delivered level); the problem
+left is IN THE CLEAR, where the hard-coded route drives and the network's own
+moves never run, so their values are never corrected (it disagrees with the
+route on ~40% of clear moves). Run 9 hands the clear to the network.
+
+NEW IN THIS RUN (training.learner, mode "router"; build log entry 42):
+  the Learner head learns the route's move for every fleet in the clear
+  (computed, executed or not); never the network's own moves; nothing at
+  meetings. It reads the trunk but never trains it, has its own optimizer,
+  and its init draws from its own random stream.
+  The hand-over, per episode (main_runner_warehouse.router_plan):
+    warm-up   route ON, Learner in shadow (scale 0), >= 5 episodes and until it
+              agrees with the route on >= 80% of clear moves in an episode
+              (98% until dry run 1, 14 Oct: the Learner levels off at about
+              83% on the small map and 97% on the large; build log 42);
+    switch    route OFF for the rest of training;
+    fade      in the clear, score = Q + beta x P_Learner, beta = scale x the
+              heads' median gap; scale 3.0 -> 0 by episode 65;
+    tail      episodes 66-80 at scale 0: the network alone, as deployed.
+  The Q heads keep SARSA: the clear is now really driven, and valued as made.
+  test_learner_router.py.
+
+KEPT FROM RUN 8: SARSA, honest_target, no_work_exit, route_explore (moot after
+the switch), the guard, bubbles, hops, the stream with the fixed book, people,
+failures with waves, the ladder, rung costs, exploration 0.05 / 0.02.
+
+RUN 9. Dry run first (12 episodes, about 1 hour; the same shape compressed:
+warm-up >= 3, fade to episode 10, 2 at 0), then the run (80 episodes, about
+6.5 hours):
+  nohup python -u main_runner_warehouse.py --seed 0 \
+      --maps 25_5_2_5_2_1,50_20_5_10_5_2 --scens-dir all_scens_v5 \
+      --episodes 12 --agent-sets 25,40,60 --max-steps 800 \
+      --resume ladder_run4/flowrra_curriculum.pth --out ladder_run5_dry2 \
+      > ladder_run5_dry2.log 2>&1 &
+
+  nohup python -u main_runner_warehouse.py --seed 0 \
+      --maps 25_5_2_5_2_1,50_20_5_10_5_2 --scens-dir all_scens_v5 \
+      --episodes 80 --agent-sets 25,40,60 --max-steps 800 \
+      --resume ladder_run4/flowrra_curriculum.pth --out ladder_run5 \
+      > ladder_run5.log 2>&1 &
+
+GRADUATION (frozen test): ladder5 with the route OFF against ladder4 with it ON:
+  --arms ladder5=ladder_run5/flowrra_curriculum.pth:noroute,ladder4=ladder_run4/flowrra_curriculum.pth,RULES
+
+EARLIER RUNS, reproducible from this file by switches alone:
+  run 8, ladder_run4   learner OFF (the v2 champion since entry 41)
+  run 7, ladder_run3   learner OFF, sarsa OFF
+  run 6, ladder_run2   honest_target OFF, no_work_exit OFF, eps_peak 0.30,
+                       --cold-start, 150 episodes
+  run 5, warm_stream1  safety all OFF, route_by_default OFF, presence_charge ON,
+                       eps_peak 0.05, --resume ladder_run1/flowrra_curriculum.pth,
+                       50 episodes
+  run 2, ladder_run1   run 5's switches with stream OFF, obstacles OFF,
+                       eps_peak 0.30, --cold-start, 150 episodes
+  run 4, learner_run2  run 2 + learner ON (prob, beta 0.1), ladder.context ON,
+                       next_state_edge_features ON
+  teacher_run1         ladder OFF, rung_costs OFF, learner OFF,
+                       teacher_margin ON (weight 0.01)
+
+-------------------------------------------------------------------------------
+config_benchmark_rules.py -- the cold_run23 benchmark, re-run with everything since.
+
+Copy over config_warehouse.py on the machine that runs it. Same benchmark as
+cold_run23 (config_benchmark_cold_run23.py): fixed missions, rescues on
+(errors.enabled), buffer 20,000 -- run with the same command and --seed 0, so the
+60 instances are identical to cold_run19-23 and the comparison is paired.
+
+Differs from cold_run23 by: the six conflict switches (CONFLICT_DESIGN.md),
+the recovery head priced on collisions (recovery_policy.reward_mode), the
+recovery charge counted once, the rescue-path fixes, frozen_obstacle_severity
+0.0 (the parked-fleet false alarm cold_run23's handoff suspected) and
+slow_decay_factor 0.9786.
+"""
+"""
+config_Warehouse.py
+
+Centralized configuration payload for the DhaaRn FLOWRRA orchestrator.
+Manages hyper-parameters for the discrete warehouse GNN, density fields, and training loops.
+"""
+
+CONFIG = {
+    # ------------------------------------------------------------------
+    # THE STEP ITSELF
+    # ------------------------------------------------------------------
+    "step": {
+        # Every fleet takes ONE step together. Distinct conflicts resolve
+        # independently; entangled ones jointly. See SIMULTANEOUS_STEP.md.
+        #
+        # The movement loop is always split into two phases -- decide-and-move,
+        # then judge -- which on its own changes nothing. This flag decides what
+        # the judge phase reads:
+        #   False: live shared state, exactly as before (order-dependent).
+        #   True:  snapshots taken between the phases. Two fleets reaching one
+        #          goal in the same step are resolved by distance, then id --
+        #          never by list position. Losers' retargets are deferred and run
+        #          in a fixed order. Splats are computed from the committed
+        #          configuration, so a collision's penalty and its splat land in
+        #          the same transition.
+        #
+        # Measured before this existed, identical actions forwards vs reversed:
+        # 2 of 40 fleets in a different place after one step, 5 of 40 after five.
+        # measure_order_dependence.py must report 0 with this on.
+        "simultaneous": True,
+    },
+
+    # ==========================================
+    # 1. HARDWARE & WAREHOUSE LIMITS
+    # ==========================================
+    "warehouse": {
+        "bounds": (50.0, 50.0, 10.0),      # FALLBACK ONLY. Maximum X, Y, Z dimensions for
+                                            # normalization. FLOWRRA now derives these per
+                                            # map from the actual node coordinate extents
+                                            # (see core_warehouse.py's _derive_bounds), and
+                                            # only falls back to this literal if the
+                                            # coordinate dict is empty or degenerate.
+                                            #
+                                            # WHY: get_relative_goal_displacement() divides
+                                            # the goal offset by these bounds and clips to
+                                            # +-1. Hardcoded at 50, every goal more than 50
+                                            # cells away on a 100x100 map saturates to
+                                            # exactly 1.0 -- direction survives, MAGNITUDE
+                                            # is destroyed, and it is destroyed precisely
+                                            # for the long journeys the multi-map curriculum
+                                            # exists to teach. Deriving per map also makes
+                                            # the feature scale-invariant, which is what you
+                                            # want for transfer: "60% of the way across this
+                                            # warehouse" should mean the same thing on every
+                                            # map.
+        # How close a fleet must be to its goal to count as delivered, in
+        # INTERPOLATED GRAPH HOPS. get_graph_distance_to_goal() interpolates, so
+        # a fleet mid-edge into the goal cell reads 0.5.
+        #
+        # 0.1 means "within a tenth of a cell", which is far stricter than
+        # anything else in the system -- every other consumer rounds position to
+        # a cell. At base_speed 0.5 a fleet is mid-edge half the time.
+        # 0.5 means "the fleet's cell IS the goal cell", which is the consistent
+        # definition. Measured: 2-4 active fleets per episode get inside 0.5 of
+        # their goal and are never credited.
+        "arrival_radius": 0.5,             # 0.1 (strict) | 0.5 (cell-based)
+
+        "base_speed": 0.5,                 # Discrete movement speed scalar
+        "braking": True,                   # Slow down near peers (0.1x at collision
+                                           # distance, full speed at the warning
+                                           # distance). False: always full speed, as
+                                           # in POGEMA (a whole cell or stay put) --
+                                           # for comparisons on their protocol.
+        "max_vision_range": 10,            # Edges an AGV can see down an aisle
+        "collision_threshold": 0.5,        # HOPS (graph distance; proximity.metric "graph" --
+                                            # Manhattan only if that is switched back). Two
+                                            # fleets this close have collided.
+                                            # Was 1.0 -- but every edge in the real graph
+                                            # is exactly 1.0 long (confirmed: 11230/11230),
+                                            # so a threshold of 1.0 meant "same cell" (dist=0,
+                                            # a true overlap) and "adjacent cell" (dist=1, one
+                                            # aisle over) were scored identically as fatal.
+                                            # 0.5 makes only true overlaps fatal; adjacent-node
+                                            # proximity now falls into the warning zone instead.
+        "warning_threshold": 2.0,          # HOPS (graph distance, as above). The distance-
+                                            # only warning and braking distance, used when
+                                            # path warnings / safety.bubbles_by_kind are off;
+                                            # with path warnings on, pairs warn by KIND
+                                            # (conflict.*) and this is the fallback for an
+                                            # "unknown" pair. Also scales the network's
+                                            # "peer nearby" input (0 at or beyond it).
+
+        # Final-approach override: many fleets in this dataset have NEARBY goals
+        # (confirmed by inspecting the missions), so it's common and expected --
+        # not a sign of real conflict -- for two fleets to end up in each other's
+        # warning zone right as they're both about to finish. Without this, the
+        # normal warning-zone speed throttle (see step()'s affordance braking)
+        # slows a fleet down exactly when it should be pushing through the last
+        # stretch. Once a fleet has covered final_approach_threshold of its
+        # ORIGINAL journey (get_progress_fraction() in node_warehouse.py), its
+        # warning-zone speed floor is raised to final_approach_speed_floor instead
+        # of the normal ramp's minimum -- but ONLY in the warning zone, never in
+        # a genuine fatal-distance situation, where safety still floors it at 0.1
+        # regardless of progress.
+        "final_approach_threshold": 0.85,
+        "final_approach_speed_floor": 0.7,
+    },
+    
+    # ==========================================
+    # 1b. GOAL ASSIGNMENT (shared-pool mode only)
+    # ==========================================
+    # Ignored entirely when USE_SHARED_POOL_MODE is False -- fixed-mission mode
+    # has a pre-assigned 1:1 pairing from the CSV already.
+    "assignment": {
+        # "hungarian": one-time optimal 1:1 fleet->goal matching at spawn,
+        #     minimizing TOTAL graph distance across the fleet
+        #     (scipy.optimize.linear_sum_assignment, with a greedy 1:1 fallback
+        #     if scipy is missing). Every goal gets exactly one owner and every
+        #     fleet an uncontested target.
+        # "greedy": the previous behaviour -- each fleet independently picks its
+        #     own nearest available goal, in fleet-list order. Now at least
+        #     reservation-aware, so it can no longer double-book, but the picks
+        #     are still uncoordinated and the total is not optimal.
+        #
+        # Measured on 25 random 25-fleet layouts: uncoordinated picking left an
+        # average of 9.5 fleets (38%) chasing a goal another fleet would reach
+        # first. Note that "hungarian" costs ~51% MORE total travel (177 vs 118
+        # hops) -- it refuses to let three fleets share one cheap goal while two
+        # distant goals go unserved. It removes the free win, not the difficulty.
+        "mode": "hungarian",
+
+        # Reservation ledger (core_warehouse.py's targeted_goals). Applies to
+        # BOTH modes above and to every mid-episode retarget: a goal another
+        # fleet is currently en route to is unavailable, not just one that has
+        # already been physically claimed. Keeps the 1:1 property that the
+        # spawn assignment establishes from decaying over the episode.
+        "reserve_targets": True,
+    },
+
+    # ==========================================
+    # 2. DISCRETE PHYSICS & DENSITY
+    # ==========================================
+    "density": {
+        # REWORKED (2026-08-28). The Poisson kernel is gone -- see
+        # density_warehouse.py's module docstring for the full rationale. Short
+        # version: the Poisson survival curve was just a monotone-decreasing
+        # falloff with an illegible shape parameter, and none of the actual
+        # Poisson structure was ever used. A linear ramp does the same job with a
+        # number you can reason about.
+        #
+        # lambda_severity / decay_rate REMOVED. WarehouseDensityField still
+        # ACCEPTS them (so an un-updated caller constructs without error) but
+        # ignores them entirely.
+
+        "falloff_radius": 3.0,             # Repulsion reaches zero at this distance, in
+                                            # HOPS with kernel_metric "graph" (below).
+                                            # k(d) = max(0, 1 - d/r), so at 3.0
+                                            # the curve is [1.0, 0.67, 0.33, 0.0]. Replaces
+                                            # lambda_severity. Bigger = wider, softer
+                                            # bubbles; smaller = tighter, more local.
+        "peer_severity": 0.7,              # Repulsion an active peer stamps at its own
+                                            # cell. Unchanged in value from the old
+                                            # hardcoded 0.7, now configurable.
+        "projection_steps": 3,             # SWEPT PATH length, in CELLS (node.direction is
+                                            # a unit cell delta). Was effectively 1, and
+                                            # isotropic. Stamping the cells a peer is about
+                                            # to occupy is what lets the field distinguish
+                                            # a fleet closing head-on from one receding --
+                                            # a symmetric ball scores both identically.
+                                            # At base_speed=0.5, 3 cells is ~6 sim steps of
+                                            # lookahead, which is the "5 steps ahead"
+                                            # horizon that actually matters for a crossing.
+        "projection_falloff": 0.6,         # Severity multiplier per cell along the trail:
+                                            # 0.42, 0.25, 0.15. The comet tail fades.
+
+        # ---- Spatial-Temporal memory: SHORT-LIVED, never saturating ----
+        # The old scheme ADDED +5.0 (fatal) / +2.0 (warning) against a linear
+        # -0.1/step decay. Measured consequences: one fatal splat produced 63
+        # cells reading exactly 0.0, the crash cell did not rise above zero for
+        # 41 steps, and no adjacent cell passed the Tier-1 gate for 47 steps
+        # (~23 cells of travel at base_speed=0.5). Worse, the warning splat fired
+        # EVERY step integrity was 0.5, netting +1.9/step, pinning at the 10.0
+        # cap in 5 steps and needing 100 steps to clear -- which is exactly how
+        # two fleets pausing near adjacent goals turned that goal region into a
+        # permanent no-go zone for the rest of the episode.
+        "fatal_splat_multiplier": 1.5,     # Down from 5.0. Splats now take max(), not +=,
+                                            # so re-splatting an occupied cell is a true
+                                            # no-op instead of a ratchet.
+        "warning_splat_multiplier": 0.6,   # Down from 2.0. A close pass is a hint, not a
+                                            # crater.
+
+        # ONE WARNING SPLAT PER ACTUAL PAIR.
+        # The old code splatted at the midpoint of the first two elements of
+        # warning_nodes -- an unordered SET. With one warning pair that was right;
+        # with two or more anywhere on the map it usually paired two UNRELATED
+        # fleets and stamped repulsion on empty floor between them, while every
+        # real conflict but at most one got nothing. It also splatted once per
+        # step however many conflicts existed.
+        # Verified with two conflicts and a convoy on the map at once: the old
+        # code put its single splat on empty floor near no pair; per-pair put
+        # one at each conflict and, with convoys skipped, none on the convoy.
+        # True: one splat per real warning pair, local to that pair.
+        #       With recovery.preempt_skip_convoys, following pairs are skipped.
+        # False: old behaviour, exactly reproducible.
+        "warning_splat_per_pair": True,
+
+        # SLOW CONGESTION CHANNEL -- a third density input beside mask and
+        # repulsion. The fast memory (memory_decay_factor 0.7) has a half-life of
+        # 1.9 steps and is gone in 7-10, while a median route is ~54 steps and
+        # the learner looks 100 ahead: it covers 3.3% of the value horizon and
+        # can teach "not this cell right now" but never "this corridor keeps
+        # jamming". The cold_run13 stranded fleets made ~3 hops of net progress
+        # over an episode while losing only ~27 steps to waits and holds.
+        #
+        # A SEPARATE channel, not a slower memory_decay_factor: at 0.98 one
+        # warning splat would stay live ~120 steps, and every brush in a
+        # one-cell-wide shaft would leave the only route repulsive for most of
+        # an episode. A separate channel lets the network learn its weight.
+        #
+        # Requires output_mode "channels". Changes the state size (462 -> 693
+        # density values), so it needs a FRESH cold run -- no warm start.
+        "slow_channel": True,
+        # PATHS AHEAD (PATH_AWARENESS.md): channels 4 and 5 -- the fleet's own
+        # route and its neighbours' cumulative routes, local_radius cells ahead.
+        # 777 -> 1239 inputs: a cold start, and the buffer needs ~20,000 to fit
+        # 46 fleets in RAM. False: exactly as before.
+        "paths_channels": True,
+        # Read mask and repulsion from the first two channels however many
+        # follow; without it the Gibbs entropy feature reads the mask channel
+        # whenever there are 3+ channels (every run since cold_run14).
+        "entropy_fix": True,
+        "slow_decay_factor": 0.9786,       # half-life 32 steps (was 0.987 = 53). Measured on stream traffic: 0.987 -> stale
+        # alarms 8%, anticipation 42%; 0.9786 -> 6%, 41%; shorter only loses anticipation (0.966: 29%,
+        # 0.944: 14%) with stale flat at 6%. STREAM_DESIGN.md.
+        "slow_severity_scale": 1.0,        # scale applied to each event's severity
+        "memory_decay_factor": 0.7,        # MULTIPLICATIVE per step (replaces the linear
+                                            # decay_rate=0.1). A 1.5 fatal marker falls
+                                            # below memory_floor in 8 steps: affordance at
+                                            # the crash cell goes 0.40 -> 0.49 -> 0.58 ->
+                                            # 0.66 -> 0.74 -> 0.80 -> 0.85 -> 0.89 -> gone.
+                                            # That is the temporal neighbourhood in which
+                                            # an encounter is still relevant.
+        "memory_floor": 0.05,              # Below this a marker is deleted outright.
+        "memory_cap": 2.0,                 # Hard ceiling on any single marker. Down from
+                                            # 10.0, and now genuinely load-bearing: under
+                                            # A = 1/(1+R) nothing saturates, but this keeps
+                                            # a marker from dominating the local field.
+        "frozen_obstacle_severity": 0.0,   # stream runs: retired fleets leave; 0 also covers any that cannot (was 1.0)
+        # ORIGINAL NOTE (1.0):   # Base severity a parked (frozen) fleet
+                                            # presents to OTHER fleets passing through --
+                                            # full strength at near_goal_radius+ away,
+                                            # smoothly discounted to 0 right at a fleet's
+                                            # OWN goal (see get_local_affordance's
+                                            # docstring for why: without this, a fleet
+                                            # whose goal neighbors an already-parked
+                                            # peer would see its own destination as a
+                                            # permanent no-go zone and never finish).
+        "frozen_near_goal_radius": 3.0,    # Distance (graph units) within which a
+                                            # frozen peer's obstacle severity ramps down
+                                            # toward 0, scaled by how close it is to the
+                                            # OBSERVING fleet's own goal.
+
+        # ---- Peer projection: INTENDED PATH, not dead reckoning (2026-09-13) ----
+        # The trail a peer stamps is now its greedy descent on its own goal BFS
+        # map, not current_pos + direction * k. See density_warehouse.py's
+        # projection block for the two defects that replaced: projecting through
+        # racks (where the structural mask then discards the stamp entirely, so a
+        # turning peer projected NOTHING), and half-cell aliasing under banker's
+        # rounding (a peer at 10.5 stamped 12, 12, 14 -- skipping 11 and 13).
+        "projection_max_branches": 6,      # Cap on simultaneous branches when the
+                                            # descent ties. On a degree-~2.27 corridor
+                                            # graph ties are rare, so this is a bound on
+                                            # pathological cases, not a tuning knob.
+        # ---- Falloff kernel: GRAPH HOPS, not Manhattan (2026-09-13) ----
+        # The third and last instance of the Manhattan-vs-graph defect fixed
+        # this session. stamp() measured falloff as Manhattan distance inside
+        # the cube, so a peer behind a shelf at Manhattan 2 / graph 20 stamped
+        # 0.33 repulsion onto the observer as though it were two cells away.
+        # _structure_mask does NOT catch this: it zeroes cells the OBSERVER
+        # cannot reach, and says nothing about whether the SOURCE can reach them.
+        #
+        # Corners get MORE accurate, not less: a BFS follows the aisle round a
+        # bend, so a peer at graph distance 2 around a corner still stamps at
+        # full kernel strength, where Manhattan under-counted it.
+        #
+        # Verified identical to the old kernel down an unobstructed corridor
+        # (test_kernel.py::test_straight_corridor_matches_manhattan_exactly).
+        # "manhattan" reproduces published runs bit-for-bit.
+        # "affordance" -> 231 dims, mask/(1+R), for the flat encoder.
+        # "channels"   -> 462 dims, mask and repulsion packed separately, for
+        #                 the gated 3D convolution. Must be set together with
+        #                 gnn.encoder = "conv": the encoder needs the two
+        #                 channels apart to gate on the mask, and the flat path
+        #                 has no idea what to do with 462 dims.
+        "output_mode": "channels",       # "affordance" | "channels"
+
+        "kernel_metric": "graph",          # "graph" | "manhattan"
+
+        # Passed through to FleetNode. See its ray_transform field: "clip25"
+        # saturates at 25 cells, "smooth" is d/(d+softness) and never does.
+        "ray_transform": "smooth",         # "clip25" | "smooth"
+        "ray_softness": 8.0,
+
+        # "intended" | "dead_reckoning". Set BOTH this and kernel_metric to
+        # their pre-2026-09-13 values ("dead_reckoning", "manhattan") to
+        # reproduce the environment a checkpoint was TRAINED under. A policy
+        # trained on one set of density values and evaluated on another is out
+        # of distribution in all 231 dims, and the size of that shift grows with
+        # peer count -- invisible at 0.24% occupancy, large at 4.18%.
+        "projection_mode": "intended",
+
+        "project_stationary": True,        # Project peers whose direction is 0 (idle,
+                                            # braked, or just wall-bumped -- which zeroes
+                                            # direction in apply_discrete_action).
+                                            # BEHAVIOUR DELTA: the old dead-reckoning
+                                            # version projected nothing for these. Set
+                                            # False to restore that if intent-splatting
+                                            # stationary fleets over-repels in congestion.
+    },
+
+    # ==========================================
+    # 2. WAITING
+    # ==========================================
+    # Standing still is available (action 0, always structurally valid) and was
+    # unconditionally punished: idle_penalty fires on every non-moving step
+    # while progress pays movement_reward_multiplier * distance_closed. The
+    # policy was taught, at every density, that waiting costs and pushing pays.
+    #
+    # Measured at 4.18% occupancy on 2026-09-14: 13,041 collapse events, one
+    # fleet pair colliding 314 separate times, and 25.7% of Tier-1 "successful"
+    # escapes moving the fleet to its own position.
+    #
+    # A real multi-step hold already existed (_yield_until) but ONLY Tier-3
+    # recovery could invoke it, at a single call site. Its own comment records
+    # that it replaced a one-step version because that "let a loser immediately
+    # retry the same losing move the very next step." The lesson was learned
+    # once, for recovery. The policy had no equivalent.
+    #
+    # WAITING is a peer-VISIBLE state, not just an internal flag. A waiting
+    # fleet, a dead fleet and a parked fleet all have direction 0 and are
+    # indistinguishable through peer_velocities -- so a fleet could never tell
+    # whether the one in front of it would ever move again. ray_hit_waiting
+    # reads this set; a VDA 5050 state report would carry it.
+    "waiting": {
+        "enabled": True,                  # default OFF until the retrain
+        "max_wait_steps": 12,              # the idle-penalty exemption LAPSES after
+                                            # this many consecutive waiting steps, so
+                                            # the penalty resumes and the policy is
+                                            # pushed to try something else. Bounded on
+                                            # purpose: an exemption can only ever be
+                                            # worth zero, where a positive reward for
+                                            # inaction could be farmed by parking
+                                            # beside a peer forever.
+        "mutual_wait_steps": 3,            # shorter cap when the BLOCKER IS ALSO
+                                            # WAITING. A mutual standoff does not
+                                            # clear by waiting, so the exemption
+                                            # lapses fast. Symmetry is broken by
+                                            # remaining graph distance: the fleet
+                                            # further from its goal keeps the long
+                                            # cap and holds, the closer one is
+                                            # pushed to move first. Without that,
+                                            # both lapse on the same step, both
+                                            # move, and re-collide.
+        "block_threshold": 2.0,            # graph cells. A mobile peer this close
+                                            # means "blocked"; further means the fleet
+                                            # is idling in open space and is penalised
+                                            # exactly as before.
+    },
+
+    # ==========================================
+    # 2c. EPISODE SHAPE (Phase 4 groundwork, default off)
+    # ==========================================
+    # DESPAWN ON DELIVERY. A fleet that claims its goal currently FREEZES on
+    # that cell and stays there for the rest of the episode. Frozen fleets are
+    # excluded from the proximity index, so they stop being blockers for waiting
+    # and candidates for collisions -- they leave only a static density stamp,
+    # permanently, on a cell somebody wanted.
+    #
+    # With despawn it instead drives to the nearest exit and leaves. It is FULLY
+    # ACTIVE for that drive: counted in proximity, collisions, waiting and path
+    # conflict. More real congestion for longer, then none at all.
+    #
+    # It also removes the one state Phase 4 could not express honestly:
+    # ray_hit_permanent means "this will never move again", which is true of a
+    # dead fleet and false of a parked one that could be recalled. Despawning
+    # deletes the ambiguous case instead of encoding it.
+    #
+    # DEFAULT OFF, and it must stay off for the first retrain. There is no
+    # paired control available -- ckpt_pilot3 has input_dim 291 and cannot run
+    # in a 314/545-dim environment at all -- so the comparison is already
+    # old-features-on-old-env against new-features-on-new-env. Two differences.
+    # Turning this on makes three, and a bad result could not be attributed.
+    #
+    # respawn_on_call is NOT here: it needs a CALL to respond to, and calls come
+    # from an order stream. It belongs with continuous orders in Phase 4 proper.
+    "episode": {
+        "despawn_on_delivery": False,
+        "exit_nodes": None,                # explicit node ids, or None for the
+                                            # layout boundary
+        "max_exits": 8,                    # each exit costs one stored BFS map
+    },
+
+    # ==========================================
+    # 2b. UNREGISTERED OBSTACLES
+    # ==========================================
+    # Humans and debris. Costs NO state dimensions: ray_hit_unknown (6 dims) was
+    # reserved for this in Phase 2, precisely so that adding obstacles later
+    # would be a line of code rather than another retrain.
+    #
+    # They are perceived the only way an unregistered thing can be -- by RAY
+    # CAST. Position reports cover the fleet registry, the graph covers static
+    # structure, and neither knows about anything nobody registered.
+    #
+    # One category to the policy: a human and a piece of debris are the same
+    # fact, something is there and it is not a fleet. They differ only in how
+    # they arrive and how long they last.
+    #
+    # TWO MODES (obstacles_warehouse.py; test_obstacles_cleanup.py,
+    # test_obstacles_integration.py):
+    #   "wander"   the original: n_humans wander at random, n_debris never move.
+    #   "cleanup"  debris APPEARS during the episode, and a human enters at the
+    #              edge of that floor, walks to it, clears it and walks out.
+    #              Humans never step onto a fleet: they wait, then go around.
+    #              Nothing is permanent. Humans have absolute priority; the
+    #              ladder (fleet to fleet) never asks one to move.
+    "obstacles": {
+        "enabled": True,
+        "mode": "cleanup",
+        "seed": 0,                         # per-episode streams: seed x 1,000,003 + episode
+        "human_move_period": 3,            # steps per cell; fleets take 2 (base_speed 0.5)
+        # "cleanup" mode
+        "debris_interval": 200,            # average steps between new debris
+        "max_debris": 2,                   # at most this many on the floor at once
+        "response_delay": 10,              # steps before a human is sent
+        "cleanup_steps": 5,                # steps to clear it, standing next to it
+        "human_patience": 2,               # blocked moves before looking for a way round
+        "human_give_way": 6,               # blocked moves with no way round before stepping aside
+        "max_debris_life": 1000,           # unreachable debris is cleared after this
+        "max_human_life": 2000,            # a human boxed in this long leaves
+        # "wander" mode
+        "n_humans": 0,                     # move, slowly, and wander
+        "n_debris": 0,                     # do not move
+        "fixed_cells": None,               # place by hand instead of sampling, for
+                                            # constructing a specific situation
+    },
+
+    # ==========================================
+    # 2a. PERCEPTION SCHEDULING
+    # ==========================================
+    # Both state-build loops in core_warehouse.step() iterate self.nodes, not
+    # get_active_nodes(), so a PARKED fleet casts six rays, builds a 231-dim
+    # affordance field and gets a Q-forward pass -- twice per step -- and then
+    # active_mask zeroes its contribution to the loss. At step 200 of the
+    # 2026-09-13 run that was 160 of 200 fleets: 80% of all perception computed
+    # and thrown away.
+    #
+    # Episodically that is the last third of an episode. Under a CONTINUOUS
+    # order stream, where most of the fleet idles between bursts, it is the
+    # steady state -- which is why this is aimed at continuous mode rather than
+    # at the benchmark.
+    #
+    # NOT A FREE SAVING. _build_adjacency() includes immobile fleets, so the GAT
+    # attends over them and an ACTIVE fleet's embedding depends on its idle
+    # neighbours' features. Reusing a stale vector changes what active fleets
+    # see. Default stays "full"; the other modes are experiments to be measured
+    # paired on a frozen checkpoint, not settings to flip.
+    "perception": {
+        "idle_mode": "full",               # "full" | "cached" | "skip"
+        "idle_refresh_every": 10,          # steps between refreshes under "cached".
+        # "LOOK AT EVERYONE": every fleet's state ends with the holon's
+        # integrity (0 any collision / 0.5 any warning / 1 clear). One more
+        # base feature: 83 -> 84. False: previous width exactly.
+        "holon_integrity": True,
+                                            # An idle fleet does not move, so what
+                                            # goes stale is what is happening AROUND
+                                            # it -- which is what its neighbours
+                                            # attend to. Hence an interval, not a
+                                            # permanent cache.
+    },
+
+    # ==========================================
+    # 2b. PEER PROXIMITY METRIC
+    # ==========================================
+    # Replaces four independent copies of np.sum(np.abs(pos_a - pos_b)):
+    # sf_peer_proximity, braking, the safety reward, and check_integrity. See
+    # proximity_warehouse.py.
+    #
+    # EVERY PUBLISHED FLOWRRA NUMBER WAS MEASURED UNDER "manhattan". The flag is
+    # here so those runs can be reproduced after this change, not as a fallback
+    # for when "graph" misbehaves.
+    "proximity": {
+        "metric": "graph",                 # "graph" | "manhattan"
+
+        # Metric for the GAT's ATTENTION GRAPH -- who attends to whom.
+        # The fourth and last instance of the phantom-pair defect, and the worst
+        # place for it: every other consumer of a bad distance produced a bad
+        # number, this one produced a bad TOPOLOGY. Fleets in adjacent aisles,
+        # graph-20 apart behind a solid rack, were exchanging messages at every
+        # layer. Default stays "manhattan" until the retrain; "graph" is correct.
+        # Selecting "graph" widens the proximity index to interaction_radius,
+        # which also widens the censoring point of mean_peer_gap.
+        "adjacency_metric": "graph",   # "graph" | "manhattan"
+        "search_radius": 4.0,              # Cells. Must be >= warning_threshold or
+                                            # decisions would be truncated; core raises
+                                            # it to warning_threshold if set lower.
+                                            # Also the censoring point for mean_peer_gap
+                                            # (which previously summed float('inf')
+                                            # whenever every peer was immobile, poisoning
+                                            # the metric for the rest of the run).
+        "phantom_audit_every": 25,         # Run the O(N^2) Manhattan-vs-graph comparison
+                                            # every N steps and log how many pairs the
+                                            # graph metric rejected. 0 disables.
+                                            # TWO SPECIES get counted here: pairs behind
+                                            # racks, and pairs both mid-edge on parallel
+                                            # tracks. The second is unrelated to racks and
+                                            # the earlier phantom_pct audit never saw it;
+                                            # at base_speed 0.5 a fleet is mid-edge about
+                                            # half the time.
+    },
+
+    # ==========================================
+    # 2c. LESION (inference-time, no retraining)
+    # ==========================================
+    # Zero named blocks of the state vector on an ALREADY TRAINED checkpoint, to
+    # measure how much the policy actually reads them.
+    #
+    # THIS IS A LESION, NOT AN ABLATION. It answers "does the trained policy use
+    # this?" -- NOT "could a policy trained without it have done as well?".
+    # A block can lesion badly and still be redundant (the network leaned on it
+    # because it was there), or lesion harmlessly and still be necessary during
+    # training. Do not report a lesion result as an ablation result.
+    #
+    # Block names come from FleetNode.state_layout(), plus "density":
+    #   self_direction (3), self_displacement (3), ray_distances (6),
+    #   peer_velocities (18), peer_displacements (18), goal_gradient (6),
+    #   situation_features (6), heading (1, only if use_orientation),
+    #   rays_all (42 = the three ray blocks together), density (231)
+    "lesion": {
+        "zero_blocks": [],                 # e.g. ["rays_all"] or ["goal_gradient"]
+    },
+    
+    # ==========================================
+    # 3. GRAPH NEURAL NETWORK (GAT)
+    # ==========================================
+    "gnn": {
+        # "flat" -> Linear(input_dim, hidden). "conv" -> gated 3D convolution
+        # over the density volume plus a SEPARATE base encoder and LayerNorm on
+        # the fusion. Requires density.output_mode = "channels".
+        # See encoder_warehouse.py.
+        "encoder": "conv",                 # "flat" | "conv"
+
+        # EDGE FEATURES (Phase 3). 0 = off, the adjacency stays [N, N] binary.
+        # Up to 3: closeness, path conflict, head-on. They ride inside the
+        # adjacency tensor as extra channels, so nothing else in the buffer or
+        # the padding needed a new field.
+        #
+        # Path conflict is the motivating one: "do our routes cross, and how
+        # soon" is a property of a PAIR, and the GAT previously knew only that
+        # two fleets were neighbours. It is also the release signal waiting has
+        # been missing -- "clearing" is visible when projections stop
+        # intersecting, before the blocker has physically moved.
+        # 4 = closeness, conflict, head-on, arrival order. The last is
+        # ANTISYMMETRIC and is what lets a fleet know it is the one that should
+        # hold: conflict alone is symmetric, so both fleets read the same number
+        # 4 = closeness, conflict, head-on, arrival order. The last is
+        # ANTISYMMETRIC and is what lets a fleet know IT is the one that should
+        # hold: conflict alone is symmetric, so both fleets read the same number
+        # and have no basis to behave differently.
+        # Give the stored NEXT state the same edge features as the state the
+        # choice was made in (found while building 3c: it kept only the bare
+        # mask, so value targets never saw a pairwise number). Off = old storage.
+        "next_state_edge_features": True,
+        # Build the stored NEXT state's attention graph the way the choice's was
+        # built (build log entry 43, found 14 October). The choice uses graph
+        # distance (proximity.adjacency_metric "graph"); the next state, from
+        # which every value target is computed, used the Manhattan builder, so
+        # fleets behind a rack or on another floor were neighbours in s' only.
+        # "choice": the same builder as the choice. "manhattan": the old storage.
+        "next_state_adjacency": "manhattan",   # "manhattan" | "choice"
+        # THE SELF PATH (build log entry 43). Each Q head and the Learner also
+        # read the fleet's OWN encoding (before message passing) beside the
+        # trunk's summary, which mixes in its neighbours'. The diagnostic: a
+        # fleet's own route direction fades as neighbours are mixed in. Starts
+        # at exactly zero, so a warm start is the same network. Off: as before.
+        "self_skip": False,
+        "edge_feature_dim": 4,             # 0 | 1 | 2 | 3 | 4
+
+        # Channel widths of the gated 3D conv stack. THIS IS A MEMORY KNOB.
+        # Activations are (batch * fleets, C, 11, 11, 11), so at batch 64 with
+        # 80 fleets each channel costs 27 MB and the whole stack is:
+        #     (8, 16, 32)  1526 MB      (8, 16)   654 MB      (4, 8)  327 MB
+        # and roughly the same again for the backward pass.
+        #
+        # Two layers of 3x3x3 reach 5 cells, which IS the diamond radius, so the
+        # third layer mostly convolves padding -- ~97% of the cube is not track.
+        # Cheaper and better matched to the geometry.
+        #
+        # On a small card, lower this before lowering batch_size: a narrower
+        # conv costs capacity in one block, a smaller batch makes every gradient
+        # noisier.
+        "density_conv_widths": (8, 16),
+
+        "action_size": 7,                  # {-1, 0, 1} across X, Y, Z + Idle (0)
+        "hidden_dim": 128,                 # Neural network width
+        "num_layers": 3,                   # Graph Attention Layers
+        "num_heads": 4,                    # Multi-head attention count
+        "dropout": 0.1,                    # Prevents overfitting
+        "learning_rate": 0.0003,
+        "interaction_radius": 10.0,        # HOPS with proximity.adjacency_metric "graph"
+                                            # (Manhattan only if switched back): the distance
+                                            # within which two fleets are
+                                            # linked in the GAT's adjacency matrix. Was
+                                            # effectively INFINITE: core built the adjacency as
+                                            # np.ones((N, N)), a complete graph, so every fleet
+                                            # attended to all 24 others regardless of where they
+                                            # were in a 9900-node warehouse. The attention softmax
+                                            # then averaged each fleet's representation across the
+                                            # whole fleet, cancelling the direction-specific goal
+                                            # gradient (one fleet's "+X" against another's "-X").
+                                            # That produced a policy picking the best move 42.6% of
+                                            # the time and its exact opposite 42.1% -- a 50/50
+                                            # oscillation that travelled 328 cells to cover 19.6
+                                            # hops. Larger = more coordination but more smearing;
+                                            # 10.0 is 5x the warning_threshold, so fleets link well
+                                            # before they can conflict.
+        "stability_coef": 0.5,             # Weight of the auxiliary integrity-prediction loss
+                                            # against the main Q-loss (loss = q_loss + stability_coef*stability_loss).
+                                            # Previously only settable via GNNAgent's hardcoded default --
+                                            # never actually read from here by any caller.
+    },
+    
+    # ==========================================
+    # 4. REINFORCEMENT LEARNING & RECOVERY
+    # ==========================================
+    # ORDER STREAM (STREAM_DESIGN.md). Fleets drive out to the nearest dock after
+    # delivering, leave the floor, and re-enter there with a new order from a
+    # seeded queue drawn from the goal bank. Absent or enabled=False: the fixed
+    # 46-mission behaviour, exactly (config_benchmark_cold_run23.py).
+    "stream": {
+        "enabled": True,
+        "exit_floors": "all",          # "all": docks on every floor; "ground": lowest floor only
+        "exits_per_floor": 12,         # spread evenly around each floor's perimeter (was 6: catchments up to 236 cells)
+        "vertical_axis": "auto",       # the axis with the fewest edges (lifts), or "X"/"Y"/"Z"
+        "full_floor_fraction": 0.5,    # a level is a floor if it holds >= this share of the largest
+        "respawn_delay": 0,            # steps off the floor before re-entering
+        # NO-WORK EXIT (build log entries 33-34). A fleet left with no order --
+        # its order taken by a peer en route, nothing left to retarget to --
+        # drives out at the nearest dock instead of freezing mid-aisle, where it
+        # was outside the guard and the collision check (all three guard-era
+        # collisions, entry 33). False: it freezes, exactly as before.
+        "no_work_exit": True,            # RUN 7 (entries 33-34)
+        # DOCK GATE: every dock sits inside a two-way corridor, so re-entering
+        # beside other traffic starts a head-on standoff. Re-enter only where the
+        # dock and all its neighbours are free and no fleet driving out is within
+        # reentry_clear_hops of it -- at the least-busy such dock on the floor.
+        "reentry_gate": True,
+        "reentry_clear_hops": 3,
+        "reentry_any_dock_on_floor": True,
+        # New orders lie within this many floors of the dock's floor: ±1 early,
+        # widening to ±3 by half-way, so the task stops changing before the
+        # near-greedy episodes. Unlimited cross-floor orders jammed the 5-cell
+        # single-lane shaft segments (STREAM_DESIGN.md). Remove for no limit.
+        "order_floor_window": {"start": 3, "end": 3, "reach_frac": 0.5},   # unused with order_book on
+        # ORDER BOOK (core_warehouse.py; test_order_book.py). A FIXED number of
+        # orders per episode, whatever the fleet count: the orders the fleets
+        # start with count toward it, the rest are released at a steady rate
+        # over release_steps; a fleet re-enters only when an order is waiting
+        # (otherwise it waits at its dock); the episode ends once the whole
+        # book is delivered. Off: the closed loop (every robot always has an
+        # order, so the work grows with the fleet).
+        "order_book": {"enabled": True, "orders": 80, "release_steps": 400},   # 500 left no time to finish (shakedown 2)
+    },
+    # EXPLORATION SCHEDULE (cold_run23). Gaussian, per-fleet epsilon-greedy.
+    # Historical (absent keys): peak 0.95 at T/2, width T/6, min 0.01 -- which
+    # left the ~25-episode replay buffer 63% random at episode 50 and only five
+    # near-greedy episodes at the end; collisions surged as fleets turned greedy
+    # among greedy neighbours. Now: a small, early peak for route flexibility,
+    # below 0.05 from episode 30 of 60, so the last 31 episodes (a full buffer
+    # turnover plus six) are near-greedy. Buffer randomness at ep 50: 2.8%.
+    # The recovery head keeps exploration_scale 0.25: its peak falls 0.24 -> 0.075.
+    "exploration": {
+        "eps_peak": 0.05,                  # ladder_run3, warm, as run 5 (ladder_run2 cold: 0.30)
+        "eps_min": 0.02,                   # ladder_run3: floor 0.02 (was 0.01), so the
+                                            # route-explore corrections in the clear come
+                                            # about twice as fast (entry 34); training only
+        "mu_frac": 0.25,       # peak at episode T/4
+        "sigma_frac": 0.125,   # width T/8
+    },
+    "training": {
+        "gamma": 0.99,                     # Future reward discount factor.
+                                            # RAISED from 0.95. At base_speed 0.5 a
+                                            # 40-hop journey is ~80 simulator steps, and
+                                            # 0.95^80 = 0.016 -- so the +100
+                                            # mission_complete bonus was worth 1.6 at the
+                                            # moment a fleet set off, i.e. about what 16
+                                            # steps of baseline_reward pays for doing
+                                            # nothing at all. The proportional movement
+                                            # term was carrying essentially the entire
+                                            # learning signal and the goal itself was
+                                            # decorative. 0.99^80 = 0.45 puts the bonus at
+                                            # 45 instead, a 28x difference in how much the
+                                            # goal is worth at journey start.
+                                            # This matters MORE with handover missions
+                                            # (see "errors" below), which roughly double
+                                            # the horizon: at 0.95 a rescuer's eventual
+                                            # delivery reward is worth under 1.0 at the
+                                            # moment it is asked to divert, so it would
+                                            # never learn to divert at all.
+        # DOUBLE DQN: the online net picks the bootstrap action, the target
+        # net scores it. False: plain DQN, exactly as before.
+        "double_dqn": True,
+        # HONEST TARGET (build log entry 34; principle 7). Where something
+        # other than the network drove a fleet in the next state (route by
+        # default, a rule, a ladder hold, the guard), bootstrap from the move it
+        # actually made, not the network's best guess. Each step's transition
+        # is held one step to learn that move. Run 6 without it: the delivery
+        # value climbed to 2.13 against a ceiling of 1.42 (entry 31). False:
+        # transitions pushed at once, in the old layout, exactly as before.
+        "honest_target": True,           # RUN 7 (entry 34)
+        # SARSA EVERYWHERE (build log entry 38). With the honest target on, a
+        # fleet the NETWORK drove in the next state is also valued at the move
+        # it actually made there, not at its best move by today's values: every
+        # next move is the move made, so no max is left over moves that run.
+        # (An explorer in the clear keeps the route's move -- Fix 3.) Needs
+        # honest_target on. False: run 7's honest target exactly.
+        "sarsa": True,                   # RUN 8 (entry 38)
+        # SOFT TARGET UPDATES: blend the target network toward the online one on
+        # every learning step instead of copying it every --target-sync (1000)
+        # steps. 0.002 keeps the same AVERAGE lag (~500 steps) as the hard copy,
+        # so the only change is removing the jumps. 0 = hard copies, as before.
+        # cold_run22: HARD copies every --target-sync (1,000) learning steps, as
+        # in cold_run20 -- many changes at once, so the known target mechanism.
+        # Soft updates (0.002, same average lag) ran in cold_run21.
+        "target_tau": 0.0,
+        # RECOVERY HEAD STABILITY (cold_run21: its value ran -0.4 -> 32,554).
+        # Double DQN for its target, as the other heads have...
+        "recovery_double_dqn": True,
+        # ...and its target clamped to what its rewards make possible: per-step
+        # reward bound / (1 - gamma), computed by the runner (~55.5 today).
+        "recovery_value_bound": True,
+        # PER-FLEET TERMINAL (cold_run23): a fleet's bootstrap ends when it
+        # retires or stops. cold_run22's delivery value reached 1.84 against a
+        # physical ceiling of 1.42 by bootstrapping from untrained retired states.
+        "per_fleet_terminal": True,
+        # TEACHER MARGIN (agent_warehouse.py, learn() section 1c). On every step
+        # where the orchestrator chose a fleet's executed action, push the
+        # network's preferred alternative at least `margin` below the rules'
+        # action, on the combined value sum_k w_k Q_k. Never pulls the rules'
+        # action up: the TD loss already gives it its true value.
+        #   enabled  False = exactly the old training; agreement still measured.
+        #   sources  "rules" = corridor entry, priority, yield to stopped.
+        #            Add "holds" to also teach recovery holds (not this run:
+        #            a hold depends on a timer the state does not fully show).
+        #   margin   in combined-value units; cold_run23's taken-action values
+        #            sat at 0.1-3.0, so 0.2 is ~7% of the range (DQfD's 0.8 was
+        #            sized for Atari).
+        #   weight   multiplier on the term in the total loss. NOT DQfD's 1.0:
+        #            healthy TD losses here are ~0.003-0.005 while the margin
+        #            term starts near 0.37, so at 1.0 it drowned the TD signal.
+        #            Paired 2-episode dry runs (2026-10-04, seed 0, 100 steps):
+        #              weight 1.0  qval_safety -2.8 -> -569, loss_safety 569
+        #              teacher off qval_safety  0.02 -> -0.001, agree 49% / 39%
+        #              weight 0.01 qval_safety  0.00 -> -0.02,  agree 66% / 68%
+        "teacher_margin": {
+            # RETIRED (teacher_run1): it pushed on values no experience could
+            # correct, and qval_safety drifted to -6.9. Kept, off, so that run
+            # can be reproduced. Its idea returns as the Learner head (step 3).
+            "enabled": False,
+            "sources": ["rules"],
+            "margin": 0.2,
+            "weight": 0.01,
+        },
+        # 2c SAFETY PAYS BY RUNG (V2_The_Conflict_Ladder.md, "The three heads").
+        # Raw units, calibrated against fatal_collision (-50) and the worst
+        # warning step (-1.2). One hop takes two steps at half speed, so c1 =
+        # 2 x -1.2: backing off a hop costs what lingering in the worst warning
+        # would for the same time. Weights: conflict group 1.0, a fleet heading
+        # into the group's cells heading_in_weight, everyone else 0.
+        # STEP 3a, THE LEARNER HEAD (V2_The_Conflict_Ladder.md). Learns RULES'
+        # choice from every RULES-decided step, on its own layers only (it reads
+        # the trunk but never trains it, so no Q-value moves). At choice time it
+        # nudges ONLY fleets inside a conflict: score = Q + beta x its log-prob.
+        #   beta    how strong the nudge is; set by a paired dry run
+        #   weight  its supervised loss (reaches only its own layers)
+        # Off = no head is built, so older checkpoints still load.
+        "learner": {
+            # RUN 9 (build log entry 42): THE LEARNER AS THE ROUTER. mode
+            # "router": it learns the route's move for every fleet IN THE CLEAR
+            # (the route's own eligibility test), executed or not, and nudges
+            # only those fleets; nothing at meetings. The runner hands the clear
+            # over: route ON while it learns in shadow (scale 0), then route OFF
+            # and the scale falls from scale_start to scale_end (0: the teacher
+            # gone), then a tail at scale_end -- the deployed condition.
+            # mode "meetings": step 3a as before (RULES' orders and holds,
+            # conflicted fleets). enabled False: no head is built.
+            "enabled": True,
+            "mode": "router",
+            "router": {
+                "switch_agreement": 0.80,  # Learner = route on >= 80% of clear moves (was 0.98; dry run 1)...
+                "warmup_min": 3,           # ...after at least max(3, warmup_frac x episodes)
+                "warmup_frac": 0.0625,     # 80 episodes: 5; 12 (dry run): 3
+                "tail_frac": 0.1875,       # the last 15 of 80 (2 of 12) at scale_end
+                "scale_start": 3.0,        # at the switch: the Learner wins nearly every clear choice
+                "scale_end": 2.0,          # the teacher disappears; deployment uses this
+            },
+            "beta": 0.0,                   # the fixed warm start before gap_min gaps: no voice
+            "weight": 1.0,
+            # "prob": Q + beta x probability (0..1), so the pull never exceeds
+            # beta -- the Learner as a fourth, normalised signal beside 6:4:1.
+            # "logprob": unbounded, reproduces learner_run1. Set beta from the
+            # CSV's learner_qgap_p50 (the heads' typical near-tie gap).
+            "nudge": "prob",
+            # How strong the nudge is. "fixed": beta above, always. "gap": beta
+            # follows the heads' own running median gap x beta_scale (learner_run2
+            # showed a fixed beta drifts relative to a trained network's gaps);
+            # the fixed beta is the warm start until gap_min gaps are seen.
+            "beta_mode": "gap",            # RUN 9: beta = scale x the heads' median gap in the clear
+            "beta_scale": 0.0,             # set per episode by the runner (router_scale)
+            "gap_window": 5000,
+            "gap_min": 200,
+        },
+        "rung_costs": {
+            "enabled": True,
+            "c1_per_hop": -2.4,      # L1 retrace, and L2 per hop to the pull-over cell
+            "c2_pullover": -6.0,     # L2 extra: leaving a corridor for a bay
+            "c3_l3": -50.0,          # L3, the safety net: what a collision costs
+            "heading_in_weight": 0.25,
+        },
+        "buffer_capacity": 20000,   # 60 fleets: the same memory as 20,000 at 46 (STREAM_DESIGN.md)
+        "batch_size": 64,                  # <--- Bumped for smoother gradient averaging  (# Experiences sampled per learn step)
+        "total_episodes": 11,             # Total benchmark runs
+        "max_steps_per_episode": 800,      # Timeout limit for a single run
+    },
+    
+    "recovery": {
+        "history_length": 200,              # How many steps the temporal rewind remembers
+        "spatial_safe_threshold": 0.35,    # RECALIBRATED for the new affordance scale.
+                                            # Under the old clip(1-R) transform this was a
+                                            # SELECTION criterion on a scale where an
+                                            # isolated peer already pushed a cell to 0.39
+                                            # and a fresh crash pinned everything within 3
+                                            # cells to exactly 0.0 -- so no graph neighbour
+                                            # of a crashed fleet could ever clear 0.7, which
+                                            # is why Tier 1 essentially never fired and
+                                            # Tier 2 "succeeds almost every time" in the
+                                            # logs. Under A = 1/(1+R) it is now a safety
+                                            # FLOOR instead: Tier 1 ranks all neighbours and
+                                            # takes the best one, rejecting it only if even
+                                            # the best is below this. Reference values on
+                                            # the new scale: clear cell 1.0, one peer two
+                                            # cells away 0.81, one peer adjacent 0.68,
+                                            # adjacent to a fresh crash ~0.40.
+        "base_yield_steps": 5,             # How many steps a Tier-3 yield loser must hold
+                                            # still, on its FIRST offense this episode.
+        "livelock_patience": 40,           # Steps a fleet may go without beating its BEST
+                                            # distance-to-goal before its action is handed
+                                            # back to the BFS gradient (get_goal_gradient()).
+                                            # Guards against the deterministic limit cycle a
+                                            # greedy epsilon=0 policy falls into once all
+                                            # peers have frozen: the environment goes
+                                            # stationary, the policy becomes a deterministic
+                                            # map position -> action, and any such map on a
+                                            # finite position set must eventually cycle. The
+                                            # 400-episode checkpoint deployed to 23/25 with
+                                            # zero collisions and zero recovery events, one
+                                            # fleet stranded 2 hops out, identical across
+                                            # repeated runs. Raise it to intervene less and
+                                            # trust the policy more; lower it to escape
+                                            # faster. 40 steps is ~20 cells of travel at
+                                            # base_speed 0.5.
+        "livelock_escape_steps": 20,       # Once triggered, how many CONSECUTIVE steps the
+                                            # gradient keeps control. A single-step override
+                                            # is useless -- the cycling policy reclaims the
+                                            # wheel immediately and the fleet waits another
+                                            # full patience window for one more assisted
+                                            # step. 20 steps is ~10 cells, enough to walk
+                                            # clear of a local cycle in one intervention.
+        "pair_escalation_threshold": 2,    # After a specific PAIR of fleets has fatally
+                                            # collided this many times in one episode, stop
+                                            # treating each collision as an independent
+                                            # incident: whichever tier resolves the geometry
+                                            # ALSO holds the losing fleet still afterwards.
+                                            # Without this, Tier 1 kept reporting "Spatial
+                                            # Escape Successful" while the same pair collided
+                                            # again 5-40 steps later -- fleets 9 and 24 at
+                                            # steps 107, 142, 177, 189, 203 within a single
+                                            # episode -- and Tier 3, the mechanism built for
+                                            # exactly this, recorded 0 across all 30 episodes
+                                            # because Tiers 1/2 always resolved first. Tier 1
+                                            # was not failing; it separates a pair by one cell
+                                            # and they steer straight back. The missing
+                                            # ingredient was TIME, not space.
+        # HARD CEILING on any single yield. The escalation below is linear and
+        # was previously UNBOUNDED: on 2026-09-17 a 50-fleet cold run reached
+        # repeat #169, which is a hold of 5 + 5*168 = 845 steps inside a 780-step
+        # episode. Eleven of twelve fleets froze at step 163 and never moved
+        # again, and the remaining ~600 steps produced transitions in which
+        # nothing could happen.
+        #
+        # 30 is long enough to break a stubborn standoff and short enough that a
+        # fleet always gets another go inside the episode.
+        # HOW FAR A TIER-1 ESCAPE MUST GET FROM THE FLEET IT CONFLICTED WITH,
+        # on top of the hard rule that it never lands on ANY fleet.
+        #
+        # THE GEOMETRIC CEILING: a conflicting peer is within
+        # collision_threshold (0.5) and one hop moves at most 1.0 cell, so the
+        # best separation a Tier-1 escape can reach is about 1.5. Asking for
+        # warning_threshold (2.0) is UNSATISFIABLE -- measured, Tier 1 dropped
+        # from 50 successes in 500 steps to 2. That is not selectivity, that is
+        # switching Tier 1 off.
+        #
+        # 0.0 = off (default, old behaviour). Useful values: 1.0 to 1.4.
+        # Above ~1.4 nothing can satisfy it.
+        #
+        # WHY ANY OF THIS: 41% of two-fleet recovery events on cold_run10
+        # involved a pair already seen 5+ times, one pair 45 times, with mean
+        # escape displacement 1.02 cells. 968 of 2,732 relocations sat at x=29
+        # and x=5 -- the shaft columns -- with 701 moves along z. A shaft is one
+        # cell wide, so a one-hop escape cannot separate anyone inside it: they
+        # slide along and re-converge. The point of a clearance rule is to make
+        # Tier 1 FAIL there and escalate, rather than report success.
+        "escape_clearance": 0.0,
+
+        # CONVOYS ARE NOT CONFLICTS. Preemptive recovery fires whenever fleets
+        # sit in the warning band with no collision. On cold_run12 that was 742
+        # of 769 invocations (96%), only 148 of them (20%) separated anyone --
+        # mostly two fleets following the same route about a cell apart, which
+        # is a permanent warning under collision 0.5 / warning 2.0.
+        #
+        # True: a warning pair is left alone when both fleets moved last step
+        #       along the same axis and direction (dot >= convoy_alignment) and
+        #       their gap did not shrink. Head-on, crossing, a leader idling with
+        #       a follower closing, and every real collision still go to
+        #       recovery. Also exempts such pairs from the warning splat when
+        #       density.warning_splat_per_pair is on.
+        # False: old behaviour, exactly reproducible.
+        #
+        # RISK: recovery was accidentally teleporting convoys forward about one
+        # cell per step, twice base_speed. Without it they travel under their
+        # own policy, which may be slower.
+        "preempt_skip_convoys": True,
+        # HELD PAIRS ARE NOT NEW CONFLICTS. A pair with one fleet already held
+        # is dropped from PREEMPTIVE recovery -- the winner passing its held
+        # loser is what the hold is for. Stops right-of-way flipping mid-pass
+        # (cold_run16: 54 ping-pong runs, one pair flipping 26 times in a row).
+        # Real collisions are always recovered. False: old behaviour.
+        "preempt_skip_held_pairs": False,   # OFF after cold_run17: raised collisions +4.2/ep (t=+3.40), did not stop ping-pong
+        "convoy_alignment": 0.7,           # min dot of the two directions
+
+        # ESCALATE ON RECURRENCE -- the same pair recovered again near where it
+        # last met. The repeat-offence counter only counts pairs that actually
+        # touch, so preemptive recoveries never escalated: cold_run15's 119/56
+        # were separated to identical positions 22 times, never given
+        # right-of-way, and neither delivered. Escalation becomes
+        # max(fatal count, recurrence count), so fatal escalation never weakens.
+        "escalate_on_recurrence": True,
+        # None -> warning_threshold (2.0): contains the drift between
+        # back-to-back recoveries, one step at base_speed (0.5) + one hop (1.0).
+        "recurrence_radius": None,
+
+        "max_yield_steps": 30,
+
+        "yield_escalation_per_repeat": 0,  # FLAT for this run (2026-09-30 A/B: no
+                                           # capped-hold lockups, 140 vs 129 deliveries
+                                           # under constant preemption). Default: 5.
+                                            # Added per repeat: 1st offence holds for
+                                            # base_yield_steps, 2nd for +5, 3rd for +10...
+                                            # NOW ACTUALLY READ -- this was accepted by
+                                            # WarehouseRecovery.__init__ and never used by
+                                            # anything; the old code multiplied
+                                            # base_yield_steps by a per-NODE count instead,
+                                            # which cannot distinguish five separate conflicts
+                                            # from the same conflict five times.  # Added per repeat offense: 1st=5 steps,
+                                            # 2nd=10, 3rd=15, etc. -- a fleet that keeps
+                                            # ending up back in a fatal collision gets
+                                            # progressively longer forced separation
+                                            # instead of an instant retry into the same
+                                            # mistake.
+    },
+
+    # ==========================================
+    # 4b. VDA 5050 ERROR STOPS & PACKAGE HANDOVER
+    # ==========================================
+    # Models an AGV that stops dead mid-mission (VDA 5050 reports an `error`
+    # state; the vehicle holds position and the master must respond).
+    #
+    # THE MECHANIC, in full:
+    #   1. A random active fleet errors. It stops moving immediately.
+    #   2. After stop_confirm_steps still stopped, it is declared
+    #      STOPPED_FUNCTIONING: the master gives up on it, cancels its order,
+    #      and its goal returns to the pool.
+    #   3. Its cell becomes a PICKUP. Another fleet is dispatched there.
+    #   4. On arrival, the rescuer inherits the errored fleet's goal -- the
+    #      package carries on to where it was always going.
+    #
+    # THE KEY DESIGN DECISION -- a stopped fleet leaves the COLLISION system
+    # entirely and is represented only as a soft repulsion in the density field.
+    # It is not a participant in a conflict, it is furniture. Everything falls
+    # out of that one choice:
+    #   * no fatal collision when the rescuer arrives at distance 0, so the
+    #     rescuer can drive onto the cell and the package "passes through";
+    #   * no integrity drop to 0.5 parked next to it, so no spurious WFC
+    #     recovery events every time a handover happens;
+    #   * no warning_splat accumulating around the pickup, which would slowly
+    #     poison the exact cell the next rescuer needs to reach;
+    #   * and it cannot pay the warning_zone bonus, so there is no "park next
+    #     to a corpse and collect +0.5 every 10 steps" exploit to close.
+    # It stays SOFT (density only, graph untouched) rather than being removed
+    # from the routing graph, because removing a node invalidates every
+    # precomputed BFS goal-distance map and would force an O(|goals| * |E|)
+    # rebuild on every error -- precisely the full-graph replan cost the whole
+    # timing argument says FLOWRRA does not pay.
+    "errors": {
+        "enabled": True,                  # OFF for the first stream run (STREAM_DESIGN.md); was True                   # Master switch. False = exactly the old
+                                            # behaviour, no errors ever injected.
+        "prob_per_step": 0.006,            # TRAINING RATE, deliberately unrealistic.
+                                            # Was 0.0008, giving 0.28 errors per episode
+                                            # -- about one rescue reward per 30,000
+                                            # node-steps. loss_rescue sat at 0.001 flat
+                                            # for 300 episodes because the head simply
+                                            # had almost nothing to fit. 0.006 gives
+                                            # ~2.3 per episode, roughly 8x the events.
+                                            #
+                                            # A real warehouse does not lose 3 of 40
+                                            # AGVs every episode. This is a curriculum
+                                            # rate: train where the signal is dense
+                                            # enough to learn from, then EVALUATE at a
+                                            # realistic rate. Reporting resilience
+                                            # numbers measured at this rate would
+                                            # overstate how often the mechanism is
+                                            # exercised in deployment.           # Per-step probability that SOME active fleet
+                                            # errors. Over a 780-step episode that is
+                                            # ~46% chance of at least one error, so
+                                            # roughly half of episodes contain one and
+                                            # the network still sees plenty of clean
+                                            # ones. Rate, not count, so longer episodes
+                                            # get proportionally more.
+        "max_per_episode": 5,              # Raised with prob_per_step: at 3 the cap, not
+                                            # the rate, would decide the event count and
+                                            # the increase above would be wasted.              # Hard cap regardless of the rate above.
+        "max_step_fraction": 0.55,         # No errors after this fraction of the episode.
+                                            # RESCUE CAPACITY SHRINKS MONOTONICALLY: a
+                                            # fleet that reaches its goal freezes and can
+                                            # never be recalled, so by late in an episode
+                                            # there may be nobody left near enough to
+                                            # reach the pickup at all. Observed: an error
+                                            # at step 162 left 7 active fleets, the
+                                            # nearest 118 hops away, and the episode ended
+                                            # with the handover never completed. That is
+                                            # not a policy failure the network can learn
+                                            # from -- it is an unrecoverable instance, and
+                                            # training on it just adds noise. Capping at
+                                            # ~55% leaves both enough fleets to choose a
+                                            # rescuer from and enough clock to complete
+                                            # two legs.
+        "min_step": 40,                    # No errors before this step. An error at
+                                            # step 2 is indistinguishable from a bad
+                                            # spawn and teaches nothing about recovery
+                                            # from a mission already underway.
+        "min_progress_fraction": 0.15,     # Only error a fleet that is genuinely en
+                                            # route. Erroring one that has not left its
+                                            # spawn yet makes the pickup and the
+                                            # original start the same cell.
+        "stop_confirm_steps": 15,          # Steps a fleet must be stopped before the
+                                            # master declares it dead and reassigns.
+                                            # This gates the MISSION response, not the
+                                            # physics: nothing about a dead robot
+                                            # changes at step 15, but the fleet
+                                            # manager's decision to cancel the order
+                                            # legitimately does. Maps to VDA 5050's
+                                            # WARNING -> FATAL errorLevel escalation.
+        "pickup_dwell_steps": 4,           # Steps a rescuer must remain on the pickup
+                                            # cell to "transfer the load" before it
+                                            # inherits the goal. Non-zero so the
+                                            # handover is an event with a duration
+                                            # rather than something that happens in the
+                                            # same instant a fleet passes over a cell.
+        "pickup_reward": 25.0,             # Leg-1 completion bonus, paid on finishing
+                                            # the dwell. WITHOUT THIS leg 1 is entirely
+                                            # unrewarded and, at any gamma, effectively
+                                            # invisible: the rescuer would be asked to
+                                            # abandon a goal it was making measurable
+                                            # progress toward in exchange for a distant
+                                            # discounted payoff. Deliberately well under
+                                            # mission_complete (100) so a pickup is
+                                            # never worth more than the delivery it
+                                            # exists to enable.
+        "recall_retired": True,            # Let a RETIRED fleet come back to service a
+                                            # pickup. Rescue capacity otherwise shrinks
+                                            # monotonically: every fleet that reaches its
+                                            # goal freezes forever, so a late error can
+                                            # find nobody in range. Observed: an error at
+                                            # step 311 left ONE active fleet, 116 hops
+                                            # away, while 31 idle fleets sat parked across
+                                            # the warehouse -- several certainly closer.
+                                            # A parked AGV that has finished its order is
+                                            # an idle vehicle, and no real fleet manager
+                                            # leaves it parked while interrupting one
+                                            # mid-delivery. Recall costs nothing on the
+                                            # network side: GNNAgent.unfreeze_node()
+                                            # already exists and just drops the id from
+                                            # the frozen set.
+        "recall_distance_slack": 1.5,      # Prefer an idle fleet over diverting a working
+                                            # one, as long as it is no more than this
+                                            # multiple further from the pickup. Above 1.0
+                                            # because the two are not equivalent: diverting
+                                            # an active fleet delays an order already in
+                                            # progress, while an idle one has nothing to
+                                            # delay. Set to 1.0 for pure nearest-first, or
+                                            # 0 to disable the preference entirely.
+        "static_obstacle_severity": 3.0,   # Density stamp for an UNREGISTERED obstacle
+                                            # -- a human, debris, a dropped pallet.
+                                            # Harder than any fleet (1.0 parked, 1.4
+                                            # stopped) and with NO near-goal discount:
+                                            # that discount exists to make an obstacle
+                                            # transparent to whoever needs to reach it,
+                                            # which is right for a corpse being rescued
+                                            # and wrong for a person. Repulsion is only
+                                            # the soft half; the HARD veto is in
+                                            # FleetNode.get_valid_action_mask().
+        "stopped_obstacle_severity": 1.4,  # Density stamp for a stopped fleet, vs 1.0
+                                            # for a parked one. Higher because a parked
+                                            # fleet is where somebody WANTED to be
+                                            # (goals are useful places) while a stopped
+                                            # one is an unplanned hazard -- but still
+                                            # finite, so a rescuer can push through it
+                                            # to reach the pickup.
+        # FAILURE WAVES (core_warehouse.py, _maybe_inject_wave). Several fleets
+        # under way stop AT ONCE -- the shock benchmark's regime, 9 vehicles in
+        # 3 waves -- on top of the single failures above. Random per episode:
+        # each eligible step rolls prob_per_step, and a wave's size and victims
+        # are drawn, so episodes differ in how many waves hit, when and whom.
+        # Part of the error system: off whenever `enabled` above is False.
+        #
+        # Sized by simulation: at 0.015 an episode whose progress window lasts
+        # ~250 steps gets 0/1/2/3 waves 2/15/35/48% of the time (~6.8 wave
+        # failures); a ~150-step window 10/40/40/9%. With ~2.5 single failures
+        # on top, episodes average near the benchmark's 9, varying either side.
+        "waves": {
+            "enabled": True,
+            "prob_per_step": 0.015,   # chance per eligible step that a wave fires
+            "max_waves": 3,           # per episode
+            "size_min": 2,            # fleets per wave, drawn uniformly
+            "size_max": 4,
+            # Eligible while this share of the episode's orders is in a terminal
+            # state (delivered, or stranded on a dead fleet) -- the measure the
+            # benchmark times its waves by. Stream: share of steps used instead.
+            "progress_start": 0.15,
+            "progress_end": 0.80,
+            # Steps between waves: long enough that the last wave's rescues are
+            # under way, so the next one can catch a rescuer mid-rescue.
+            "min_gap_steps": 40,
+            # Wave schedules are drawn from their own random stream, seeded by
+            # (seed, episode count): different every episode, the same on rerun.
+            "seed": 0,
+        },
+    },
+
+    # ==========================================
+    # 4c. ABLATION SWITCHES (research only)
+    # ==========================================
+    # Each of these puts ONE fixed bug back so its individual contribution can be
+    # measured. All False = the corrected system. Never enable for a real run.
+    "ablation": {
+        # Control arm for the 2026-09-13 ray-origin fix. A fleet can sit half a
+        # cell past a dead end: moving +X from x=59 proposes 59.5, whose two
+        # bounding nodes are BOTH node 59, so is_structurally_valid allows it.
+        # But round(59.5) is 60 under banker's rounding, 60 is not a node, and
+        # before the fix every ray read zero -- 42 of 291 state dims blank, while
+        # _structure_mask failed OPEN and let the density field report repulsion
+        # straight through racks.
+        #
+        # Set False to reproduce that blindness. Needed because with the fix ON,
+        # a fleet at a dead end can still SEE, so comparing collision rates
+        # post-fix measures "at a dead end", not "blind". Only the two arms
+        # together separate the two.
+        "ray_origin_fallback": True,
+
+        "brake_on_immobile": False,    # True restores the bug where affordance braking
+                                        # measured distance to EVERY other fleet, including
+                                        # parked ones that check_integrity already exempts
+                                        # from collisions -- so a fleet could be throttled
+                                        # to 0.05 cells/step by a neighbour it could not
+                                        # physically crash into.
+        "hardcoded_bounds": False,     # True restores the hardcoded (50,50,10)
+                                        # normalization instead of per-map extents. On the
+                                        # official maps that clipped 81%+ of the Z axis to
+                                        # exactly 1.0 on 13 of 16 maps, reducing the
+                                        # vertical goal-direction feature to a sign bit.
+    },
+
+    # ==========================================
+    # 4d. DECOMPOSED REWARD HEADS
+    # ==========================================
+    # Which reward sources feed which Q-head. Each head does TD learning on its
+    # OWN component, and Q_total = sum_k head_weights[k] * Q_k at action
+    # selection. See agent_warehouse.py's reward_heads comment for why the
+    # previous single summed scalar made the rare signals unlearnable.
+    #
+    # head_weights are applied ONLY at action selection, never in the loss, so
+    # "how much do I care about this" and "how learnable is this" are separate
+    # knobs. They were the same knob before: raising the collision penalty to
+    # make collisions matter also made that head's TD targets larger and noisier.
+    # Start every weight at 1.0 so the first run is attributable, then tune.
+    "reward_decomposition": {
+        # PRIORITY MODE (REWARD_DESIGN.md s.9-12). "legacy" restores the five
+        # heads exactly as every run up to cold_run18:
+        #   "mode": "legacy",
+        #   "heads": ["goal", "safety", "integrity", "rescue", "time"],
+        #   "weights": [1.0, 1.0, 1.0, 1.0, 1.0],
+        "mode": "priority",
+        "heads": ["safety", "delivery", "efficiency"],
+        # Priority safety > delivery > efficiency, as weights on value-
+        # normalised heads. 3:2:1 FAILED the check that a delivery outweighs
+        # the progress of the route leading to it (2.84 vs 4.29). 6:4:1 passes
+        # all three with margin: yielding beats advancing near a conflict
+        # (closeness above ~0.4); a delivery beats a typical 25-cell route of
+        # progress; a collision outweighs a delivery.
+        "weights": [6.0, 4.0, 1.0],
+        # Fixed VALUE scales, calibrated on cold_run18: each head's mean reward
+        # per active fleet-step, divided by (1 - gamma). Fixed, not running,
+        # so replayed transitions keep a constant meaning.
+        "scales": {"safety": 34.3, "delivery": 70.4, "efficiency": 17.5,
+                   # the recovery head's holon column, same method (cold_run18)
+                   "holon": 70.3},
+        # Recovery events are judged only in the holon column, never in the
+        # per-fleet safety head (cold_run19: the +9 preemptive bonus, weighted
+        # 6x through safety, rewarded fleets for getting rescued).
+        "safety_includes_recovery": False,
+        # CHARGE APPROACH, NOT PRESENCE -- half of the path-awareness capability
+        # (PATH_AWARENESS.md); switch on together with it for the joint run.
+        # False: presence-based warning, as in every run so far.
+        "approach_warning": True,
+        # PRESENCE CHARGE (build log entries 25-29). True in every run so far:
+        # the safety head charged -0.5 for every step a fleet ended in a warned
+        # pair, whoever moved -- with path warnings, a head-on route up to 3
+        # hops away. The trace showed what that teaches: back away from anyone
+        # near (79 of 154 network decisions near a peer were moves away; RULES
+        # moved toward its goal 51 times of 54 and collided less). False: only
+        # collisions (-1) and approach (closing the gap, in hops) are charged.
+        "presence_charge": False,
+    },
+
+    # ==========================================
+    # 4e. POLICY-INVOKED RECOVERY
+    # ==========================================
+    # Recovery used to fire only from inside the deadlocked branch -- i.e. AFTER
+    # check_integrity returned 0.0, after a collision had already happened. It
+    # was structurally incapable of acting first.
+    #
+    # Now the policy decides. A graph-level head over the pooled node embedding
+    # emits Q-values for {none, spatial collapse, temporal collapse}, and the
+    # orchestrator executes the choice. Tier 1 (spatial escape) and Tier 3
+    # (yield) do not need this -- they are an ordinary move and an ordinary idle,
+    # both already in the per-fleet action space. Tier 2 does, because a temporal
+    # rewind restores MANY fleets at once and so cannot be a per-fleet decision.
+    # ==========================================
+    # CONFLICT RULES (CONFLICT_DESIGN.md) -- priority established BEFORE fleets
+    # meet, instead of freeze-and-rewind after a collapse. Each component has
+    # its own switch; all off is exactly the behaviour before they existed.
+    # ==========================================
+    "conflict": {
+        # 1. PATH-BASED WARNINGS. Pairs within `radius` hops are classified by
+        #    their next `route_horizon` cells (head-on / blocked / following /
+        #    contested / sequential / none) and warn by kind, not distance:
+        #    within `floor` always; head-on, contested, blocked always;
+        #    following only closer than `follow_gap`; the rest never.
+        #    Feeds the loop's warning set -> integrity, risk steps, preemption,
+        #    splats (on the meeting cell) and the in-warning feature.
+        "path_warnings": True,
+        # 2. DIRECTION-AWARE BRAKING. A steady-gap convoy partner at
+        #    `follow_gap` or more no longer throttles either fleet; braking
+        #    uses the nearest peer that is not one. Needed with 1: today's
+        #    braking holds convoys at 1.5-2 hops, where 1 no longer warns.
+        "directional_braking": True,
+        # 3. CORRIDOR ENTRY. A fleet on a junction does not step into a
+        #    corridor (single-lane, no junction along it) when the nearest fleet
+        #    it can see inside -- max_vision_range edges down a straight
+        #    corridor, as its ray would; route intents within `radius` hops in a
+        #    bent one -- is heading toward it. Convoys may enter behind. Two
+        #    fleets at the two ends in sight of each other: priority picks one.
+        "corridor_entry": True,
+        # 4. PRIORITY. Lower key goes first: hops to goal minus `aging` per step
+        #    the fleet was made to wait (reset on delivery), then seniority in
+        #    the corridor (who entered first), then a fixed per-fleet tiebreak.
+        #    Facing inside a corridor: the loser and its followers back out to
+        #    the junction behind, pull over off the corridor's line, and hold
+        #    until the winners are through. Two fleets claiming the same cell:
+        #    the lower waits a step. (Decided 2026-09-29, CONFLICT_DESIGN.md.)
+        "priority": True,
+        "aging": 0.25,           # hops of priority gained per step made to wait
+        # 6. YIELD TO STOPPED FLEETS. A fleet never moves into a cell held by a
+        #    fleet that stays put this step (told to wait, held, waiting, idle):
+        #    it queues behind it. Never imposed where it would close a loop of
+        #    waits (a junction waiter and the fleet it waits for). Added
+        #    2026-09-29: with 1-4 on, 62% of the remaining collisions on 50_
+        #    were a moving fleet driving into a stopped one on a mesh junction.
+        "yield_to_stopped": True,
+        # NODE-ALIGNED MOVES. A step that would cross the next node stops on
+        # it, and a turn snaps the old axis onto the node. Without it, braking
+        # leaves fleets out of phase with the grid: they jump over junctions
+        # without ever being able to turn there, or carry a 0.1 residual onto a
+        # new axis and are stranded. REQUIRED with 3 and 4, whose pull-overs
+        # reverse fleets and turn them back in under braking. NOT a quiet
+        # helper: on its own it changes the dynamics a lot (50_, 60 fleets, no
+        # preemption: +22% deliveries, +42% collisions vs version_unrefined),
+        # which is why the components are judged against version_unrefined +
+        # this, not against version_unrefined. See node_warehouse.NODE_ALIGNED.
+        "node_aligned_moves": True,
+        "radius": 3.0,           # hops; pairs beyond this are never classified
+        "floor": 1.0,            # hops; always a warning inside this
+        "follow_gap": 1.5,       # hops; the kinematic minimum convoy gap
+        "route_horizon": 8,      # cells of each fleet's route compared
+        # THE CONFLICT LADDER (LADDER_DESIGN). Step 2a-i, ONE AUTHORITY:
+        #   * a recovery hold no longer silences RULES (a held fleet still
+        #     takes its retreat / pull-over / wait order);
+        #   * the learned recovery head is OFF; L3 is a fixed rule -- a warned
+        #     pair lasting l3_stuck_steps with neither fleet closer to its goal
+        #     gets separated, and only that pair;
+        #   * aging resets per conflict, after aging_reset_steps steps outside
+        #     every warned pair (was: only on delivery).
+        # Off = exactly the old behaviour.
+        "ladder": {
+            "enabled": True,
+            "aging_reset_steps": 3,
+            "l3_stuck_steps": 30,  # interim; group-level T arrives with 2a-iv
+            # 2a-ii SHADOW MODE: count conflict groups and wait-for cycles (2-
+            # and multi-fleet, in corridors or not, how long they last). Measures
+            # only; safe with the ladder on or off.
+            "shadow": True,
+            # 2a-iii RETRACE (needs enabled): a wait-for cycle seen at more than
+            # grace_checks consecutive checks gets its cheapest member backed up
+            # its own trail (at most trail_length cells), one hop per step, held
+            # there until the routes no longer meet. Fleets RULES is backing out
+            # of a corridor are left to RULES. 3-fleet cycles: the same rule.
+            "retrace": True,
+            # 3b LADDER CONTEXT (needs enabled): seven values in every fleet's
+            # state -- in a cycle, time in conflict, its group's rung (one-hot),
+            # cheaper side to back out. CHANGES THE STATE WIDTH (+7): a run with
+            # it on starts cold; its checkpoints need it on to load.
+            "context": False,
+            # 3c PAIR RELATIONS (needs enabled): six more numbers on each attention
+            # connection -- head-on / contested / blocked / following (one-hot),
+            # "I wait for it", "it waits for me". CHANGES THE EDGE WIDTH (+6): a
+            # run with it on starts cold. Pair with gnn.next_state_edge_features.
+            "pair_relations": False,
+            "grace_checks": 1,
+            "trail_length": 8,
+        },
+        # ROUTE BY DEFAULT (build log entries 25-29). The network decides only
+        # where a fleet is in contention -- in this step's warning or deadlock
+        # set, which with path_warnings means a warned pair: a meeting route
+        # within `radius`, a follower closer than `follow_gap`, anyone within
+        # the 1-hop `floor` -- and everywhere else the fleet takes its
+        # shortest-path move (the goal gradient's best move, if the action mask
+        # allows it). The ladder, rules, holds and the safety guard all still
+        # apply afterwards. Measured frozen in deploy_eval (champion+route):
+        # 95.2% of the book against the champion's 90.9%, collisions 4.7
+        # against 11.0 (entry 27). False: the network decides every move.
+        "route_by_default": True,
+        # Also hand the decision to the network when any live peer is within
+        # this many hops. 0.0: the warning set alone decides (path awareness).
+        "route_network_radius": 0.0,
+        # ROUTE EXPLORE (build log entry 34, Fix 3; RUN 7). A fleet whose move
+        # this step is an exploring one is not overridden by the route, so the
+        # network explores in the clear at its own epsilon (0.01-0.05 warm) and
+        # the moves the route never makes get corrected by real experience; the
+        # honest target values such a fleet at the route's move. The guard keeps
+        # it safe. Training only: deploy_eval and trace_fleet force it off.
+        # Dry run without it: disagreement with the route in the clear jumped
+        # from the champion's 7-23% to 35-55% as soon as learning started.
+        "route_explore": True,
+    },
+
+    # ==========================================
+    # SAFETY (build log entry 29) -- all distances in HOPS.
+    # ==========================================
+    # THE INTENT GUARD. Every fleet's move is decided before any fleet moves
+    # (step.simultaneous). For each pair of moving fleets that could meet this
+    # step, the guard takes both actual moves -- what each would broadcast to
+    # its neighbours -- and works out where both land (node_warehouse.
+    # reach_position, the move's own computation). If they would end closer
+    # than min_gap hops, or drive through each other, the fleets closing the
+    # gap are slowed just enough to stop at min_gap, down to standing still (a
+    # wait); a fleet backing away is never slowed. Repeated until no pair is
+    # short (rounds), then anything still short stops. Parked and stopped
+    # fleets are not threats (as in check_integrity); people are vetoed by the
+    # action mask. guard_warehouse.py; test_intent_guard.py.
+    # WITH IT ON, collisions from movement do not happen, whatever the network
+    # chose, and the guard_* counters (how often it stepped in) are the safety
+    # measure.
+    #
+    # BUBBLES BY KIND. The comfort braking ramp ends at a distance set by what
+    # the pair is doing (path awareness, conflict.path_warnings): head-on,
+    # contested, unknown, and the moving fleet of a blocked pair from
+    # bubble_meeting; the follower of a convoy from bubble_following; the
+    # leader, the blocker, sequential and none only at bubble_other. The ramp's
+    # near end is min_gap. Why these numbers: a fleet moves at most half a hop
+    # per step, so a head-on pair closes a whole hop per step and a follower
+    # half a hop; a pair exactly at a bubble's edge still drives at full speed,
+    # so each bubble sits a quarter hop above min_gap + that closing.
+    #
+    # HOPS EVERYWHERE. The last distances not measured through the graph --
+    # the reward's approach charge (straight-line closing), the convoy tests
+    # (Manhattan gap change) and recovery's pair checks and placements
+    # (Manhattan) -- in hops, like every other consumer.
+    #
+    # All three False: exactly the step before this change.
+    "safety": {
+        "intent_guard": True,
+        "min_gap": 1.0,             # hops; collisions stay at warehouse.collision_threshold (0.5)
+        "rounds": 8,
+        "bubbles_by_kind": True,
+        "bubble_meeting": 1.75,     # hops
+        "bubble_following": 1.25,   # hops
+        "bubble_other": 1.0,        # hops (= min_gap: no ramp)
+        "hops_everywhere": True,
+    },
+
+    "recovery_policy": {
+        "enabled": True,
+        "invocation_cost": -4.0,           # Charged to the integrity head on every
+                                            # invocation. WITHOUT A COST THE POLICY
+                                            # LEARNS TO CRASH AND UNDO: a rewind erases
+                                            # a collision, so if it were free the
+                                            # optimal strategy would be to ignore
+                                            # safety entirely and rewind out of every
+                                            # consequence. A rewind also loses travel
+                                            # progress, which the goal head penalises
+                                            # on its own -- the two heads pull against
+                                            # each other and the policy has to resolve
+                                            # the tension, which is the decision we
+                                            # actually want it to learn.
+        "exploration_scale": 0.25,         # Recovery exploration as a FRACTION of the
+                                            # fleet-action epsilon.
+                                            #
+                                            # choose_recovery() used the same epsilon as
+                                            # the per-fleet moves. At eps 0.95 that is a
+                                            # random 3-way draw EVERY step, so ~2/3 of
+                                            # 780 steps became invocations -- measured at
+                                            # 400 wasted per episode.
+                                            #
+                                            # That is not harmless noise. 400 x -4.0 x 40
+                                            # fleets is -64,000 landing on the integrity
+                                            # head against maybe +2,000 from successful
+                                            # preemptions: the useful signal outnumbered
+                                            # 30 to 1, which is very likely why
+                                            # loss_integrity spikes to 1.8 during the
+                                            # exploration phase and only converges after
+                                            # epsilon decays.
+                                            #
+                                            # A once-per-step 3-way global choice does
+                                            # not need the exploration budget of a
+                                            # per-fleet 7-way movement choice -- it gets
+                                            # 780 samples an episode either way. 0.25
+                                            # keeps it exploring without drowning its own
+                                            # reward signal. Set 0.0 for a purely greedy
+                                            # recovery head.
+        "forced_fallback_steps": 6,        # If integrity sits at 0.0 for this many
+                                            # consecutive steps and the policy has NOT
+                                            # invoked anything, the orchestrator forces
+                                            # a collapse. Without this an untrained
+                                            # policy never invokes and every early
+                                            # episode deadlocks permanently, so there
+                                            # would be no usable experience to learn
+                                            # from. Forced invocations are logged
+                                            # SEPARATELY: forced count falling toward
+                                            # zero is the measure of whether the policy
+                                            # has learned to call recovery itself.
+        "preemptive_bonus": 9.0,           # Paid when a PREEMPTIVE separation actually
+                                            # works -- the at-risk fleets it moved are
+                                            # clear of the warning band on the next
+                                            # step, with no collision.
+                                            #
+                                            # WITHOUT THIS PREEMPTION IS UNREWARDABLE.
+                                            # resolution_bonus below is gated on
+                                            # n_dead_before > 0, and a preemptive
+                                            # invocation has nothing deadlocked yet BY
+                                            # DEFINITION -- so the one behaviour we
+                                            # asked for was, in the reward, identical
+                                            # to invoking on an empty set: pure cost.
+                                            # Measured over 300 episodes: the head
+                                            # correctly learned to stop wasting
+                                            # invocations (335 -> 12) and, having no
+                                            # way to distinguish them, stopped
+                                            # intervening early too. Collisions rose
+                                            # 0.02 -> 0.54 per episode and forced
+                                            # recoveries 0.00 -> 0.50 as a direct
+                                            # result.
+                                            #
+                                            # Larger than resolution_bonus on purpose:
+                                            # preventing a collision is worth more than
+                                            # cleaning one up.
+        "resolution_bonus": 6.0,           # Paid to the integrity head when an
+                                            # invocation actually clears the deadlock
+                                            # it was called for. Distinguishes a
+                                            # well-timed collapse from a panicked one.
+        # REWARD MODE (2026-09-30, COLD_RUN25_ANALYSIS.md section 6).
+        #   "strict_bonus"   : today -- preemptive_bonus when every moved fleet is
+        #                      clear of the warning set one step later. With path
+        #                      warnings that almost never happens, so preemption
+        #                      reads as pure cost and the head learns to stop.
+        #   "collision_cost" : no "clear" bonus; instead collision_cost is charged
+        #                      for every NEW colliding pair (first step it is
+        #                      seen; at most collision_charge_cap pairs a step).
+        #                      Preempting then pays exactly when it cuts the
+        #                      chance of a collision by more than
+        #                      |invocation_cost| / |collision_cost| (4/8 = 50%):
+        #                      a guard against preempting for its own sake.
+        #                      -8 keeps collisions comparable to the coherence
+        #                      term (~-336 vs ~-414 per episode in cold_run25);
+        #                      -16 would have been the largest term by far.
+        #                      A "clear" bonus would pay for situations that clear
+        #                      anyway (119 of 121 in cold_run25 ep 1) and teach
+        #                      the head to preempt always.
+        "reward_mode": "collision_cost",
+        "collision_cost": -8.0,
+        "collision_charge_cap": 3,
+        "prevention_window": 5,            # MEASUREMENT ONLY (CONFLICT_DESIGN.md
+                                            # fix 2). A preemptive recovery counts
+                                            # as PREVENTING if none of the fleets it
+                                            # moved collides within this many steps.
+                                            # Reported as preempt_clear_k /
+                                            # preempt_collided_k beside the strict
+                                            # one-step success, which needs the
+                                            # fleets clear of the whole warning band
+                                            # and fires ~2% of the time in corridors.
+                                            # Nothing reads it for reward yet: that
+                                            # is the decision the randomised test
+                                            # (drive_shortest_path.py --recovery
+                                            # coin) exists to inform.
+    },
+
+    # ==========================================
+    # 5. REWARD SHAPING
+    # ==========================================
+    # Every one of these used to be a bare numeric literal buried inside
+    # core_warehouse.py's step() method -- not configurable from here at all.
+    #
+    # REWORKED (2026-08-25) around the philosophy from the FLOWRRA-GNN swarm
+    # version (FLOWRRA_JOURNEY/Version_0__0_3), which never had a "frozen
+    # fleet" problem: an unconditional baseline reward every step, movement
+    # rewarded PROPORTIONALLY to how much it actually helped rather than a
+    # flat bonus/penalty regardless of magnitude, and a much softer collision
+    # penalty (their collapse_penalty is -3.0; ours was -15.0 even after the
+    # first reduction from -50.0). The swarm task has no fixed per-agent goals
+    # though, so mission_complete/final_approach_bonus/the new overtime
+    # pressure below don't have a swarm analogue -- those are this task's own
+    # goal-directed additions on top of the borrowed philosophy.
+    "rewards": {
+        "mission_complete": 100.0,         # One-time bonus for reaching the goal
+        "baseline_reward": 0.1,            # Unconditional, every active fleet, every
+                                            # step -- matches the swarm version exactly.
+                                            # Makes plain idling only mildly positive
+                                            # rather than zero, so there's no cliff to
+                                            # fear -- the incentive to actually move
+                                            # comes from movement paying MUCH more, not
+                                            # from idling being punishing.
+        "movement_reward_multiplier": 3.0, # Replaces the old flat moving_closer/
+                                            # wandering_away with a PROPORTIONAL reward:
+                                            # (old_dist - new_dist) * this. A perfect
+                                            # full-speed step toward goal nets ~1.5; a
+                                            # half-hearted/braked step earns proportionally
+                                            # less instead of the same flat +1.0 a
+                                            # full-speed step got. A forced detour that's
+                                            # the only available progress now earns
+                                            # something close to zero instead of a flat
+                                            # -1.5, rather than being punished as hard as
+                                            # a genuinely wrong move.
+        "idle_penalty": -0.5,              # Down from -2.0. Applies ONLY when current_pos
+                                            # genuinely didn't change at all this step
+                                            # (idle action, or an invalid/blocked move) --
+                                            # NOT "moved but zero net distance progress",
+                                            # which the proportional term above already
+                                            # handles correctly on its own (nets to ~0).
+        # WHICH ACTION GETS CHARGED FOR A COLLISION.
+        # check_integrity() runs at the START of a step, so the set it produces
+        # describes the PREVIOUS action's geometry -- and the -50 below then
+        # lands on the CURRENT action. Measured 2026-09-20: 100% of penalties
+        # were for overlaps that existed before the penalised action ran, and
+        # 83% of those actions had just RESOLVED the overlap.
+        #
+        # True: a read-only re-check after the action loop, so the penalty
+        # follows the action that produced the geometry.
+        # False: the original behaviour, exactly reproducible.
+        # DELIVERING A RESCUED ORDER pays this into the RESCUE head, on top of
+        # the ordinary mission_complete that already goes to "goal".
+        #
+        # The rescue head currently sees ONE event per handover -- pickup_reward
+        # 25.0, about 1.36 times an episode against ~44 ordinary deliveries. It
+        # is a pure terminal signal: the rescuer's whole approach pays into
+        # "goal", because dispatch retargets its goal onto the pickup cell. A
+        # head with 1.36 events and no dense structure has almost nothing to fit,
+        # and its Q-values stay too small to influence the summed argmax that
+        # drives both action selection and the bootstrap.
+        #
+        # This adds a SECOND event -- finishing the job, not just collecting it.
+        # 25.0 makes a rescued delivery worth 125 to the summed Q against 100 for
+        # an ordinary one. 0.0 disables it and reproduces the old behaviour.
+        #
+        # Raising the WEIGHT instead would not fix this: multiplying a signal
+        # that is absent 99.997% of the time makes the rare event enormous rather
+        # than making the head learnable.
+        # WHEN active_mask IS SNAPSHOTTED. This decides whether the network ever
+        # receives a gradient from a successful delivery.
+        #
+        # active_mask zeroes a fleet's TD error in learn(). It used to be built
+        # AFTER the action loop, from immobile_nodes -- but that loop freezes a
+        # fleet the instant it delivers. So the fleet that had just earned
+        # mission_complete was marked inactive in the very transition carrying
+        # it, and the +100 was multiplied by zero.
+        #
+        # The arrival reward never reached the gradient in ANY run. Every other
+        # action near a goal was trained; the one that completes the mission was
+        # the only one systematically excluded. At the doorstep, with a peer
+        # nearby just 1.3% of the time: 38.2% step in, 29.0% idle, 32.7% move
+        # away -- no signal.
+        #
+        # True: snapshot before the action loop. A fleet already parked at the
+        #       start of the step stays masked (the original, correct intent);
+        #       one that freezes DURING the step is masked from the next
+        #       transition onward, not this one.
+        # False: the old behaviour, exactly reproducible.
+        "mask_active_before_actions": True,
+
+        "rescue_delivery_bonus": 0.0,      # 0.0 = off | 25.0 = matches pickup_reward
+
+        "attribute_collisions_post_action": True,
+
+        "fatal_collision": -50.0,          # RAISED from -3.0. Charged to the two
+                                            # colliding fleets, so a collision cost -6
+                                            # total against a completed delivery worth
+                                            # +100 -- roughly 6% of one delivery. In a
+                                            # warehouse a collision is an incident:
+                                            # stopped vehicles, manual intervention,
+                                            # possible damage. It is not 6% of a
+                                            # delivery.
+                                            #
+                                            # The policy was optimising this correctly.
+                                            # Measured over 100 episodes it traded 8
+                                            # preventive interventions per episode for
+                                            # 0.3 collisions and got BETTER completion
+                                            # doing it, because intervention cost
+                                            # -4.0 x N (every fleet) while a collision
+                                            # cost -6. At -50 a collision costs -100,
+                                            # equal to losing a whole delivery, which
+                                            # makes prevention worth paying for.           # Down from -15.0 (originally -50.0), matching
+                                            # the swarm version's collapse_penalty. See the
+                                            # breakeven-risk-tolerance math from earlier in
+                                            # this project: this raises the perceived-risk
+                                            # threshold at which idling starts looking
+                                            # better than attempting a move.
+        "warning_zone": -1.2,              # PER-STEP PENALTY for sitting in another
+                                            # fleet's warning band (collision_threshold
+                                            # < d <= warning_threshold), scaled by how
+                                            # close to the collision boundary you are:
+                                            # ~0 at d = warning_threshold, full value
+                                            # just outside a crash.
+                                            #
+                                            # SIGN FLIP. This used to be +0.5 -- a
+                                            # BONUS for entering the exact band that
+                                            # precedes a collision. Nothing in the
+                                            # reward discouraged approach and something
+                                            # actively paid for it, which is the
+                                            # mechanical reason Tier 1 only ever fired
+                                            # AFTER impact: the policy had no gradient
+                                            # pointing away from danger until the
+                                            # danger had already happened.
+                                            #
+                                            # A graded penalty gives the safety head a
+                                            # signal one step BEFORE the fatal one, so
+                                            # Q-values for closing actions fall while
+                                            # there is still room to act. That is
+                                            # preemptive avoidance, learned rather than
+                                            # overridden.
+                                            #
+                                            # No cooldown any more. The cooldown existed
+                                            # only to stop two fleets farming a repeated
+                                            # BONUS by loitering; a penalty cannot be
+                                            # farmed, and every step spent near a crash
+                                            # is genuinely a step of risk.               # Bonus for a close-encounter with another fleet
+        "final_approach_bonus": 3.5,       # EXTRA reward (on top of the proportional
+                                            # movement term) for genuine progress while in
+                                            # the warning zone during final approach (see
+                                            # warehouse.final_approach_threshold) --
+                                            # reinforces pushing through instead of being
+                                            # cautious right when a fleet is nearly home.
+        "warning_zone_cooldown": 10,       # Steps a fleet must wait before earning warning_zone
+                                            # again. THE FIX: previously this fired every single
+                                            # step a fleet remained in another fleet's warning
+                                            # zone, uncapped -- so two fleets that just sat near
+                                            # each other collected +3.0/step indefinitely, often
+                                            # outearning the reward for actually making
+                                            # progress. Now it's a one-time bonus per distinct
+                                            # encounter: earned once, then locked out for this
+                                            # many steps regardless of whether the fleet stays in
+                                            # or re-enters the zone, before it can be earned again.
+
+        # Overtime pressure: escalating penalty for any fleet still not home once
+        # the episode runs past overtime_threshold_steps, ramping linearly from 0
+        # at that step up to overtime_max_penalty at max_steps_per_episode. Applies
+        # every step until the fleet either finishes (no overtime penalty on the
+        # exact step it completes -- see step()) or the episode ends. This is the
+        # "escalating penalty, not abandon" interpretation discussed earlier: a
+        # smooth urgency gradient in the final stretch rather than a sudden cliff.
+        "overtime_threshold_steps": 750,
+        "overtime_max_penalty": -10.0,
+    },
+}

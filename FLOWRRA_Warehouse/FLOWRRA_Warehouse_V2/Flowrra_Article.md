@@ -487,7 +487,33 @@ PIBT's and RHCR's published results, like the standard MAPF benchmarks, assume t
 
 This is one seed. It shows the size of the effect, not a tight estimate.
 
-### 5.4 Further detail
+### 5.4 Figures
+
+<div align="center">
+  <img src="Final_Report/fig_delivered.png" alt="Book delivered against the number of fleets, one panel per map; clean days on top, failures and people below" width="750"/>
+</div>
+
+**Figure 1. Book delivered against the number of fleets,** one panel per map: clean days on top, days with failures and people below. ladder4 is at or near the top in every panel. The gap to the planners opens with failures and people at 60–80 fleets. The route-off networks' weak spot is the Kiva-style map at 20 fleets.
+
+<div align="center">
+  <img src="Final_Report/fig_lead.png" alt="Censored lead time against the number of fleets, one panel per map" width="750"/>
+</div>
+
+**Figure 2. Lead time (censored, in steps) against the number of fleets,** laid out as in Figure 1. Lower is faster. The planners are faster per order, most clearly on the Kiva-style map.
+
+<div align="center">
+  <img src="Final_Report/fig_people.png" alt="Near misses with people per day, with failures and people" width="750"/>
+</div>
+
+**Figure 3. Near misses with people per day,** on days with failures and people. PIBT and RHCR-PP keep furthest from people. Of FLOWRRA's arms, ladder7 has the fewest near misses.
+
+<div align="center">
+  <img src="Final_Report/fig_guard.png" alt="Guard stops per day, both conditions" width="750"/>
+</div>
+
+**Figure 4. Guard stops per day** in both conditions: moves the intent guard refused. PIBT, which re-decides every step from where the fleets actually are, never triggered the guard. RHCR-PIBT, whose plans assume following nose to tail, triggered it most.
+
+### 5.5 Further detail
 
 The per-day results, the scoring script and the full run history, including the predictions written before the run and how each scored, are in the build log (V2_The_Conflict_Ladder.md, entry 44) and the repository.
 

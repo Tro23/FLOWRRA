@@ -1,266 +1,649 @@
-# FLOWRRA Warehouse
+# FLOWRRA: Flow Recognition Reconfiguration Agent
 
-**Decentralised coordination for warehouse fleets.** Every fleet (one vehicle) decides locally, from what it perceives within 5 graph hops. The set of all fleets on the floor is treated as one holon that learns to keep itself whole while it works. A learned graph policy and a ladder of path-aware rules share the work, through deliveries, hardware failures and people on the floor, with no central replanning step.
+**Federated Holonic Multi-Agent System for Dynamic Swarm Coordination**
 
-FLOWRRA (Flow Recognition Reconfiguration Agent) is an independent research project by [DhaaRn](https://dhaarn.com). This folder holds its warehouse work.
-
-> **Start here: [`FLOWRRA_Warehouse_V2/`](FLOWRRA_Warehouse_V2/) is the current version.** The full write-up is the article, [`Flowrra_Article.md`](FLOWRRA_Warehouse_V2/Flowrra_Article.md), and every step and run is recorded in the build log, [`V2_The_Conflict_Ladder.md`](FLOWRRA_Warehouse_V2/Journey_in_Writing/V2_The_Conflict_Ladder.md). Everything outside `FLOWRRA_Warehouse_V2/` belongs to the previous version and is kept as a fixed reference point.
-
----
+FLOWRRA is a novel multi-agent reinforcement learning framework that enables swarm systems to dynamically recognize, adapt, and reconfigure in response to changing environmental conditions. Built on a federated holonic architecture, FLOWRRA allows agents to self-organize into hierarchical structures (holons) that can autonomously make decisions while maintaining global coordination.
 
 <div align="center">
-  <img src="FLOWRRA_Warehouse_V2/Final_Report/flowrra_kiva_day.gif" alt="ladder4 on the Kiva-style map with failures and people, 60 fleets" width="750"/>
-  <br><sub><b>The whole day.</b> ladder4 on the Kiva-style map: 60 fleets, seed 3, hardware failures and people on the floor. A variant of a scored day, with a book of 150 orders instead of 200: 142 of 150 delivered. Replayed with <code>record_day.py</code> and <code>render_day.py</code>.</sub>
-  <br><br>
-  <img src="FLOWRRA_Warehouse_V2/Final_Report/flowrra_kiva_closeup.gif" alt="Close-up of the same day, every step from 380 to 850" width="750"/>
-  <br><sub><b>Close-up, every step from 380 to 850 of the same day:</b> fleets yielding, retracing and ordering themselves around failures and people.</sub>
+  <p>SINGLE HOLON - FLOWRRA 2D Simulation showing instant recovery/evation</p>
+  <img src="assets/Single_Holon.gif" alt="SINGLE HOLON - FLOWRRA 2D Simulation showing instant recovery/evasion" width="400"/> <br></br>
+  <p>MULTI HOLON - FLOWRRA 2D Simulation showing instant recovery from node partitions</p>
+  <img src="assets/The_Beautiful_Swarm.gif" alt="MULTI HOLON - FLOWRRA 2D Simulation showing instant recovery from node partitions" width="400"/><br></br>
+  <p><i>Live 2D simulation demonstrating 81.7% average flow coherence under severe node partitions.</i></p>
+  <p><b>For interactive visual, visit: [ https://dhaarn.com ]</b></p>
 </div>
 
-## Headline result: same floor, different brains (October 2026)
+    - For Conceptual Understanding and Evolution of FLOWRRA visit: https://open.substack.com/pub/rohittamidapati/p/flowrra-flow-recognition-reconfiguration?r=721j7i&utm_campaign=post&utm_medium=web&showWelcomeOnShare=true -
 
-**The test.** FLOWRRA ran against the MAPF planners PIBT and RHCR on the same simulated floor, inside the same safety boundary.
 
-**The safety boundary.** In every system compared, FLOWRRA's included, a fleet is a point on the graph. FLOWRRA adds a boundary around each point, which acts as its footprint:
-- a minimum gap of 1 hop;
-- warning bubbles of 1.0–1.75 hops;
-- braking from 1.5 hops;
-- an intent guard that checks every move before anyone moves.
+> ### Latest: FLOWRRA in Warehouse (October 2026)
+> FLOWRRA's warehouse instance was tested against the MAPF planners PIBT and RHCR on the same floor, inside the same safety boundary. The test covered 1,920 arm-days on four maps (three from the 3D MAPF warehouse dataset, ICAPS 2024), with 20–80 fleets, hardware failures and people on the floor.
+> - **It delivered the most of the order book:** 98.9% on clean days, and 87.6% with failures and people.
+> - **At 60–80 fleets under failures, it delivered firmly more than every planner:** 90.5% against 89.1% for the closest.
+> - **The network alone, with little training, was level with the best planner there** (89.0%).
+> - **The planners were faster per order and kept further from people.**
+>
+> The details:
+> - **[FLOWRRA_Warehouse/](FLOWRRA_Warehouse/)** has the results;
+> - **[the article](FLOWRRA_Warehouse/FLOWRRA_Warehouse_V2/Flowrra_Article.md)** describes the whole system;
+> - **[the build log](FLOWRRA_Warehouse/FLOWRRA_Warehouse_V2/Journey_in_Writing/V2_The_Conflict_Ladder.md)** records every step.
 
-Every arm drove inside that boundary. The planners kept the same world (failures, people, docks, rescues) with FLOWRRA's own decision rules switched off.
+## What is FLOWRRA?
 
-**The days**
-- **Maps:**
-  - three multi-level warehouses from the 3D MAPF warehouse dataset (Wang, Veerapaneni, Wu, Li & Likhachev, ICAPS 2024): `25_5_2_5_2_1`, `25_10_5_10_5_2` and `50_20_5_10_5_2`;
-  - a Kiva-style layout made for this project (`Kiva_2D_46_33_1`, 46 × 33 cells).
-- **Fleets and seeds:** 20, 40, 60 and 80 fleets; seeds 0–7.
-- **Two conditions:** *clean*, and *full* (hardware failures and people clearing debris).
-- **Demand:** a book of 100 orders released over 500 steps (200 on the Kiva-style map).
-- **In all:** 1,920 arm-days. Every arm meets exactly the same day.
+FLOWRRA introduces a paradigm shift in swarm intelligence through a radical reorientation: **the entire swarm treats itself as its primary environment (Environment A)**, while everything external: obstacles, boundaries, external forces becomes a secondary, interacting entity (Environment B). This Ouroboros principle enables the system to maintain structural and informational coherence through recursive self-awareness.
 
-| Arm | Delivered, clean | Delivered, full | Lead time, full (steps) | Near misses with people, full (per day) | Guard stops, full (per day) |
-|---|---|---|---|---|---|
-| **ladder4** (FLOWRRA champion, route on) | **98.9%** | **87.6%** | 192 | 77.4 | 1,175 |
-| ladder6 (network alone, route off) | 94.2% | 82.1% | 234 | 74.7 | 1,138 |
-| ladder7 (network alone, route off) | 93.6% | 82.8% | 241 | 61.5 | 1,476 |
-| RULES (FLOWRRA's rules, no network) | 95.5% | 87.5% | 191 | 84.0 | 500 |
-| PIBT | 98.4% | 79.2% | 188 | **47.2** | **0** |
-| RHCR-PP (k = 1) | 94.8% | 86.3% | **165** | 52.4 | 1,284 |
-| RHCR-PIBT | 75.2% | 74.6% | 270 | 79.4 | 4,694 |
+The framework combines:
 
-**What it shows**
-- **ladder4 delivered the most of the book in both conditions.**
-- **Where coordination is hardest, it delivered firmly more than every planner.** With failures and people at 60–80 fleets:
-  - ladder4 90.5%;
-  - RHCR-PP 89.1% (paired Wilcoxon, p = 0.003);
-  - PIBT 85.3%;
-  - RHCR-PIBT 77.5%.
-- **The network alone is already a serious option, with little training** (a few hundred episodes).
-  - At 60–80 fleets under failures, ladder6 delivered 89.0%, level with the best planner, RHCR-PP at 89.1% (p = 0.54).
-  - ladder7 had the highest mean of any arm on the small and medium maps under failures (91.5%, 90.5%).
-- **The planners were faster per order and kept further from people.** That is where FLOWRRA has work to do.
-- **No arm averaged more than 0.016 collisions a day.**
-- **The price of physical operation.** On RHCR's own Kiva map, keeping a safety boundary costs PIBT a factor of 3.1 in throughput: 1.045 goals per timestep under the usual point model, 0.332 inside the boundary (one seed). Results under the point model do not show this cost.
+- **Flow Recognition**: The swarm continuously monitors its own internal coherence and structural integrity, treating deviations as signals to adapt
+- **Flow Reconfiguration**: Real-time self-reorganization through density field manipulation and spatial-temporal Sampling, enabling the system to "fold time inward" and recover from disruptions
+- **Retrocausal-Inspired Learning**: Uses observed disruptions to select optimal past configurations, effectively influencing operational history toward desired future states
+- **Density Field Evolution**: A spatial memory system where collision events and failures are "splatted" into the environment as repulsion fields, teaching the swarm to avoid dangerous configurations
+- **Spatial-Temporal Sampling:** Dual-mode recovery mechanism that can:
+  - * **Spatial Resolution (Forward):** Project into high-affordance regions using current density gradients.
+  - * **Temporal Resolution (Backward):** Return to historically coherent states through manifold smoothing.
+- **Federated Holonic Architecture:** Self-similar hierarchical structures from individual agents to swarm level, enabling scalability without sacrificing coherence.
 
-**What we claim, and what we do not.**
-- **The claim:** under conditions modelled on real operation, a decentralised holon with a learned policy delivered as much as central planners overall, and more at high density under disruption. That makes decentralised, learned control a serious option for physical fleets.
-- **What we do not claim:** that learning beats planning in general.
-  - The planners were faster and kept further from people.
-  - FLOWRRA's rules alone came within 0.1 points of the champion under disruption.
-  - The baselines were implemented from their papers, not the authors' code.
-  - Everything here is simulation.
+> 📝 **Architecture Note (August 15, 2026):** 
+> FLOWRRA’s current temporal-spatial resolution engine utilizes continuous density fields to execute classical **Spatial-Temporal Sampling** (referred to conceptually as Wave Function Collapse in our earlier conceptual designs). We designed this module as a classical placeholder; as the architecture matures and interfaces with advanced hardware substrates, this engine is built to be seamlessly substituted with true physical Spatial-Temporal Collapse, while the surrounding peer-to-peer GNN coordination remains invariant.
 
-**Data and detail**
-- **Per-day results:** [`final_clean.csv`](FLOWRRA_Warehouse_V2/Final_Report/final_clean.csv) and [`final_full.csv`](FLOWRRA_Warehouse_V2/Final_Report/final_full.csv), one row per arm × map × fleet size × seed.
-- **Tables and figures:** [`Final_Report/`](FLOWRRA_Warehouse_V2/Final_Report/), made by `final_report.py`.
-- **The setup, every measure and the full reasoning:** the article, §5.
-- **The predictions written before the run, and how each scored:** the build log, entry 44.
+### Key Features
 
----
+- 🔄 **Dynamic Holon Formation**: Agents autonomously cluster based on spatial density and task requirements
+- 🧠 **GAT-based Graph Neural Networks**: Two agent architectures available:
+  - **Simple GAT-GNN** (`agent.py`): Graph Attention Network with LSTM for temporal memory and multi-head attention
+  - **R-GNN** (`r_gnn_agent.py`): Relational GNN for enhanced inter-agent communication
+- 🗺️ **Quadtree-based Federation**: Efficient spatial partitioning for large-scale deployments
+- 📊 **Real-time Metrics**: Comprehensive tracking of training, exploration, recovery, and frozen node behaviors
+- 🎯 **Active/Frozen Node Management**: Adaptive computation allocation - nodes can "crystallize" as static landmarks once their zone is secured
+- 🌊 **Density Field Memory**: Spatial repulsion fields that encode collective failure history, teaching avoidance through retrocausal splatting
+- ⚡ **Spatial-Temporal Collapse**: Bidirectional recovery mechanism combining forward spatial projection and backward temporal restoration
+- 🔁 **Retrocausal-Inspired Intelligence**: System doesn't just predict, it reorganizes recursively across time, using future observations to inform past configurations
 
-## How the brain evolved: from the failure benchmark to the Conflict Ladder
-
-*The failure-shock benchmark, 5 October 2026, before the Conflict Ladder.*
-
-**The benchmark.** Before the redesign, a harder failure benchmark tested recovery:
-- 48 paired instances: 2 maps × 25, 40 and 60 vehicles × 8 seeds;
-- 9 vehicles killed in 3 waves in every episode.
-
-| small / large map | RHCR-PIBT + nearest-idle recovery | FLOWRRA then (policy + RULES) | RULES alone |
-|---|---|---|---|
-| Stranded orders recovered | 70.4% / 70.8% | 70.0% / 66.8% | **87.4% / 85.2%** |
-| Rescue vehicles lost per episode | 2.67 / 2.62 | 1.50 / 1.71 | **0.25 / 1.08** |
-| Orders completed overall | 92.3% / 92.5% | 93.0% / 93.0% | **95.0% / 97.0%** |
-
-**The result.** The rules carried the recovery, and the learned policy of that time did not add value on top of them. A first fix (teacher_run1) did not hold up.
-
-**What came of it.** The redesign was **[The Conflict Ladder](FLOWRRA_Warehouse_V2/Journey_in_Writing/V2_The_Conflict_Ladder.md)**:
-- RULES became path-aware rungs;
-- a Learner head learns their judgement;
-- safety pays by rung;
-- values are learned from the moves the system actually made.
-
-In the final test above, the champion delivered 3.4 points more than RULES alone on clean days, and was level with it under failures.
-
-The data for this earlier benchmark is in [`benchmark_new_all_2.csv`](FLOWRRA_Warehouse_V2/Benchmark/benchmark_new_all_2.csv), with figures from [`generate_benchmark_figures_v2.py`](FLOWRRA_Warehouse_V2/reports_during_process/generate_benchmark_figures_v2.py). An earlier training-run comparison, with rolling orders, is in [`COLD_RUN25_ANALYSIS.md`](FLOWRRA_Warehouse_V2/Journey_in_Writing/COLD_RUN25_ANALYSIS.md).
-
----
-
-## What changed in V2
-
-The full reasoning is in the article (§3) and in V2's design notes.
-
-- **Two environments.** The set of fleets is environment A, a holon whose integrity (0 any collision, 0.5 any warning, 1 clear) sits in every fleet's state. The floor, orders, failures and people are environment B.
-- **Decide, guard, move.** Every fleet proposes its move from the same snapshot. Conflicts are grouped into independent components (union-find), and contested ones are resolved jointly by Hungarian assignment with order-invariant tie-breaks. The intent guard checks every landing, then all fleets move at once, at half a hop per step. See [`Simultaneous_Step.md`](FLOWRRA_Warehouse_V2/Journey_in_Writing/Simultaneous_Step.md).
-- **The Conflict Ladder.** Rules resolve the conflicts that remain:
-  - **L0:** ordering, braking, corridor holds;
-  - **L1:** retrace;
-  - **L2:** pull over;
-  - **L3:** the fundamental recovery tiers (spatial escape, temporal rewind, right-of-way yield).
-
-  Triggers are structural, and each rung has a cost charged to the fleets whose moves made it necessary. See [`V2_The_Conflict_Ladder.md`](FLOWRRA_Warehouse_V2/Journey_in_Writing/V2_The_Conflict_Ladder.md) and [`CONFLICT_DESIGN.md`](FLOWRRA_Warehouse_V2/Journey_in_Writing/CONFLICT_DESIGN.md).
-- **Path awareness.** Warnings come from paths that close over an 8-hop route horizon, not from mere proximity. The field carries each fleet's own route ahead and its neighbours' routes. See [`Path_Awareness.md`](FLOWRRA_Warehouse_V2/Journey_in_Writing/Path_Awareness.md).
-- **Heads with one job each.**
-  - Safety, delivery and efficiency forecast consequences, weighted 6 : 4 : 1 at choice time only.
-  - A Learner head learns the system's judgement and acts only as a bounded preference.
-  - The recovery head is parked.
-
-  See the article, §3.8.
-- **SARSA on the move made.** Each transition waits one step, so values learn from what the system actually did. The whole step goes to the learner as one joint transition. See the article, §3.10.
-- **The affordance field and the Gibbs frame:**
-  - **How it is now.** The field is A = mask / (1 + R): reachability within 5 graph hops, with spatio-temporal splats (max-stamped, decaying on a fast channel and a slow one with a 32-step half-life) and swept paths of peers. Two Gibbs quantities are measured and in every fleet's state: the local action entropy S, and throughput pressure T = 1 / (1 + orders left / steps left) in the temperature's place.
-  - **How we want it to be.** The exponential field P(cell) = exp(−E/T) / Z, with a partition function shared across the floor (log-sum-exp), the global spatial entropy, and F = E − T·S as the objective. It matters most where two fleets can pass side by side.
-
-  See `density_warehouse.py`.
-- **Physics and safety.** Speed changes with the situation: slowing in warning zones, braking behind a fleet closing ahead, holding speed on the final approach, picking up again once clear. Failures are modelled on VDA 5050: a failed fleet stops dead and reports an error, and its load is handed over to a rescuer.
-- **World fixes (October 2026), applied to every arm:**
-  - node snap (a fleet stalled just short of a node);
-  - bubble floor (a follower exactly 1 hop behind was braked to a crawl);
-  - orphaned orders wait for a pickup.
-
-  See `test_world_fixes.py`.
-
----
-
-## Folder guide
+## Architecture Overview
 
 ```
-FLOWRRA_Warehouse/
-├── FLOWRRA_Warehouse_V2/        the current version
-│   ├── Flowrra_Article.md       the article: the whole system and the final test
-│   ├── Flowrra_Architecture.html  one step of the system, phase by phase (made by make_ouroboros.py)
-│   ├── *.py                     all runnable code, side by side (see the table below)
-│   ├── Final_Report/            the final test: per-day CSVs, tables, figures, the two GIFs
-│   ├── Journey_in_Writing/      the build log (V2_The_Conflict_Ladder.md) and the design notes
-│   ├── ladder_run1/, ladder_run4/, ladder_run6/, ladder_run7/, ...   checkpoints and training metrics, one folder per run
-│   ├── all_scens_final/         the final test's scenarios (seeds 0-7 per map)
-│   ├── kiva_instances/          lifelong Kiva instances extracted from POGEMA
-│   ├── deploy_files/            earlier deploy_eval results
-│   ├── Benchmark/               the earlier failure benchmark: data and BENCHMARK.md
-│   ├── reports_during_process/  reports, figures and config snapshots from individual runs
-│   └── test_files/              the tests
-├── FLOWRRA_Benchmark/           previous version's failure benchmark
-├── Flowrra_animation.gif / .mp4  previous version's animation
-└── *.py, *.csv                  previous-version code and results
+FLOWRRA_FEDERATED
+├── holon/              # Core holon agent implementations
+│   ├── core.py         # FLOWRRA orchestrator (Environment A self-awareness)
+│   ├── agent.py        # GAT-GNN with multi-head attention
+│   ├── r_gnn_agent.py  # Relational GNN alternative
+│   ├── density.py      # Density field with retrocausal splatting
+│   ├── recovery.py     # Spatial-Temporal Collapse (spatial + temporal)
+│   ├── loop.py         # Spring topology with non-linear forces
+│   └── obstacles.py    # Obstacle detection (Environment B)
+├── federation/         # Federation manager and spatial partitioning
+│   ├── manager.py      # Quadtree-based coordination
+│   └── quadtree.py     # Spatial indexing
+├── deployment/         # Saved deployment states and trajectories
+├── results/            # Training metrics and visualizations
+├── config.py           # Configuration parameters
+├── main.py             # Training entry point (--parallel support)
+├── deploy.py           # Deployment with frozen node tracking
+└── visualization.html  # Web-based trajectory viewer
 ```
 
-**The code in `FLOWRRA_Warehouse_V2/`:**
+### The Ouroboros Architecture
 
-| Area | Files |
-|---|---|
-| Simulator and policy | `core_warehouse.py`, `node_warehouse.py`, `loop_warehouse.py`, `density_warehouse.py`, `agent_warehouse.py`, `encoder_warehouse.py`, `recovery_warehouse.py`, `proximity_warehouse.py`, `obstacles_warehouse.py`, `guard_warehouse.py` |
-| RULES and the ladder | `conflict_warehouse.py`, `corridor_warehouse.py` |
-| Configuration | `config_warehouse.py` |
-| Training | `main_runner_warehouse.py` |
-| The final test | `deploy_eval.py`, `mapf_drivers.py` (PIBT and RHCR as drivers on our floor), `drive_shortest_path.py` (RULES), `final_jobs.py`, `final_report.py`, `record_day.py`, `render_day.py` |
-| Earlier benchmarks | `benchmark_all.py`, `benchmark_flowrra.py`, `baselines_mapf.py`, `benchmark_report.py`, `analyse_run.py` |
-| Kiva and lifelong | `convert_grid_map.py`, `kiva_instances.py`, `kiva_eval.py`, `run_kiva.py` |
-| Scenarios | `generate_scenarios.py`, `check_scenario_overlap.py`, `mapcheck.py` |
-| Diagnostics | `check_identity.py`, `lesion_harness.py`, `radius_study.py`, `measure_order_dependence.py`, `profile_step.py`, `profile_phases.py`, `correlate_ray_repulsion.py`, `five_measure_rule.py` |
-| The architecture page | `make_ouroboros.py` -> `Flowrra_Architecture.html` |
+FLOWRRA inverts the traditional agent-environment paradigm:
 
----
+1. **Environment A (Primary)**: The swarm's own internal state: node positions, loop integrity, density fields, coherence metrics. The system continuously acts upon itself to preserve flow.
 
-## Running it
+2. **Environment B (Secondary)**: External world: obstacles, boundaries, external forces. These are perturbations that the swarm must navigate while maintaining its internal coherence.
 
-Install Python 3 and the dependencies:
+3. **The Critical Loop**:
+   - **Sense**: Observe both environments (internal coherence + external obstacles)
+   - **Evaluate**: Compute flow coherence Φ(S(t)) and loop integrity
+   - **Decide**: If coherent, optimize via policy πθ; if disrupted, trigger Spatial-Temporal Collapse (In code still called as WFC -Wave Function collapse)
+   - **Act**: Apply actions to Environment A (self-reconfiguration)
+   - **Learn**: Update policy and density field based on outcomes
+
+This recursive self-awareness enables resilience not through external reactivity, but through internal coherence preservation.
+
+## Quick Start
+
+### Prerequisites
 
 ```bash
-pip install numpy pandas networkx torch scipy matplotlib seaborn plotly pillow
-cd FLOWRRA_Warehouse/FLOWRRA_Warehouse_V2
+python >= 3.8
+torch >= 1.13.0
+numpy
+matplotlib
 ```
 
-Kiva lifelong runs also need `pogema`. It's safest to install it in a separate environment, because it pins numpy 1.26.
+### Installation
 
-**Tests.** Run them from `FLOWRRA_Warehouse_V2/`, so they find the modules beside them. Each test file ends with `ALL PASS`:
+1. Clone the repository:
+```bash
+git clone <your-repo-url>
+cd FLOWRRA_FEDERATED
+```
+
+2. Install dependencies:
+```bash
+pip install torch torchvision numpy matplotlib
+```
+
+### Running FLOWRRA
+
+#### Basic Training
+
+Run the main training loop with default configuration:
 
 ```bash
-for t in test_files/test_*.py; do PYTHONPATH=. python "$t"; done
+python main.py
 ```
 
-**Maps and scenarios.**
-- The maps aren't stored in this repo. Download the 3D MAPF warehouse dataset (Wang et al., ICAPS 2024), linked from the [mapf.info benchmarks page](https://mapf.info/index.php/Main/Benchmarks), and put each map's nodes and edges CSVs in `all_maps/`.
-- The final test's scenarios are in `all_scens_final/`. `generate_scenarios.py` regenerates them, or makes new ones.
+This will:
+- Initialize the federated holonic system
+- Train agents across multiple episodes
+- Save checkpoints and metrics
+- Generate visualization maps in `federated_maps/`
 
-**The final test** (240 jobs; about 16 hours on 14 processes):
+#### Parallel Training (Recommended)
+
+For faster training on multi-core systems using parallel holon execution:
 
 ```bash
-python final_jobs.py --list                                    # the jobs, and which are done
-nohup python final_jobs.py --run --parallel 14 > final_queue.log 2>&1 &
-python final_jobs.py --status
-python final_jobs.py --merge                                   # -> final_clean.csv, final_full.csv
-python final_report.py --clean final_clean.csv --full final_full.csv --out Final_Report
+python main.py --parallel
 ```
 
-**Replay a scored day.** `--check` confirms the replay is identical to the scored day:
+#### Custom Training Runs
+
+Adjust episodes, nodes, holons, and enable parallel execution:
 
 ```bash
-python record_day.py --arm ladder4 --map Kiva_2D_46_33_1 --fleets 60 --seed 3 --cond full --check Final_Report/final_full.csv
-python render_day.py day_ladder4_Kiva_2D_46_33_1_k60_s3_full.json.gz --gif
+# Train for 100 episodes with 40 nodes across 4 holons in parallel
+python main.py --episodes 100 --nodes 40 --holons 4 --parallel
+
+# Train for 200 episodes with 32 nodes (8 per holon)
+python main.py --episodes 200 --nodes 32
+
+# Sequential training (single-threaded)
+python main.py --episodes 50 --nodes 24
 ```
 
-`--book`, `--max-failures` and `--extra-steps` make variants of a day, and every frame's title says so. The GIFs above were made with `--book 150 --extra-steps 600`.
+#### Custom Configuration
 
-**Training.** Run `python main_runner_warehouse.py --help` to see every option. The commands for each run are in the build log.
+Modify `config.py` to adjust:
+- Number of agents and holons
+- Environment dimensions
+- Training hyperparameters
+- Sensor ranges and capabilities
 
-**Turning RULES on for earlier configs.** `reports_during_process/config_benchmark_rules.py` is the config snapshot with all six conflict switches on.
+Example:
+```python
+# config.py
+NUM_AGENTS = 100
+GRID_SIZE = 200
+EPISODES = 1000
+LEARNING_RATE = 0.001
+```
 
-**Capacity runs, reports and Kiva.** See [`BENCHMARK.md`](FLOWRRA_Warehouse_V2/Benchmark/BENCHMARK.md).
+### Deployment
+
+Deploy trained models and visualize trajectories:
+
+```bash
+# Deploy with default settings (500 steps)
+python deploy.py --deployment-file deployment/deployment_ep100.json
+
+# Deploy for specific number of steps
+python deploy.py --deployment-file deployment/deployment_ep100.json --steps 1000
+
+# Deploy from later training checkpoint
+python deploy.py --deployment-file deployment/deployment_ep2000.json --steps 2000
+```
+
+This loads saved checkpoints and generates:
+- Deployment trajectories with frozen node tracking
+- JSON files containing full system state over time
+- Freeze/unfreeze event logs
+- Collision and recovery metrics
+
+**Visualization**: After deployment, open `visualization.html` in a web browser to see the animated swarm behavior, frozen nodes (gold stars), active nodes (blue circles), and holon boundaries.
+
+### Visualization
+
+After training, view your results:
+
+1. Open `visualization.html` in a web browser
+2. The visualization shows real-time agent movements, holon formations, and density maps
+3. Metrics are displayed including coverage, exploration efficiency, and recovery time
+
+Then open `visualization.html` in your browser to see:
+- 🔵 Active nodes exploring and coordinating
+- ⭐ Gold frozen nodes acting as landmarks
+- 🔗 Spring connections maintaining loop integrity
+- 📊 Statistics (active vs frozen, frame count, speed)
+
+Tip to open `visualization.html` is to open your own local host:
+```bash
+python -m http.server 8000
+```
+
+Then open the Visualization file in the browser: `http://localhost:8000/visualization.html`
+
+## Project Structure
+
+- The main Folder of Implementable FLOWRRA: `FLOWRRA_FEDERATED`
+
+### Core Modules
+
+- **holon/core.py**: FLOWRRA orchestrator with loop structure, WFC triggers, and frozen node management
+- **holon/agent.py**: GAT-based GNN agent with epsilon-greedy exploration and gradient masking for frozen nodes
+- **holon/r_gnn_agent.py**: Alternative relational GNN implementation for enhanced communication
+- **holon/density.py**: N-dimensional density field with collision splatting and retrocausal repulsion
+- **holon/exploration.py**: Exploration strategies and frontier detection
+- **holon/recovery.py**: Spatial-Temporal Collapse with dual-mode recovery (spatial forward + temporal backward)
+- **holon/loop.py**: Spring topology management with non-linear warning forces
+- **holon/obstacles.py**: Static and moving obstacle detection with line intersection checks
+- **federation/manager.py**: Global coordination and holon management with Quadtree partitioning
+- **federation/quadtree.py**: Spatial partitioning for scalable deployment
+
+### Key Files
+
+- `main.py`: Primary training script with episode loop and parallel execution support
+- `config.py`: Central configuration for all parameters (nodes, holons, rewards, WFC thresholds)
+- `deploy.py`: Deployment script with frozen node event tracking and trajectory generation
+- `flowrra_model.py`: Neural network architectures (GAT layers, policy networks)
+- `agent.py`: Graph Attention Network agent with multi-head attention and LSTM temporal memory
+- `r_gnn_agent.py`: Alternative Relational GNN architecture
+- `Noise_Cleanup.py`: Data preprocessing utilities
+- `visualization.html`: Web-based trajectory playback with frozen node visualization
+
+## Results & Metrics
+
+Training produces several outputs:
+
+- **federated_maps/**: Episode-by-episode visualization PNGs
+- **metrics/**: JSON files with detailed per-holon statistics
+- **results/**: Aggregated training curves and comparison plots
+- **checkpoints/**: Saved model states for deployment
+- **deployment/**: JSON trajectories for playback
+
+### Key Metrics Tracked
+
+- Coverage efficiency
+- Inter-agent collision rate
+- Holon formation/dissolution frequency
+- Active vs frozen node ratios
+- Exploration completeness
+- Recovery time from failures
+
+
+## The Core Innovation: Retrocausal-Inspired Intelligence
+
+FLOWRRA's breakthrough lies in treating **disruption as information** that flows backward through time to inform system configuration. This isn't actual time travel, it's a directed inference mechanism inspired by quantum retrocausality.
+
+> In the warehouse system these ideas now run as concrete mechanisms: deciding from predicted futures, learning from the moves actually made (hindsight credit assignment), working backwards from known goals, and collapsing jams in space and time before contact. See §4 of [the article](FLOWRRA_Warehouse/FLOWRRA_Warehouse_V2/Flowrra_Article.md).
+
+### How It Works
+
+1. **Disruption Detection**: System detects coherence drop (Φ(S(t)) < threshold)
+2. **Spatial-Temporal Sampling**: 
+   - **Spatial Mode (Forward)**: Sample affordance field to find high-coherence regions ahead
+   - **Temporal Mode (Backward)**: Extract coherent tail from historical buffer
+3. **Retrocausal Splatting**: Failed trajectory is "splatted" into density field as repulsion
+4. **Memory Rewriting**: Bad states are replaced with recovered states in history buffer
+5. **Learning Signal**: GNN receives differential rewards based on recovery mode
+   - Spatial recovery (forward-looking): **High reward** (+15.0) - system anticipated!
+   - Temporal recovery (backward-looking): **Medium reward** (+5.0) - system recovered
+   - Random jitter (failure): **Heavy penalty** (-8.0) - system couldn't recover
+
+### The Density Field as Spatial Memory
+
+The density field ρ(x) inverts traditional repulsion:
+- **High density (ρ → 1.0)**: Safe, navigable, previously successful paths
+- **Low density (ρ → 0.0)**: Dangerous, obstacle-filled, failed trajectories
+
+When events occur:
+```python
+# Collision/WFC trigger
+density.splat_collision_event(
+    position=failure_point,
+    velocity=attempted_direction,  # Project forward (comet-tail)
+    severity=0.5,                   # How bad the failure
+    is_wfc_event=True               # WFC vs regular collision
+)
+```
+
+This creates **spatial scars**, geometric memories of failure encoded in the topology itself. The swarm learns not "don't collide with obstacle at (x,y)" but "avoid this configuration space."
+
+### Why This Matters
+
+Traditional RL: State → Action → Reward → Update Policy  
+FLOWRRA: State → Disruption → **Collapse** → **Rewrite History** → Update Density
+
+The system doesn't just learn from failure, it reorganizes its operational history to make the failure "never happened" while encoding the lesson in the density field. This is **intelligence as sustained presence** rather than perfect prediction.
+
+
+
+### Graph Neural Network Architectures
+
+FLOWRRA provides two GNN implementations:
+
+**1. GAT-based Agent (agent.py - Recommended)**
+```python
+# Graph Attention Network with:
+# - Multi-head attention (4 heads default)
+# - Epsilon-greedy exploration with Gaussian schedule
+# - Gradient masking for frozen nodes
+# - LSTM temporal memory for path stability (this can be made used by implementing r_gnn_agent.py)
+
+from holon.agent import GNNAgent
+
+agent = GNNAgent(
+    node_feature_dim=input_dim,
+    action_size=4,  # 2D: left, right, up, down
+    hidden_dim=128,
+    n_heads=4,
+    num_layers=3
+)
+```
+
+**2. Relational GNN (r_gnn_agent.py - Experimental)**
+```python
+# Enhanced relational reasoning for complex coordination
+from holon.r_gnn_agent import R_GNN_Agent
+
+agent = R_GNN_Agent(
+    node_feature_dim=input_dim,
+    action_size=4,
+    hidden_dim=128
+)
+```
+
+### Density Field Manipulation
+
+The density field is the spatial memory of the swarm, encoding failure history:
+
+```python
+from holon.density import DensityFunctionEstimatorND
+
+density = DensityFunctionEstimatorND(
+    dimensions=2,
+    local_grid_size=(5, 5),
+    global_grid_shape=(60, 60)
+)
+
+# When collision occurs, splat repulsion
+density.splat_collision_event(
+    position=collision_pos,
+    velocity=attempted_velocity,
+    severity=0.5,  # How bad the collision
+    is_wfc_event=False  # Regular collision vs WFC trigger
+)
+
+# Get affordance potential (1.0 = safe, 0.0 = dangerous)
+affordance = density.get_affordance_potential_for_node(
+    node_pos=current_pos,
+    repulsion_sources=detected_obstacles
+)
+```
+
+### Spatial-Temporal Sampling (*previously Wave Function Collapse-WFC) Configuration
+
+Tune WFC behavior in `config.py`:
+
+```python
+CONFIG = {
+    "wfc": {
+        "collapse_threshold": 0.6,  # Coherence below this triggers WFC
+        "tau": 3,  # Consecutive unstable steps before collapse
+        "history_length": 200,  # How many states to remember
+        "tail_length": 15,  # Coherent sequence length for recovery
+        
+        # Spatial collapse tuning (forward-looking)
+        "spatial_search_radius_mult": 0.9,
+        "spatial_samples": 32,
+        "spatial_accept_threshold": 0.65,
+        "spatial_improvement_min": 0.7,
+    }
+}
+```
+
+**Spatial vs Temporal Recovery**:
+- **Spatial (Forward)**: Uses current density field to project into high-affordance regions
+- **Temporal (Backward)**: Returns to historically coherent states via manifold smoothing
+- The system tries spatial first (anticipatory), falls back to temporal (safe)
+
+## 💡 Pro Tips for Better Results
+
+### Training Tips
+
+1. **Start Small, Scale Up**
+   - Begin with 16-24 nodes and 2 holons to validate your setup
+   - Once stable, scale to 32-40 nodes and 4 holons
+   - For research: 64+ nodes with 8 holons (requires powerful hardware)
+
+2. **Parallel Mode is Your Friend**
+   - Always use `--parallel` for multi-holon systems
+   - Expect 10-20x speedup on modern CPUs
+   - Monitor with `htop` to see all cores engaged
+
+3. **Watch for the "Breathing" Pattern**
+   - Healthy swarms show rhythmic expansion/contraction
+   - Look for periodic WFC triggers (not every step!)
+   - Coverage should climb steadily: 20% → 50% → 85% → 95%
+
+4. **Tune for Your Hardware**
+   - GPU available? Increase `hidden_dim` to 256 for richer representations
+   - Limited RAM? Reduce `buffer_capacity` to 10000
+   - Fast CPU? Increase `steps_per_episode` to 1500 for longer training
+
+### Configuration Tips
+
+1. **WFC Tuning for Different Environments**
+   - **Dense obstacles**: Lower `collapse_threshold` (0.5) for earlier recovery
+   - **Open spaces**: Higher `collapse_threshold` (0.7) for more exploration
+   - **Moving obstacles**: Increase `spatial_samples` (48) for better prediction
+
+2. **Reward Shaping**
+   - High `r_explore` (15.0) = aggressive exploration
+   - High `r_loop_integrity` (10.0) = tight formations
+   - Balance is key: exploration needs coherence to be valuable
+
+3. **Obstacle Placement**
+   - Too easy: No obstacles → swarm just wanders
+   - Too hard: >6 obstacles per holon → constant collapse
+   - Sweet spot: 4-5 obstacles with varied sizes
+
+### Visualization Tips
+
+1. **Reading the Visualizations**
+   - **Cyan/Blue nodes moving**: Healthy exploration
+   - **Gold stars appearing**: Strategic freezing (mission success!)
+   - **Red broken connections**: Normal during learning (should decrease)
+   - **Clusters forming**: Holons self-organizing
+
+2. **What Good Training Looks Like**
+   ```
+   Episode 10:  Reward: 5.2   | Coverage: 23% | WFC: 15 triggers
+   Episode 50:  Reward: 12.8  | Coverage: 67% | WFC: 8 triggers
+   Episode 100: Reward: 18.4  | Coverage: 94% | WFC: 3 triggers
+   ```
+   - Rewards climbing ✅
+   - Coverage increasing ✅
+   - WFC triggers decreasing ✅
+
+3. **Signs of Problems**
+   - Rewards oscillating wildly → reduce learning rate
+   - Coverage stuck <40% → increase exploration reward
+   - WFC every step → lower coherence threshold or fix obstacles
+
+### Experimentation Ideas
+
+1. **Test Resilience**
+   - Add moving obstacles after episode 50
+   - Randomly "kill" nodes mid-episode (freeze them)
+   - Change obstacle positions between episodes
+
+2. **Compare Architectures**
+   - Run with `agent.py` (GAT-GNN) baseline
+   - Switch to `r_gnn_agent.py` for comparison
+   - Measure: training speed, final coverage, WFC frequency
+
+3. **Ablation Studies**
+   - Disable spatial collapse: set `spatial_samples=0`
+   - Disable density splatting: comment out collision splatting
+   - Remove spring forces: set `stiffness=0`
+   - See what breaks! (Understanding through controlled destruction)
 
 ---
 
-## Roadmap
 
-1. **Federated holons.** Holons that grow and shrink, and rebalance fleets between zones of the floor, keeping each zone at equilibrium, in the spirit of GRAND. Throughput pressure then becomes per zone.
-2. **The full Gibbs field:** the exponential field with a shared partition function, the global spatial entropy, and F = E − T·S as the objective.
-3. **A learned boundary, then an exact collapse:** exit cells for every fleet in a jam, then a space-time solve between the two boundaries.
-4. **A boundary that scales with speed:** from hop scale towards centimetres where that is safe, as real AGVs' speed-dependent safety fields do.
-5. **The network alone:** more training for the route-off networks, which already match the best planner at high density under failures.
-6. **Lifelong capacity:** the boundary-cost test across seeds, on POGEMA's own instances, with FLOWRRA's networks beside the planners.
-7. **The world:** fleets that enter and leave the floor; batteries, with charging served by the same leave-and-return dynamics as the docks; and hardware.
+
+### Common Issues
+
+**Issue**: Training is slow
+- **Solution**: Use `--parallel` flag for multi-core execution
+- **Alternative**: Reduce `--nodes` (fewer agents = faster training)
+- **Check**: Make sure PyTorch is using GPU if available (`torch.cuda.is_available()`)
+
+**Issue**: Memory errors during training
+- **Solution**: Decrease `GRID_SIZE` in `config.py` (default: 80x80 → try 60x60)
+- **Alternative**: Reduce `buffer_capacity` in GNN config (default: 15000 → try 10000)
+- **Check**: Monitor RAM usage - federated mode uses ~2-4GB per holon
+
+**Issue**: Poor convergence (rewards not improving)
+- **Solution**: Adjust `LEARNING_RATE` in config (default: 0.0003 → try 0.001)
+- **Check**: Look at `training_metrics.json` - is GNN loss decreasing?
+- **Tip**: Increase `EPISODES` - complex swarms need 200+ episodes to learn
+- **Try**: Tune WFC parameters - if system collapses too often, increase `collapse_threshold`
+
+**Issue**: Nodes getting stuck or not moving
+- **Solution**: The unstick mechanism should handle this automatically (see `core.py`)
+- **Check**: Are all nodes frozen? Adjust freeze cycle parameters in config
+- **Tip**: Increase `move_speed` in node config (default: 0.015 → try 0.02)
+
+**Issue**: Loop keeps breaking
+- **Solution**: Increase `ideal_distance` in loop config (default: 0.6 → try 0.7)
+- **Alternative**: Decrease `break_threshold` (default: 0.35 → try 0.4)
+- **Check**: Are obstacles too dense? Reduce obstacle count in config
+
+**Issue**: Visualization shows nodes outside bounds
+- **Solution**: This is intentional! Nodes use toroidal wrapping (they wrap around edges)
+- **Check**: Make sure you're using the correct `deployment_ep*.json` file
+- **Tip**: Open the JSON file to verify node positions are in [0, 1] range
+
+**Issue**: `visualization.html` not loading trajectory
+- **Solution**: Make sure trajectory JSON is from `deployment/` folder, not raw checkpoints
+- **Check**: Run `deploy.py` first to generate proper trajectory files
+- **Format**: Trajectory files should contain `{"trajectory": [...], "metadata": {...}}`
+- **Tip**: Inside the `<script>` of `visualization.html` around line `655` you update the file. (`1500 steps`)
+
+**Issue**: WFC triggers too frequently
+- **Solution**: Increase `collapse_threshold` in config (default: 0.6 → try 0.7)
+- **Adjust**: Increase `tau` (consecutive unstable steps, default: 3 → try 5)
+- **Tune**: Spatial collapse parameters - see Advanced Usage section
+
+**Issue**: GPU not being utilized
+- **Check**: `torch.cuda.is_available()` should return `True`
+- **Solution**: Install CUDA-compatible PyTorch: `pip install torch --index-url https://download.pytorch.org/whl/cu118`
+- **Note**: CPU training works fine for small swarms (<40 nodes)
+
+### Debug Mode
+
+Enable verbose logging:
+```bash
+# Set environment variable for detailed output
+export FLOWRRA_DEBUG=1
+python main.py --episodes 10 --nodes 16
+```
+
+Check metrics files:
+```bash
+# View training progress
+cat metrics/training_metrics.json | jq '.episode_rewards[-10:]'
+
+# Check WFC triggers
+cat metrics/holon_0_detailed.json | jq '.wfc_trigger_events | length'
+```
+
+### Still Having Issues?
+
+1. Check `FLOWRRA_JOURNEY/` folder - old experiments might have useful configs
+2. Review the Substack article for conceptual understanding.
+3. Open an issue on GitHub with:
+   - Your config.py settings
+   - Training command used
+   - Error messages or unexpected behavior
+   - System info (OS, Python version, PyTorch version)
 
 ---
-
-## About
-
-FLOWRRA is an independent research project by Rohit Tamidapati ([DhaaRn](https://dhaarn.com)). I designed the system and the experiments, and I built it with heavy AI assistance.
-
-I hold the work to a few practices:
-- system design and informational flow;
-- policy transformation;
-- frozen benchmarks and paired comparisons;
-- predictions written down before runs;
-- correcting the record in public when a result doesn't hold.
-
-In short, the intuitive one.
-
-I'd love to do this kind of work inside a team facing these problems at scale. If you run a fleet and want to see how FLOWRRA behaves on your layout, or have a view on how it should be tested, I'd like to hear from you through [dhaarn.com](https://dhaarn.com) or [ rohittamidapati@gmail.com ].
-
-**Writing**
-
-- [`Flowrra_Article.md`](FLOWRRA_Warehouse_V2/Flowrra_Article.md) covers the whole system and the final test.
-- [FLOWRRA in Warehouse: Evolution towards Harmony](https://rohittamidapati.substack.com/p/flowrra-in-warehouse-evolution-towards) covers V2 before the Conflict Ladder.
-- [FLOWRRA: Flow Recognition Reconfiguration Agent](https://open.substack.com/pub/rohittamidapati/p/flowrra-flow-recognition-reconfiguration) covers the concept.
 
 ## License
 
-AGPL-3.0. See [LICENSE.md](../LICENSE.md).
+FLOWRRA is dual-licensed:
+
+- **Open Source / Community Edition**: GNU Affero General Public License v3.0 (AGPLv3) - see LICENSE file.
+  - Free for personal, research, non-commercial, or open-source use.
+  - If you modify and offer it as a network service (SaaS/API) or otherwise, you must release your changes under AGPLv3.
+
+- **Commercial / Proprietary License** - For closed-source use, private modifications, enterprise integration, or avoiding AGPL obligations.
+  - Contact me at [rohittamidapati11@gmail.com] or [rohit.tamidapati@dhaarn.com] for pricing/terms.
+  - Ideal for companies building production products, SaaS, or integrations without sharing source.
+
+## Contributing
+Contributions and Collaborations are welcome: Reach out to the Author.
+
+**Areas for Contribution:**
+- 3D environment support (elevation dynamics)
+- Additional GNN architectures (Transformer-based attention)
+- Real-world deployment adaptations (ROS integration)
+- Benchmark comparisons (vs MAPPO, QMIX, etc.)
+- Visualization enhancements (3D WebGL viewer)
+
+## Contact
+
+For questions, collaboration, or discussions:
+- **Author**: Rohit Tamidapati ft. Claude, Gemini, Grok & ChatGPT (Free Versions)
+- **DhaaRn**: [https://dhaarn.com]
+- **LinkedIn**: [https://www.linkedin.com/in/rohit-tamidapati/]
+- **Email**: rohit.tamidapati@dhaarn.com
+
+## Future Enhancements Planned
+
+**Done since the first roadmap**, in the warehouse instance ([FLOWRRA_Warehouse/](FLOWRRA_Warehouse/)):
+- **3D support.** Multi-level warehouses whose floors are joined by vertical shafts, from the 3D MAPF warehouse dataset (ICAPS 2024).
+- **Memory and speed.** Compact goal-distance maps, a 231-cell perception diamond in place of an 11 × 11 × 11 cube, and reuse of unchanged perception between steps. This was a different route from the planned structured dictionaries, to the same end.
+- **Decentralised decisions.** Each fleet decides from its own 5-hop view. Conflicts are resolved within independent local groups, with no central planner. In simulation everything runs in one process; on hardware each fleet would run its own share.
+
+**Planned**
+- **Federated holons.** Holons that grow and shrink, and rebalance fleets between zones, with knowledge passed between holons.
+- **The full Gibbs field.** The exponential affordance with a partition function shared across the floor, and F = E − T·S as the objective.
+- **A learned boundary, then an exact collapse,** for jams. In the longer term, physical spatial-temporal collapse on suitable hardware, as the architecture note above describes.
+- **A safety boundary that scales with speed,** towards centimetres where that is safe.
+- **Learnable coherence:** Φ itself learned.
+- **Hardware:** a ROS 2 package, then real fleets.
+
+## Citation
+
+If you want to use FLOWRRA in your research, reach out to the author:
+- [rohit.tamidapati@dhaarn.com]
+- [rohittamidapati11@gmail.com]
+
+```
+
+## Acknowledgments
+
+FLOWRRA draws inspiration from:
+- **Active Inference** (Karl Friston) - Free energy minimization
+- **Holonic Systems** (Arthur Koestler) - Self-similar hierarchies  
+- **Quantum Mechanics** - Spatial-Temporal Collapse metaphor
+- **Swarm Intelligence** - Emergent coordination without central control
+- **Graph Neural Networks** - Relational reasoning in multi-agent systems
+
+Special thanks to the broader AI/ML and multi-agent systems research communities.
+
+Immense gratitude to the LLMs to have enhanced the speed of FLOWRRA's realization.
+
+---
+
+**DhaaRn** | Call from the unknown, answered.
+
+*"Intelligence- A vibrant harmonious dance of the darkness and light."*
+
+---
+
+**DhaaRn** | Weavers of Time.

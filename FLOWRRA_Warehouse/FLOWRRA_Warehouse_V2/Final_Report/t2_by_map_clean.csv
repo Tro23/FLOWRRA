@@ -1,0 +1,10 @@
+,delivered_pct,delivered_pct,delivered_pct,delivered_pct,lead_cens,lead_cens,lead_cens,lead_cens
+map_name,Kiva-style,large,medium,small,Kiva-style,large,medium,small
+arm,,,,,,,,
+ladder4,95.6,99.9,99.9,100.0,215.5,108.1,76.5,48.3
+ladder6,76.9,100.0,100.0,99.9,347.7,114.4,77.6,55.9
+ladder7,74.9,100.0,100.0,99.4,369.5,112.4,81.8,54.3
+RULES,83.5,99.4,99.1,99.9,270.0,108.6,79.1,45.0
+PIBT,93.5,100.0,100.0,100.0,121.3,106.9,73.3,43.3
+RHCR-PP,84.8,99.5,99.1,95.8,177.0,106.1,74.5,55.4
+RHCR-PIBT,33.4,96.6,93.5,77.0,483.2,118.1,96.6,141.7

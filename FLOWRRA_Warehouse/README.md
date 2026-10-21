@@ -9,6 +9,9 @@ FLOWRRA (Flow Recognition Reconfiguration Agent) is an independent research proj
 ---
 
 <div align="center">
+  <img src="Flowrra_animation.gif" alt="Flowrra with Tier spatial_temporal Splatting on MAPF generated map" width="750"/>
+  <br><sub><b>A minimal sample run.</b> Flowrra with Tier spatial_temporal Splatting on MAPF generated map.</sub>
+  <br><br>
   <img src="FLOWRRA_Warehouse_V2/Final_Report/flowrra_kiva_day.gif" alt="ladder4 on the Kiva-style map with failures and people, 60 fleets" width="750"/>
   <br><sub><b>The whole day.</b> ladder4 on the Kiva-style map: 60 fleets, seed 3, hardware failures and people on the floor. A variant of a scored day, with a book of 150 orders instead of 200: 142 of 150 delivered. Replayed with <code>record_day.py</code> and <code>render_day.py</code>.</sub>
   <br><br>

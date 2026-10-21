@@ -16,6 +16,18 @@ FLOWRRA is a novel multi-agent reinforcement learning framework that enables swa
     - For Conceptual Understanding and Evolution of FLOWRRA visit: https://open.substack.com/pub/rohittamidapati/p/flowrra-flow-recognition-reconfiguration?r=721j7i&utm_campaign=post&utm_medium=web&showWelcomeOnShare=true -
 
 
+> ### Latest: FLOWRRA in Warehouse (October 2026)
+> FLOWRRA's warehouse instance was tested against the MAPF planners PIBT and RHCR on the same floor, inside the same safety boundary. The test covered 1,920 arm-days on four maps (three from the 3D MAPF warehouse dataset, ICAPS 2024), with 20–80 fleets, hardware failures and people on the floor.
+> - **It delivered the most of the order book:** 98.9% on clean days, and 87.6% with failures and people.
+> - **At 60–80 fleets under failures, it delivered firmly more than every planner:** 90.5% against 89.1% for the closest.
+> - **The network alone, with little training, was level with the best planner there** (89.0%).
+> - **The planners were faster per order and kept further from people.**
+>
+> The details:
+> - **[FLOWRRA_Warehouse/](FLOWRRA_Warehouse/)** has the results;
+> - **[the article](FLOWRRA_Warehouse/FLOWRRA_Warehouse_V2/Flowrra_Article.md)** describes the whole system;
+> - **[the build log](FLOWRRA_Warehouse/FLOWRRA_Warehouse_V2/Journey_in_Writing/V2_The_Conflict_Ladder.md)** records every step.
+
 ## What is FLOWRRA?
 
 FLOWRRA introduces a paradigm shift in swarm intelligence through a radical reorientation: **the entire swarm treats itself as its primary environment (Environment A)**, while everything external: obstacles, boundaries, external forces becomes a secondary, interacting entity (Environment B). This Ouroboros principle enables the system to maintain structural and informational coherence through recursive self-awareness.
@@ -262,6 +274,8 @@ Training produces several outputs:
 ## The Core Innovation: Retrocausal-Inspired Intelligence
 
 FLOWRRA's breakthrough lies in treating **disruption as information** that flows backward through time to inform system configuration. This isn't actual time travel, it's a directed inference mechanism inspired by quantum retrocausality.
+
+> In the warehouse system these ideas now run as concrete mechanisms: deciding from predicted futures, learning from the moves actually made (hindsight credit assignment), working backwards from known goals, and collapsing jams in space and time before contact. See §4 of [the article](FLOWRRA_Warehouse/FLOWRRA_Warehouse_V2/Flowrra_Article.md).
 
 ### How It Works
 
@@ -588,34 +602,26 @@ For questions, collaboration, or discussions:
 - **LinkedIn**: [https://www.linkedin.com/in/rohit-tamidapati/]
 - **Email**: rohit.tamidapati@dhaarn.com
 
-## Roadmap & Future Work
+## Future Enhancements Planned
 
-### Short Term (Next 3-6 Months)
-- [ ] **BenchMARL Integration**: Complete standardized benchmarking suite
-- [ ] **Real Robot Testing**: Deploy on actual drone swarms (Crazyflies)
-- [ ] **3D Full Support**: Extend all components to true 3D (not just 2.5D)
-- [ ] **Memory Optimization**: Structured dictionaries for 40-60% speedup
-- [ ] **True Decentralization**: Remove Federation central node entirely
+**Done since the first roadmap**, in the warehouse instance ([FLOWRRA_Warehouse/](FLOWRRA_Warehouse/)):
+- **3D support.** Multi-level warehouses whose floors are joined by vertical shafts, from the 3D MAPF warehouse dataset (ICAPS 2024).
+- **Memory and speed.** Compact goal-distance maps, a 231-cell perception diamond in place of an 11 × 11 × 11 cube, and reuse of unchanged perception between steps. This was a different route from the planned structured dictionaries, to the same end.
+- **Decentralised decisions.** Each fleet decides from its own 5-hop view. Conflicts are resolved within independent local groups, with no central planner. In simulation everything runs in one process; on hardware each fleet would run its own share.
 
-### Medium Term (6-12 Months)
-- [ ] **Quantum WFC**: Integrate actual quantum random number generators
-- [ ] **Meta-Learning WFC**: Learn the coherence metric itself (Φ becomes learnable)
-- [ ] **Gossip Protocol**: Inter-holon knowledge transfer for faster convergence
-- [ ] **ROS2 Package**: Production-ready deployment for robotics
-- [ ] **Unity/Unreal Sim**: High-fidelity 3D simulation environments
-
-### Long Term Vision
-- [ ] **Biological Validation**: Compare with actual insect swarm behavior
-- [ ] **Satellite Constellation**: LEO deployment for space debris avoidance
-- [ ] **Smart City Pilot**: Traffic/emergency coordination demonstration
-- [ ] **Neuromorphic Hardware**: Deploy on brain-inspired chips (Intel Loihi)
-- [ ] **Cognitive Architecture**: Multi-swarm "thoughts" via wave interference
+**Planned**
+- **Federated holons.** Holons that grow and shrink, and rebalance fleets between zones, with knowledge passed between holons.
+- **The full Gibbs field.** The exponential affordance with a partition function shared across the floor, and F = E − T·S as the objective.
+- **A learned boundary, then an exact collapse,** for jams. In the longer term, physical spatial-temporal collapse on suitable hardware, as the architecture note above describes.
+- **A safety boundary that scales with speed,** towards centimetres where that is safe.
+- **Learnable coherence:** Φ itself learned.
+- **Hardware:** a ROS 2 package, then real fleets.
 
 ## Citation
 
 If you want to use FLOWRRA in your research, reach out to the author:
-- [rohit.tamidapati@dhaarn.com]
 - [rohittamidapati11@gmail.com]
+- [rohit.tamidapati@dhaarn.com]
 
 ```
 

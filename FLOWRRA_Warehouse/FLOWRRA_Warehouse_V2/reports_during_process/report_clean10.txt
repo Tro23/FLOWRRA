@@ -1,0 +1,91 @@
+=== deploy_eval_clean10.csv: arms ['ladder6', 'ladder4', 'RULES']; reference ladder6; 54 rows
+
+--- 1. By arm, map and fleet (means) ---
+                  stream_book_fill  stream_book_lead_mean  collisions  ladder_l3_fired  guard_stops  orders_per_hour
+size  k  arm                                                                                                        
+large 25 RULES               0.992                128.765         0.0            1.000        0.000            357.0
+         ladder4             1.000                127.250         0.0            0.667       21.000            360.0
+         ladder6             0.996                154.571         0.0            2.000       35.333            358.5
+      40 RULES               0.967                109.433         0.0            8.333        1.000            348.0
+         ladder4             1.000                112.300         0.0            1.000       27.667            360.0
+         ladder6             0.983                148.659         0.0            0.667       37.000            354.0
+      60 RULES               1.000                 76.725         0.0            0.333        0.000            360.0
+         ladder4             1.000                 76.500         0.0            0.667        6.667            360.0
+         ladder6             1.000                106.250         0.0            1.333       82.333            360.0
+small 25 RULES               1.000                 48.767         0.0            4.000       87.333            360.0
+         ladder4             0.992                 64.302         0.0            7.000      264.000            357.0
+         ladder6             0.992                115.171         0.0           15.000      952.000            357.0
+      40 RULES               1.000                 36.421         0.0            1.000        0.667            360.0
+         ladder4             1.000                 43.288         0.0            0.000       57.667            360.0
+         ladder6             0.983                 79.391         0.0            9.333      426.667            354.0
+      60 RULES               1.000                 32.167         0.0            6.333       50.000            360.0
+         ladder4             1.000                 33.725         0.0            2.333       89.333            360.0
+         ladder6             1.000                 65.192         0.0            7.000      400.333            360.0
+
+--- 2. By arm and map (means; near misses also median) ---
+               stream_book_fill  stream_book_lead_mean  collisions  ladder_l3_fired  guard_stops  orders_per_hour
+size  arm                                                                                                        
+large RULES               0.986                104.974         0.0            3.222        0.333            355.0
+      ladder4             1.000                105.350         0.0            0.778       18.444            360.0
+      ladder6             0.993                136.493         0.0            1.333       51.556            357.5
+small RULES               1.000                 39.118         0.0            3.778       46.000            360.0
+      ladder4             0.997                 47.105         0.0            3.111      137.000            359.0
+      ladder6             0.992                 86.585         0.0           10.444      593.000            357.0
+
+--- 3. Graduation: ladder6 against each arm, paired over the same days ---
+(not in these CSVs, so not won by anyone: Near misses with people; e.g. near misses with people in the clean condition, where people are off. 3 wins are still needed.)
+ladder6 vs ladder4 | all | 18 paired days
+   Share of book delivered    ladder6     0.992 | ladder4     0.999 | lost | days better/worse 1/6 | p 0.123
+   Lead time                  ladder6   111.539 | ladder4    76.227 | lost | days better/worse 0/18 | p 0.000
+   Collisions                 ladder6     0.000 | ladder4     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder6     5.889 | ladder4     1.944 | lost | days better/worse 4/12 | p 0.019
+   Guard stops                ladder6   322.278 | ladder4    77.722 | lost | days better/worse 2/16 | p 0.000   (reported, not scored)
+   Orders per hour            ladder6   357.250 | ladder4   359.500 | lost | days better/worse 1/6 | p 0.123   (reported, not scored)
+   => 0 of 5 won; safety gate passed: ladder6 does not graduate against ladder4 (all)
+
+ladder6 vs ladder4 | small | 9 paired days
+   Share of book delivered    ladder6     0.992 | ladder4     0.997 | lost | days better/worse 1/2 | p 0.750
+   Lead time                  ladder6    86.585 | ladder4    47.105 | lost | days better/worse 0/9 | p 0.004
+   Collisions                 ladder6     0.000 | ladder4     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder6    10.444 | ladder4     3.111 | lost | days better/worse 2/7 | p 0.023
+   Guard stops                ladder6   593.000 | ladder4   137.000 | lost | days better/worse 0/9 | p 0.004   (reported, not scored)
+   Orders per hour            ladder6   357.000 | ladder4   359.000 | lost | days better/worse 1/2 | p 0.750   (reported, not scored)
+   => 0 of 5 won; safety gate passed: ladder6 does not graduate against ladder4 (small)
+
+ladder6 vs ladder4 | large | 9 paired days
+   Share of book delivered    ladder6     0.993 | ladder4     1.000 | lost | days better/worse 0/4 | p 0.125
+   Lead time                  ladder6   136.493 | ladder4   105.350 | lost | days better/worse 0/9 | p 0.004
+   Collisions                 ladder6     0.000 | ladder4     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder6     1.333 | ladder4     0.778 | lost | days better/worse 2/5 | p 0.516
+   Guard stops                ladder6    51.556 | ladder4    18.444 | lost | days better/worse 2/7 | p 0.129   (reported, not scored)
+   Orders per hour            ladder6   357.500 | ladder4   360.000 | lost | days better/worse 0/4 | p 0.125   (reported, not scored)
+   => 0 of 5 won; safety gate passed: ladder6 does not graduate against ladder4 (large)
+
+ladder6 vs RULES | all | 18 paired days
+   Share of book delivered    ladder6     0.992 | RULES     0.993 | lost | days better/worse 4/3 | p 0.865
+   Lead time                  ladder6   111.539 | RULES    72.046 | lost | days better/worse 0/18 | p 0.000
+   Collisions                 ladder6     0.000 | RULES     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder6     5.889 | RULES     3.500 | lost | days better/worse 3/14 | p 0.036
+   Guard stops                ladder6   322.278 | RULES    23.167 | lost | days better/worse 1/17 | p 0.000   (reported, not scored)
+   Orders per hour            ladder6   357.250 | RULES   357.500 | lost | days better/worse 4/3 | p 1.000   (reported, not scored)
+   => 0 of 5 won; safety gate passed: ladder6 does not graduate against RULES (all)
+
+ladder6 vs RULES | small | 9 paired days
+   Share of book delivered    ladder6     0.992 | RULES     1.000 | lost | days better/worse 0/2 | p 0.500
+   Lead time                  ladder6    86.585 | RULES    39.118 | lost | days better/worse 0/9 | p 0.004
+   Collisions                 ladder6     0.000 | RULES     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder6    10.444 | RULES     3.778 | lost | days better/worse 1/8 | p 0.039
+   Guard stops                ladder6   593.000 | RULES    46.000 | lost | days better/worse 0/9 | p 0.004   (reported, not scored)
+   Orders per hour            ladder6   357.000 | RULES   360.000 | lost | days better/worse 0/2 | p 0.500   (reported, not scored)
+   => 0 of 5 won; safety gate passed: ladder6 does not graduate against RULES (small)
+
+ladder6 vs RULES | large | 9 paired days
+   Share of book delivered    ladder6     0.993 | RULES     0.986 | won  | days better/worse 4/1 | p 0.125
+   Lead time                  ladder6   136.493 | RULES   104.974 | lost | days better/worse 0/9 | p 0.004
+   Collisions                 ladder6     0.000 | RULES     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder6     1.333 | RULES     3.222 | won  | days better/worse 2/6 | p 0.344
+   Guard stops                ladder6    51.556 | RULES     0.333 | lost | days better/worse 1/8 | p 0.008   (reported, not scored)
+   Orders per hour            ladder6   357.500 | RULES   355.000 | won  | days better/worse 4/1 | p 0.250   (reported, not scored)
+   => 2 of 5 won; safety gate passed: ladder6 does not graduate against RULES (large)
+
+wrote report_clean10_deploy.png

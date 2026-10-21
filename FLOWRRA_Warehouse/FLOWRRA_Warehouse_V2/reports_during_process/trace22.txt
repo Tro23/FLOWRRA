@@ -1,0 +1,381 @@
+2026-10-11 13:08:35,595 - Warehouse_Runner - INFO - 25_5_2_5_2_1: 1435 nodes, 10 scenarios, goal bank 400 -- precomputing BFS maps...
+2026-10-11 13:08:35,882 - Warehouse_Runner - INFO - 25_5_2_5_2_1: cached in 0.3s
+[Core] Derived per-map bounds (34.0, 12.0, 12.0) (CONFIG fallback was (50.0, 50.0, 10.0)).
+[Core] Stream: 5 floor(s) on axis Z, 60 dock(s) (12 per floor), 1435/1435 cells reach a dock.
+[Core] Spawned 25 discrete fleets into the warehouse.
+[Core] Optimal 1:1 assignment: 25/25 goals assigned, 0 fleets unassigned, 0 contested.
+[Bench] Agent loaded (input_dim=1239, encoder=conv, edge_dim=4, learner=off) from ladder_run1/flowrra_curriculum.pth
+[Core] Derived per-map bounds (34.0, 12.0, 12.0) (CONFIG fallback was (50.0, 50.0, 10.0)).
+[Core] Stream: 5 floor(s) on axis Z, 60 dock(s) (12 per floor), 1435/1435 cells reach a dock.
+[Core] Spawned 25 discrete fleets into the warehouse.
+[Core] Optimal 1:1 assignment: 25/25 goals assigned, 0 fleets unassigned, 0 contested.
+[Stream] Delivery #1 (of 25 orders so far): fleet 1 at 3400, 1 steps into its life; heading to dock 2905. 🔥
+[Stream] Delivery #2 (of 25 orders so far): fleet 15 at 4332, 1 steps into its life; heading to dock 4374. 🔥
+[Stream] Delivery #3 (of 25 orders so far): fleet 14 at 5903, 5 steps into its life; heading to dock 5904. 🔥
+[Stream] Delivery #4 (of 25 orders so far): fleet 19 at 2935, 5 steps into its life; heading to dock 3009. 🔥
+[Stream] Fleet 14 left the floor at dock 5904 (life 1 ended after 7 steps; 24 on the floor).
+[Stream] Fleet 14#2 entered at dock 5904, heading for 3049 (26 orders issued so far).
+[Stream] Delivery #5 (of 27 orders so far): fleet 10 at 4521, 14 steps into its life; heading to dock 4524. 🔥
+[Stream] Delivery #6 (of 27 orders so far): fleet 9 at 1593, 15 steps into its life; heading to dock 1644. 🔥
+[Stream] Delivery #7 (of 27 orders so far): fleet 25 at 75, 16 steps into its life; heading to dock 2. 🔥
+[Stream] Delivery #8 (of 27 orders so far): fleet 17 at 1789, 20 steps into its life; heading to dock 1786. 🔥
+[Stream] Delivery #9 (of 28 orders so far): fleet 12 at 3052, 21 steps into its life; heading to dock 3159. 🔥
+[Stream] Fleet 19 left the floor at dock 3009 (life 1 ended after 23 steps; 24 on the floor).
+[Stream] Fleet 19#2 entered at dock 3009, heading for 3176 (28 orders issued so far).
+[Stream] Delivery #10 (of 28 orders so far): fleet 7 at 3984, 23 steps into its life; heading to dock 4547. 🔥
+[Stream] Fleet 25 left the floor at dock 2 (life 1 ended after 26 steps; 24 on the floor).
+[Stream] Fleet 25#2 entered at dock 2, heading for 453 (28 orders issued so far).
+[Stream] Fleet 10 left the floor at dock 4524 (life 1 ended after 33 steps; 24 on the floor).
+[Stream] Fleet 10#2 entered at dock 4524, heading for 1510 (29 orders issued so far).
+[Stream] Fleet 17 left the floor at dock 1786 (life 1 ended after 41 steps; 24 on the floor).
+[Stream] Fleet 17#2 entered at dock 1786, heading for 5668 (30 orders issued so far).
+[Core] *** FAILURE WAVE 1/3 *** step 52, 43% of orders done: 3 fleet(s) stop at once [1, 20, 8].
+[Core] *** VDA5050 ERROR *** Fleet 8 stopped at step 52 (87% through its journey to 2841).
+[Core] *** VDA5050 ERROR *** Fleet 20 stopped at step 52 (65% through its journey to 5466).
+[Core] *** VDA5050 ERROR *** Fleet 1 stopped at step 52 (71% through its journey to 2905).
+[Stream] Delivery #11 (of 33 orders so far): fleet 2 at 69, 61 steps into its life; heading to dock 33. 🔥
+[Stream] Fleet 15 left the floor at dock 4374 (life 1 ended after 63 steps; 24 on the floor).
+[Stream] Fleet 15#2 entered at dock 4374, heading for 4538 (33 orders issued so far).
+[Core] Fleet 1 confirmed dead. Order(s) ['2905'] cancelled; pickup pickup_1_67 opened at its cell.
+[Core] Fleet 8 confirmed dead. Order(s) ['2841'] cancelled; pickup pickup_8_67 opened at its cell.
+[Core] Fleet 20 confirmed dead. Order(s) ['5466'] cancelled; pickup pickup_20_67 opened at its cell.
+[Core] Fleet 12 dispatched to pickup_1_67 (0 hops, 53 steps left).
+[Core] Fleet 21 dispatched to pickup_8_67 (6 hops, 53 steps left).
+[Core] Fleet 5 dispatched to pickup_20_67 (6 hops, 53 steps left).
+[Stream] Delivery #12 (of 34 orders so far): fleet 18 at 5693, 67 steps into its life; heading to dock 5739. 🔥
+[Loop] CRITICAL: Fatal collision between Fleet 4 and Fleet 7 at step 73.
+[Recovery] Initiating Spatial-Temporal Collapse for 2 fleet(s) [4, 7] (3 nearby warning-zone fleets left undisturbed)...
+[Recovery] Tier 1: Spatial Escape Successful. Moved 4:(29.0, 6.0, 3.3)->(29.0, 6.0, 2.0), 7:(29.0, 6.2, 3.0)->(28.0, 6.0, 3.0)
+[Loop] Integrity manually restored via Spatial-Temporal Recovery.
+[Stream] Delivery #13 (of 36 orders so far): fleet 13 at 2899, 83 steps into its life; heading to dock 2755. 🔥
+[Stream] Delivery #14 (of 36 orders so far): fleet 6 at 5808, 84 steps into its life; heading to dock 5739. 🔥
+[Stream] Delivery #15 (of 37 orders so far): fleet 22 at 5805, 87 steps into its life; heading to dock 5912. 🔥
+[Stream] Fleet 6 left the floor at dock 5739 (life 1 ended after 91 steps; 24 on the floor).
+[Stream] Fleet 6#2 entered at dock 5462, heading for 5466 (37 orders issued so far).
+[Stream] Delivery #16 (of 38 orders so far): fleet 11 at 5811, 96 steps into its life; heading to dock 5881. 🔥
+[Stream] Fleet 22 left the floor at dock 5912 (life 1 ended after 97 steps; 24 on the floor).
+[Stream] Fleet 22#2 entered at dock 5912, heading for 3114 (38 orders issued so far).
+[Core] *** HANDOVER *** Fleet 5 picked up the load from 20. Now carrying 2 order(s): delivering 5466 first (4 hops), then 3120.
+[Loop] CRITICAL: Fatal collision between Fleet 24 and Fleet 4 at step 116.
+[Recovery] Initiating Spatial-Temporal Collapse for 2 fleet(s) [24, 4] (9 nearby warning-zone fleets left undisturbed)...
+[Recovery] Tier 1: Spatial Escape Successful. Moved 24:(29.0, 3.1, 6.0)->(28.0, 3.0, 6.0), 4:(29.0, 3.6, 6.0)->(29.0, 3.0, 6.0)
+[Loop] Integrity manually restored via Spatial-Temporal Recovery.
+[Loop] CRITICAL: Fatal collision between Fleet 12 and Fleet 21 at step 119.
+[Recovery] Initiating Spatial-Temporal Collapse for 2 fleet(s) [12, 21] (9 nearby warning-zone fleets left undisturbed)...
+[Recovery] Tier 1: Spatial Escape Successful. Moved 12:(4.0, 0.0, 6.0)->(3.0, 0.0, 6.0), 21:(3.5, 0.0, 6.0)->(5.0, 0.0, 6.0)
+[Loop] Integrity manually restored via Spatial-Temporal Recovery.
+[trace] champion: delivered 16 | collisions 3 | L3 0 (compare with deploy_check.csv)
+[Core] Derived per-map bounds (34.0, 12.0, 12.0) (CONFIG fallback was (50.0, 50.0, 10.0)).
+[Core] Stream: 5 floor(s) on axis Z, 60 dock(s) (12 per floor), 1435/1435 cells reach a dock.
+[Core] Spawned 25 discrete fleets into the warehouse.
+[Core] Optimal 1:1 assignment: 25/25 goals assigned, 0 fleets unassigned, 0 contested.
+[Stream] Delivery #1 (of 25 orders so far): fleet 1 at 3400, 1 steps into its life; heading to dock 2905. 🔥
+[Stream] Delivery #2 (of 25 orders so far): fleet 15 at 4332, 1 steps into its life; heading to dock 4374. 🔥
+[Stream] Delivery #3 (of 25 orders so far): fleet 14 at 5903, 3 steps into its life; heading to dock 5904. 🔥
+[Stream] Fleet 14 left the floor at dock 5904 (life 1 ended after 5 steps; 24 on the floor).
+[Stream] Delivery #4 (of 25 orders so far): fleet 19 at 2935, 5 steps into its life; heading to dock 3009. 🔥
+[Stream] Delivery #5 (of 25 orders so far): fleet 22 at 5805, 5 steps into its life; heading to dock 5912. 🔥
+[Stream] Fleet 14#2 entered at dock 5904, heading for 3049 (26 orders issued so far).
+[Stream] Delivery #6 (of 26 orders so far): fleet 9 at 1593, 7 steps into its life; heading to dock 1644. 🔥
+[Stream] Delivery #7 (of 26 orders so far): fleet 13 at 2899, 9 steps into its life; heading to dock 2755. 🔥
+[Stream] Delivery #8 (of 26 orders so far): fleet 21 at 3010, 9 steps into its life; heading to dock 2905. 🔥
+[Stream] Delivery #9 (of 26 orders so far): fleet 7 at 3984, 11 steps into its life; heading to dock 4547. 🔥
+[Stream] Delivery #10 (of 26 orders so far): fleet 11 at 5811, 11 steps into its life; heading to dock 5881. 🔥
+[Stream] Delivery #11 (of 26 orders so far): fleet 6 at 5808, 13 steps into its life; heading to dock 5739. 🔥
+[Stream] Delivery #12 (of 26 orders so far): fleet 10 at 4521, 13 steps into its life; heading to dock 4524. 🔥
+[Stream] Delivery #13 (of 26 orders so far): fleet 17 at 1789, 13 steps into its life; heading to dock 1786. 🔥
+[Stream] Delivery #14 (of 26 orders so far): fleet 25 at 75, 13 steps into its life; heading to dock 2. 🔥
+[Stream] Fleet 11 left the floor at dock 5881 (life 1 ended after 15 steps; 24 on the floor).
+[Stream] Fleet 22 left the floor at dock 5912 (life 1 ended after 15 steps; 23 on the floor).
+[Stream] Fleet 11#2 entered at dock 5881, heading for 3176 (27 orders issued so far).
+[Stream] Delivery #15 (of 27 orders so far): fleet 18 at 5693, 15 steps into its life; heading to dock 5739. 🔥
+[Stream] Delivery #16 (of 27 orders so far): fleet 4 at 4335, 17 steps into its life; heading to dock 4374. 🔥
+[Stream] Delivery #17 (of 27 orders so far): fleet 24 at 3177, 17 steps into its life; heading to dock 3174. 🔥
+[Stream] Fleet 15 left the floor at dock 4374 (life 1 ended after 18 steps; 23 on the floor).
+[Stream] Fleet 19 left the floor at dock 3009 (life 1 ended after 18 steps; 22 on the floor).
+[Stream] Fleet 21 left the floor at dock 2905 (life 1 ended after 18 steps; 21 on the floor).
+[Stream] Delivery #18 (of 27 orders so far): fleet 2 at 69, 19 steps into its life; heading to dock 33. 🔥
+[Stream] Delivery #19 (of 27 orders so far): fleet 12 at 3052, 19 steps into its life; heading to dock 3159. 🔥
+[Stream] Delivery #20 (of 27 orders so far): fleet 23 at 1684, 19 steps into its life; heading to dock 1786. 🔥
+[Stream] Fleet 6 left the floor at dock 5739 (life 1 ended after 20 steps; 20 on the floor).
+[Stream] Fleet 10 left the floor at dock 4524 (life 1 ended after 20 steps; 19 on the floor).
+[Stream] Fleet 17 left the floor at dock 1786 (life 1 ended after 20 steps; 18 on the floor).
+[Stream] Fleet 1 left the floor at dock 2905 (life 1 ended after 21 steps; 17 on the floor).
+[Stream] Fleet 22#2 entered at dock 5912, heading for 453 (28 orders issued so far).
+[Stream] Fleet 24 left the floor at dock 3174 (life 1 ended after 23 steps; 17 on the floor).
+[Stream] Fleet 25 left the floor at dock 2 (life 1 ended after 23 steps; 16 on the floor).
+[Stream] Delivery #21 (of 28 orders so far): fleet 5 at 3120, 23 steps into its life; heading to dock 3159. 🔥
+[Stream] Fleet 2 left the floor at dock 33 (life 1 ended after 24 steps; 15 on the floor).
+[Stream] Fleet 7 left the floor at dock 4547 (life 1 ended after 25 steps; 14 on the floor).
+[Stream] Delivery #22 (of 28 orders so far): fleet 3 at 1788, 25 steps into its life; heading to dock 1786. 🔥
+[Stream] Delivery #23 (of 28 orders so far): fleet 20 at 5466, 25 steps into its life; heading to dock 5462. 🔥
+[Stream] Fleet 13 left the floor at dock 3009 (life 1 ended after 26 steps; 13 on the floor).
+[Stream] Delivery #24 (of 28 orders so far): fleet 16 at 450, 27 steps into its life; heading to dock 452. 🔥
+[Stream] Fleet 4 left the floor at dock 4374 (life 1 ended after 28 steps; 12 on the floor).
+[Stream] Fleet 15#2 entered at dock 4374, heading for 1510 (29 orders issued so far).
+[Stream] Fleet 3 left the floor at dock 1786 (life 1 ended after 30 steps; 12 on the floor).
+[Stream] Fleet 16 left the floor at dock 452 (life 1 ended after 31 steps; 11 on the floor).
+[Stream] Fleet 23 left the floor at dock 1786 (life 1 ended after 31 steps; 10 on the floor).
+[Stream] Fleet 20 left the floor at dock 5470 (life 1 ended after 33 steps; 9 on the floor).
+[Stream] Fleet 5 left the floor at dock 3159 (life 1 ended after 34 steps; 8 on the floor).
+[Stream] Fleet 19#2 entered at dock 3009, heading for 5668 (30 orders issued so far).
+[Stream] Fleet 12 left the floor at dock 3151 (life 1 ended after 37 steps; 8 on the floor).
+[Stream] Delivery #25 (of 30 orders so far): fleet 8 at 2841, 37 steps into its life; heading to dock 2732. 🔥
+[Stream] Fleet 18 left the floor at dock 5739 (life 1 ended after 40 steps; 7 on the floor).
+[Stream] Fleet 9 left the floor at dock 1644 (life 1 ended after 42 steps; 6 on the floor).
+[Stream] Fleet 21#2 entered at dock 2905, heading for 5780 (31 orders issued so far).
+[Stream] Fleet 6#2 entered at dock 5739, heading for 3062 (32 orders issued so far).
+[Stream] Fleet 8 left the floor at dock 2732 (life 1 ended after 51 steps; 7 on the floor).
+[Core] *** FAILURE WAVE 1/3 *** step 52, 43% of orders done: 3 fleet(s) stop at once [11#2, 14#2, 15#2].
+[Core] *** VDA5050 ERROR *** Fleet 11#2 stopped at step 52 (60% through its journey to 3176).
+[Core] *** VDA5050 ERROR *** Fleet 15#2 stopped at step 52 (30% through its journey to 1510).
+[Core] *** VDA5050 ERROR *** Fleet 14#2 stopped at step 52 (78% through its journey to 3049).
+[Stream] Fleet 10#2 entered at dock 4524, heading for 4538 (33 orders issued so far).
+[Stream] Delivery #26 (of 33 orders so far): fleet 22#2 at 453, 37 steps into its life; heading to dock 452. 🔥
+[Stream] Fleet 22#2 left the floor at dock 452 (life 2 ended after 39 steps; 7 on the floor).
+[Stream] Fleet 17#2 entered at dock 1786, heading for 3114 (34 orders issued so far).
+[Core] Fleet 14#2 confirmed dead. Order(s) ['3049'] cancelled; pickup pickup_14#2_67 opened at its cell.
+[Core] Fleet 11#2 confirmed dead. Order(s) ['3176'] cancelled; pickup pickup_11#2_67 opened at its cell.
+[Core] Fleet 15#2 confirmed dead. Order(s) ['1510'] cancelled; pickup pickup_15#2_67 opened at its cell.
+[Core] Fleet 21#2 dispatched to pickup_14#2_67 (3 hops, 53 steps left).
+[Core] Fleet 17#2 dispatched to pickup_11#2_67 (15 hops, 53 steps left).
+[Core] Fleet 6#2 dispatched to pickup_15#2_67 (10 hops, 53 steps left).
+[Stream] Fleet 1#2 entered at dock 2905, heading for 3049 (34 orders issued so far).
+[Stream] Fleet 24#2 entered at dock 3174, heading for 3176 (34 orders issued so far).
+[Stream] Fleet 25#2 entered at dock 2, heading for 1510 (34 orders issued so far).
+[Stream] Delivery #27 (of 34 orders so far): fleet 19#2 at 5668, 33 steps into its life; heading to dock 5739. 🔥
+[Stream] Delivery #28 (of 34 orders so far): fleet 24#2 at 3176, 3 steps into its life; heading to dock 3174. 🔥
+[Stream] Fleet 2#2 entered at dock 33, heading for 5530 (35 orders issued so far).
+[Core] *** HANDOVER *** Fleet 21#2 picked up the load from 14#2. Now carrying 2 order(s): delivering 5780 first (0 hops), then 3049.
+[Core] Fleet 21#2 delivered 5780 (1/7 claimed); still carrying 3049, 7 hops on.
+[Stream] Fleet 24#2 left the floor at dock 3174 (life 2 ended after 7 steps; 11 on the floor).
+[Stream] Fleet 19#2 left the floor at dock 5739 (life 2 ended after 40 steps; 10 on the floor).
+[Stream] Fleet 7#2 entered at dock 4547, heading for 110 (36 orders issued so far).
+[Stream] Delivery #29 (of 36 orders so far): fleet 1#2 at 3049, 15 steps into its life; heading to dock 3151. 🔥
+[Stream] Delivery #30 (of 36 orders so far): fleet 10#2 at 4538, 27 steps into its life; heading to dock 4539. 🔥
+[Stream] Fleet 10#2 left the floor at dock 4539 (life 2 ended after 29 steps; 10 on the floor).
+[Stream] Fleet 13#2 entered at dock 3009, heading for 3065 (37 orders issued so far).
+[Stream] Delivery #31 (of 37 orders so far): fleet 25#2 at 1510, 19 steps into its life; heading to dock 1367. 🔥
+[Stream] Delivery #32 (of 37 orders so far): fleet 21#2 at 3049, 45 steps into its life; heading to dock 3151. 🔥
+[Core] *** HANDOVER *** Fleet 6#2 picked up the load from 15#2. Now carrying 1 order(s): delivering 3062 first (23 hops).
+[Stream] Fleet 4#2 entered at dock 4374, heading for 331 (38 orders issued so far).
+[Stream] Fleet 1#2 left the floor at dock 3151 (life 2 ended after 27 steps; 11 on the floor).
+[Core] *** HANDOVER *** Fleet 17#2 picked up the load from 11#2. Now carrying 1 order(s): delivering 3114 first (22 hops).
+[Stream] Fleet 21#2 left the floor at dock 3151 (life 2 ended after 57 steps; 10 on the floor).
+[Stream] Fleet 25#2 left the floor at dock 1367 (life 2 ended after 33 steps; 9 on the floor).
+[Stream] Fleet 3#2 entered at dock 1786, heading for 4113 (39 orders issued so far).
+[Stream] Fleet 16#2 entered at dock 452, heading for 428 (40 orders issued so far).
+[Stream] Fleet 23#2 entered at dock 1786, heading for 3074 (41 orders issued so far).
+[Stream] Delivery #33 (of 41 orders so far): fleet 13#2 at 3065, 31 steps into its life; heading to dock 3182. 🔥
+[trace] RULES: delivered 33 | collisions 0 | L3 0 (compare with deploy_check.csv)
+
+=== champion: 2796 robot-steps (462 with another robot within 2 cells, 2334 in the clear) ===
+                                PROPOSED                EXECUTED
+                       clear   near peer       clear   near peer
+  toward               36.5%       30.3%       47.8%       40.0%
+  wait                 27.0%       24.0%       23.6%       30.1%
+  sideways              1.5%        2.8%        1.5%        1.7%
+  away                 35.0%       42.9%       27.2%       28.1%
+  what decided the executed move: own choice 82.5%, livelock escape 14.7%, rules order 2.5%, ladder retreat 0.3%
+  overridden (executed differs from proposed): 14.3% -- livelock escape 324, rules order 70, ladder retreat 5
+  braked (a peer close enough to slow it): 11.9%, mean speed 0.474 (full speed 0.500); did not move at all: 24.7%
+  when it chose NOT to head for its goal although a move toward it existed (1613 robot-steps, exploration excluded):
+    its choice beat the best move toward the goal by a median 0.2276 (quartiles 0.0789 to 0.4376),
+    against a median spread of 0.3721 across its valid moves: the margin is 76% of the spread (median).
+      wait        622 robot-steps, near a peer in 11.4%
+      sideways     21 robot-steps, near a peer in 28.6%
+      away        970 robot-steps, near a peer in 18.4%
+  explored (random move, epsilon): 1.4%
+
+=== RULES: 1292 robot-steps (54 with another robot within 2 cells, 1238 in the clear) ===
+                                PROPOSED                EXECUTED
+                       clear   near peer       clear   near peer
+  toward               99.5%      100.0%       99.3%       94.4%
+  wait                  0.5%        0.0%        0.6%        5.6%
+  sideways              0.0%        0.0%        0.0%        0.0%
+  away                  0.0%        0.0%        0.1%        0.0%
+  what decided the executed move: rules driver 99.5%, rules order 0.5%
+  overridden (executed differs from proposed): 0.5% -- rules order 6
+  braked (a peer close enough to slow it): 2.8%, mean speed 0.496 (full speed 0.500); did not move at all: 0.9%
+
+--- champion: fleet 22, step by step (120 steps on the floor) ---
+step  fleet          cell   goal  hops  peer  proposed        executed        decided by       speed moved   Q wait / toward / chosen
+   0     22   (29, 9, 10)   5805   3.0   4.0  +Z (toward)     +Z (toward)     own choice        0.50  0.50     1.190 /   2.463 /   2.463
+   1     22   (29, 9, 10)   5805   2.5   3.0  +Z (toward)     +Z (toward)     own choice        0.50  0.50     1.045 /   2.615 /   2.615
+   2     22   (29, 9, 11)   5805   2.0   2.0  +Z (toward)     +Z (toward)     own choice        0.50  0.50     3.111 /   3.811 /   3.811
+   3     22   (29, 9, 12)   5805   1.5   2.0  +Z (toward)     +Z (toward)     own choice        0.50  0.50     2.561 /   3.488 /   3.488
+   4     22   (29, 9, 12)   5805   1.0   2.0  -Z (away)       -Z (away)       own choice        0.50  0.50     3.151 /   3.213 /   3.275
+   5     22   (29, 9, 12)   5805   1.5   2.0  -Z (away)       -Z (away)       own choice        0.50  0.50     1.833 /   2.597 /   2.615
+   6     22   (29, 9, 11)   5805   2.0   2.0  wait (wait)     wait (wait)     own choice        0.50  0.00     3.810 /   3.716 /   3.810
+   7     22   (29, 9, 11)   5805   2.0   2.5  wait (wait)     wait (wait)     own choice        0.50  0.00     3.549 /   3.547 /   3.549
+   8     22   (29, 9, 11)   5805   2.0   3.0  wait (wait)     wait (wait)     own choice        0.50  0.00     3.669 /   3.637 /   3.669
+   9     22   (29, 9, 11)   5805   2.0   3.5  +Z (toward)     +Z (toward)     own choice        0.50  0.50     1.982 /   2.324 /   2.324
+  10     22   (29, 9, 12)   5805   1.5   2.5  +Z (toward)     +Z (toward)     own choice        0.50  0.50     3.002 /   3.104 /   3.104
+  11     22   (29, 9, 12)   5805   1.0   1.5  -Z (away)       -Z (away)       own choice        0.35  0.35     3.361 /   3.439 /   3.491
+  12     22   (29, 9, 12)   5805   1.4   2.2  -Z (away)       -Z (away)       own choice        0.50  0.50     1.809 /     nan /   1.956
+  13     22   (29, 9, 11)   5805   1.9   2.2  +Z (toward)     +Z (toward)     own choice        0.50  0.50     1.816 /   2.290 /   2.290
+  14     22   (29, 9, 12)   5805   1.4   1.4  -Z (away)       -Z (away)       own choice        0.31  0.31     2.111 /     nan /   2.365
+  15     22   (29, 9, 11)   5805   1.7   1.4  +Z (toward)     +Z (toward)     own choice        0.31  0.31     3.461 /   3.500 /   3.500
+  16     22   (29, 9, 12)   5805   1.4   1.4  -Z (away)       -Z (away)       own choice        0.31  0.31     2.754 /     nan /   2.977
+  17     22   (29, 9, 11)   5805   1.7   1.4  -Z (away)       -Z (away)       own choice        0.31  0.31     3.600 /   3.613 /   3.641
+  18     22   (29, 9, 11)   5805   2.0   2.0  +Z (toward)     +Z (toward)     own choice        0.49  0.49     2.322 /   3.092 /   3.092
+  19     22   (29, 9, 12)   5805   1.5   1.5  -Z (away)       -Z (away)       own choice        0.34  0.34     2.530 /   2.672 /   2.704
+  20     22   (29, 9, 11)   5805   1.8   1.5  +Z (toward)     +Z (toward)     own choice        0.34  0.34     3.479 /   3.563 /   3.563
+  21     22   (29, 9, 12)   5805   1.5   1.5  +Z (toward)     +Z (toward)     own choice        0.34  0.34     2.519 /   2.848 /   2.848
+  22     22   (29, 9, 12)   5805   1.1   1.1  -Z (away)       -Z (away)       own choice        0.24  0.24     3.324 /     nan /   3.503
+  23     22   (29, 9, 12)   5805   1.4   1.1  -Z (away)       -Z (away)       own choice        0.24  0.24     4.408 /     nan /   4.864
+  24     22   (29, 9, 11)   5805   1.6   1.6  +Z (toward)     +Z (toward)     own choice        0.38  0.38     3.699 /   3.825 /   3.825
+  25     22   (29, 9, 12)   5805   1.2   1.6  wait (wait)     wait (wait)     own choice        0.38  0.00     4.258 /     nan /   4.258
+  26     22   (29, 9, 12)   5805   1.2   2.0  -Z (away)       -Z (away)       own choice        0.50  0.50     2.561 /     nan /   2.658
+  27     22   (29, 9, 11)   5805   1.7   2.0  -Z (away)       -Z (away)       own choice        0.50  0.28     3.464 /   3.601 /   3.685
+  28     22   (29, 9, 11)   5805   2.0   2.5  +Z (toward)     +Z (toward)     own choice        0.50  0.50     2.483 /   2.590 /   2.590
+  29     22   (29, 9, 12)   5805   1.5   1.8  +Z (toward)     +Z (toward)     own choice        0.43  0.43     4.052 /   4.118 /   4.118
+  30     22   (29, 9, 12)   5805   1.1   1.8  -Z (away)       -Z (away)       own choice        0.43  0.43     2.449 /   2.320 /   2.527
+  31     22   (29, 9, 12)   5805   1.5   1.8  -Z (away)       -Z (away)       own choice        0.43  0.43     3.073 /   3.146 /   3.262
+  32     22   (29, 9, 11)   5805   1.9   2.6  -Z (away)       -Z (away)       own choice        0.50  0.07     2.076 /   2.436 /   2.447
+  33     22   (29, 9, 11)   5805   2.0   3.0  +Z (toward)     +Z (toward)     own choice        0.50  0.50     3.140 /   3.273 /   3.273
+  34     22   (29, 9, 12)   5805   1.5   2.0  -Z (away)       -Z (away)       own choice        0.50  0.50     1.810 /   1.871 /   1.881
+  35     22   (29, 9, 11)   5805   2.0   3.0  +Z (toward)     +Z (toward)     own choice        0.50  0.50     2.756 /   3.051 /   3.051
+  36     22   (29, 9, 12)   5805   1.5   3.0  -Z (away)       -Z (away)       own choice        0.50  0.50     1.917 /   2.121 /   2.127
+  37     22   (29, 9, 11)   5805   2.0   2.0  -Z (away)       -Z (away)       own choice        0.50  0.50     2.182 /   2.400 /   2.445
+  38     22   (29, 9, 10)   5805   2.5   2.0  +Z (toward)     +Z (toward)     own choice        0.50  0.50     2.800 /   3.083 /   3.083
+  39     22   (29, 9, 11)   5805   2.0   2.0  -Z (away)       -Z (away)       own choice        0.50  0.50     2.731 /   2.743 /   2.835
+  40     22   (29, 9, 10)   5805   2.5   2.0  -Z (away)       -Z (away)       own choice        0.50  0.50     3.644 /   3.614 /   3.656
+  41     22   (29, 9, 10)   5805   3.0   2.0  +Z (toward)     +Z (toward)     own choice        0.50  0.50     3.956 /   3.972 /   3.972
+  42     22   (29, 9, 10)   5805   2.5   3.0  +Z (toward)     +Z (toward)     own choice        0.50  0.50     2.846 /   3.323 /   3.323
+  43     22   (29, 9, 11)   5805   2.0   2.0  -Z (away)       -Z (away)       own choice        0.50  0.50     2.186 /   2.355 /   2.406
+  44     22   (29, 9, 10)   5805   2.5   2.0  -Z (away)       +Z (toward)     livelock escape   0.50  0.50     3.746 /   3.758 /   3.817
+  45     22   (29, 9, 11)   5805   2.0   2.0  +Z (toward)     +Z (toward)     livelock escape   0.50  0.50     2.208 /   2.455 /   2.455
+  46     22   (29, 9, 12)   5805   1.5   1.5  +Z (toward)     +Z (toward)     livelock escape   0.35  0.35     1.764 /   1.995 /   1.995
+  47     22   (29, 9, 12)   5805   1.1   1.1  -Z (away)       -Z (away)       livelock escape   0.24  0.24     1.680 /     nan /   1.891
+  48     22   (29, 9, 12)   5805   1.4   1.4  -Z (away)       -Z (away)       livelock escape   0.32  0.32     1.563 /     nan /   1.781
+  49     22   (29, 9, 11)   5805   1.7   1.4  +Z (toward)     +Z (toward)     livelock escape   0.32  0.32     3.269 /   3.370 /   3.370
+  50     22   (29, 9, 12)   5805   1.4   1.4  -Z (away)       -Z (away)       livelock escape   0.32  0.32     1.741 /     nan /   2.064
+  51     22   (29, 9, 11)   5805   1.7   2.0  +Z (toward)     +Z (toward)     livelock escape   0.50  0.50     0.664 /   1.133 /   1.133
+  52     22   (29, 9, 12)   5805   1.2   2.0  -Z (away)       -Z (away)       livelock escape   0.50  0.50     1.038 /     nan /   1.262
+  53     22   (29, 9, 11)   5805   1.7   2.7  +Z (toward)     +Z (toward)     livelock escape   0.50  0.50    -0.404 /   0.176 /   0.176
+  54     22   (29, 9, 12)   5805   1.2   2.7  -Z (away)       -Z (away)       livelock escape   0.50  0.50    -0.370 /     nan /   0.020
+  55     22   (29, 9, 11)   5805   1.7   3.7  +Z (toward)     +Z (toward)     livelock escape   0.50  0.50    -2.052 /  -1.252 /  -1.252
+  56     22   (29, 9, 12)   5805   1.2   3.2  -Z (away)       -Z (away)       livelock escape   0.50  0.50    -0.706 /     nan /   0.038
+  57     22   (29, 9, 11)   5805   1.7   4.2  +Z (toward)     +Z (toward)     livelock escape   0.50  0.50    -2.199 /  -1.623 /  -1.623
+  58     22   (29, 9, 12)   5805   1.2   4.2  -Z (away)       -Z (away)       livelock escape   0.50  0.50    -2.303 /     nan /  -1.643
+  59     22   (29, 9, 11)   5805   1.7   5.2  -Z (away)       +Z (toward)     livelock escape   0.50  0.50    -2.180 /  -1.776 /  -1.741
+  60     22   (29, 9, 12)   5805   1.2   5.2  -Z (away)       -Z (away)       livelock escape   0.50  0.50    -1.429 /     nan /  -0.377
+  61     22   (29, 9, 11)   5805   1.7   5.3  +Z (toward)     +Z (toward)     livelock escape   0.50  0.50    -3.004 /  -0.871 /  -0.871
+  62     22   (29, 9, 12)   5805   1.2   6.2  -Z (away)       -Z (away)       livelock escape   0.50  0.50    -1.418 /     nan /  -0.103
+  63     22   (29, 9, 11)   5805   1.7   6.3  +Z (toward)     +Z (toward)     livelock escape   0.50  0.50    -3.072 /  -0.992 /  -0.992
+  64     22   (29, 9, 12)   5805   1.2   7.2  -Z (away)       -Z (away)       own choice        0.50  0.50    -1.668 /     nan /  -0.379
+  65     22   (29, 9, 11)   5805   1.7   7.3  +Z (toward)     +Z (toward)     own choice        0.50  0.50    -3.508 /  -0.502 /  -0.502
+  66     22   (29, 9, 12)   5805   1.2   8.2  -Z (away)       -Z (away)       own choice        0.50  0.50    -1.889 /     nan /  -0.723
+  67     22   (29, 9, 11)   5805   1.7   8.3  +Z (toward)     +Z (toward)     own choice        0.50  0.50    -1.922 /  -0.149 /  -0.149
+  68     22   (29, 9, 12)   5805   1.2   9.2  -Z (away)       -Z (away)       own choice        0.50  0.50    -1.800 /     nan /  -1.344
+  69     22   (29, 9, 11)   5805   1.7   9.2  +Z (toward)     +Z (toward)     own choice        0.50  0.50    -1.501 /  -0.799 /  -0.799
+  70     22   (29, 9, 12)   5805   1.2   8.2  -Z (away)       -Z (away)       own choice        0.50  0.50    -1.181 /     nan /  -0.536
+  71     22   (29, 9, 11)   5805   1.7   8.2  +Z (toward)     +Z (toward)     own choice        0.50  0.50    -1.600 /  -0.832 /  -0.832
+  72     22   (29, 9, 12)   5805   1.2   7.2  -Z (away)       -Z (away)       own choice        0.50  0.50    -1.698 /     nan /  -1.134
+  73     22   (29, 9, 11)   5805   1.7   7.2  +Z (toward)     +Z (toward)     own choice        0.50  0.50    -2.884 /  -0.888 /  -0.888
+  74     22   (29, 9, 12)   5805   1.2   6.2  -Z (away)       -Z (away)       own choice        0.50  0.50    -2.873 /     nan /  -1.682
+  75     22   (29, 9, 11)   5805   1.7   6.2  +Z (toward)     +Z (toward)     own choice        0.50  0.50    -2.658 /  -1.650 /  -1.650
+  76     22   (29, 9, 12)   5805   1.2   5.2  -Z (away)       -Z (away)       own choice        0.50  0.50    -2.107 /     nan /  -1.629
+  77     22   (29, 9, 11)   5805   1.7   6.2  +Z (toward)     +Z (toward)     own choice        0.50  0.50    -2.559 /  -2.051 /  -2.051
+  78     22   (29, 9, 12)   5805   1.2   5.7  -Z (away)       -Z (away)       own choice        0.50  0.50    -2.442 /     nan /  -1.996
+  79     22   (29, 9, 11)   5805   1.7   5.7  -Z (away)       -Z (away)       own choice        0.50  0.29    -2.705 /  -2.383 /  -2.310
+  80     22   (29, 9, 11)   5805   2.0   5.5  +Z (toward)     +Z (toward)     own choice        0.50  0.50    -2.809 /  -2.453 /  -2.453
+  81     22   (29, 9, 12)   5805   1.5   5.5  +Z (toward)     +Z (toward)     own choice        0.50  0.50    -2.751 /  -2.372 /  -2.372
+  82     22   (29, 9, 12)   5805   1.0   5.0  -Y (away)       -Y (away)       own choice        0.50  0.50    -2.423 /  -2.590 /  -1.905
+  83     22   (29, 8, 12)   5805   1.5   4.5  -Y (away)       -Y (away)       own choice        0.50  0.50    -2.826 /  -3.427 /  -2.374
+  84     22   (29, 8, 12)   5805   2.0   4.0  -Y (away)       +Y (toward)     livelock escape   0.50  0.50    -2.855 /  -3.418 /  -2.356
+  85     22   (29, 8, 12)   5805   1.5   4.5  -Y (away)       +Y (toward)     livelock escape   0.50  0.50    -3.547 /  -3.108 /  -2.330
+  86     22   (29, 9, 12)   5805   1.0   4.5  -Y (away)       +X (toward)     livelock escape   0.50  0.50    -3.089 /  -2.796 /  -2.205
+  87     22   (30, 9, 12)   5805   0.5   4.5  +X (toward)     +X (toward)     livelock escape   0.50  0.50    -3.471 /  -2.944 /  -2.944
+  88     22   (30, 9, 12)   5912   5.0   4.5  -Y (away)       +X (toward)     livelock escape   0.50  0.50    -3.398 /  -2.941 /  -2.073
+  89     22   (30, 9, 12)   5912   4.5   4.5  wait (wait)     +X (toward)     livelock escape   0.50  0.50    -2.540 /  -2.586 /  -2.540
+  90     22   (31, 9, 12)   5912   4.0   4.5  -Y (away)       +X (toward)     livelock escape   0.50  0.50    -2.666 /  -2.668 /  -1.696
+  91     22   (32, 9, 12)   5912   3.5   6.5  +X (toward)     +X (toward)     livelock escape   0.50  0.50    -3.039 /  -2.859 /  -2.859
+  92     22   (32, 9, 12)   5912   3.0   7.5  -Y (away)       +Y (toward)     livelock escape   0.50  0.50    -2.542 /  -3.231 /  -1.905
+  93     22  (32, 10, 12)   5912   2.5   8.5  -Y (away)       +Y (toward)     livelock escape   0.50  0.50    -2.979 /  -3.086 /  -2.164
+  94     22  (32, 10, 12)   5912   2.0   9.5  -Y (away)       +Y (toward)     livelock escape   0.50  0.50    -2.658 /  -3.356 /  -2.212
+  95     22  (32, 10, 12)   5912   1.5   inf  -Y (away)       +Y (toward)     livelock escape   0.50  0.50    -2.626 /  -3.305 /  -2.356
+  96     22  (32, 11, 12)   5912   1.0   inf  -Y (away)       +Y (toward)     livelock escape   0.50  0.50    -2.941 /  -3.577 /  -2.591
+  97   22#2  (32, 12, 12)   3114  16.0   inf  -Y (away)       -Y (away)       own choice        0.50  0.50    -2.377 /  -2.378 /  -1.136
+  98   22#2  (32, 12, 12)   3114  16.5   inf  -Y (away)       -Y (away)       own choice        0.50  0.50    -2.630 /  -3.373 /  -2.104
+  99   22#2  (32, 11, 12)   3114  17.0   inf  wait (wait)     wait (wait)     own choice        0.50  0.00     0.597 /   0.310 /   0.597
+ 100   22#2  (32, 11, 12)   3114  17.0   inf  wait (wait)     wait (wait)     own choice        0.50  0.00    -0.311 /  -0.723 /  -0.311
+ 101   22#2  (32, 11, 12)   3114  17.0   inf  wait (wait)     wait (wait)     own choice        0.50  0.00    -2.208 /  -2.496 /  -2.208
+ 102   22#2  (32, 11, 12)   3114  17.0   inf  wait (wait)     wait (wait)     own choice        0.50  0.00    -1.239 /  -1.598 /  -1.239
+ 103   22#2  (32, 11, 12)   3114  17.0   inf  wait (wait)     wait (wait)     own choice        0.50  0.00    -1.571 /  -1.886 /  -1.571
+ 104   22#2  (32, 11, 12)   3114  17.0   inf  wait (wait)     wait (wait)     own choice        0.50  0.00    -1.922 /  -2.177 /  -1.922
+ 105   22#2  (32, 11, 12)   3114  17.0   inf  wait (wait)     wait (wait)     own choice        0.50  0.00    -2.218 /  -2.426 /  -2.218
+ 106   22#2  (32, 11, 12)   3114  17.0   inf  wait (wait)     wait (wait)     own choice        0.50  0.00    -2.480 /  -2.613 /  -2.480
+ 107   22#2  (32, 11, 12)   3114  17.0   inf  wait (wait)     wait (wait)     own choice        0.50  0.00    -2.704 /  -2.775 /  -2.704
+ 108   22#2  (32, 11, 12)   3114  17.0   inf  wait (wait)     wait (wait)     own choice        0.50  0.00    -3.201 /  -3.244 /  -3.201
+ 109   22#2  (32, 11, 12)   3114  17.0   inf  wait (wait)     wait (wait)     own choice        0.50  0.00    -3.294 /  -3.343 /  -3.294
+ 110   22#2  (32, 11, 12)   3114  17.0   inf  -Y (toward)     -Y (toward)     own choice        0.50  0.50    -3.209 /  -3.165 /  -3.165
+ 111   22#2  (32, 10, 12)   3114  16.5   inf  -Y (toward)     -Y (toward)     own choice        0.50  0.50    -3.452 /  -3.127 /  -3.127
+ 112   22#2  (32, 10, 12)   3114  16.0   inf  -Y (toward)     -Y (toward)     own choice        0.50  0.50    -3.361 /  -3.058 /  -3.058
+ 113   22#2  (32, 10, 12)   3114  15.5   inf  -Y (toward)     -Y (toward)     own choice        0.50  0.50    -3.545 /  -3.209 /  -3.209
+ 114   22#2   (32, 9, 12)   3114  15.0   inf  -Y (away)       -Y (away)       own choice        0.50  0.50    -3.671 /  -4.285 /  -3.211
+ 115   22#2   (32, 8, 12)   3114  15.5   inf  -Y (away)       -Y (away)       own choice        0.50  0.50    -3.621 /  -5.481 /  -3.314
+ 116   22#2   (32, 8, 12)   3114  16.0   inf  -Y (away)       -Y (away)       own choice        0.50  0.50    -3.509 /  -5.450 /  -3.229
+ 117   22#2   (32, 8, 12)   3114  16.5   inf  -Y (away)       -Y (away)       own choice        0.50  0.50    -3.446 /  -5.342 /  -3.110
+ 118   22#2   (32, 7, 12)   3114  17.0   inf  -Y (away)       -Y (away)       own choice        0.50  0.50    -3.337 /  -5.344 /  -3.020
+ 119   22#2   (32, 6, 12)   3114  17.5   inf  -Y (away)       -Y (away)       own choice        0.50  0.50    -3.289 /  -5.176 /  -2.906
+
+--- RULES: fleet 22, step by step (54 steps on the floor) ---
+step  fleet          cell   goal  hops  peer  proposed        executed        decided by       speed moved
+   0     22   (29, 9, 10)   5805   3.0   4.0  +Z (toward)     +Z (toward)     rules driver      0.50  0.50
+   1     22   (29, 9, 10)   5805   2.5   4.0  +Z (toward)     +Z (toward)     rules driver      0.50  0.50
+   2     22   (29, 9, 11)   5805   2.0   4.0  +Z (toward)     +Z (toward)     rules driver      0.50  0.50
+   3     22   (29, 9, 12)   5805   1.5   4.0  +Z (toward)     +Z (toward)     rules driver      0.50  0.50
+   4     22   (29, 9, 12)   5805   1.0   3.0  +X (toward)     +X (toward)     rules driver      0.50  0.50
+   5     22   (30, 9, 12)   5805   0.5   4.0  +X (toward)     +X (toward)     rules driver      0.50  0.50
+   6     22   (30, 9, 12)   5912   5.0   5.0  +X (toward)     +X (toward)     rules driver      0.50  0.50
+   7     22   (30, 9, 12)   5912   4.5   6.0  +X (toward)     +X (toward)     rules driver      0.50  0.50
+   8     22   (31, 9, 12)   5912   4.0   5.0  +X (toward)     +X (toward)     rules driver      0.50  0.50
+   9     22   (32, 9, 12)   5912   3.5   4.0  +X (toward)     +X (toward)     rules driver      0.50  0.50
+  10     22   (32, 9, 12)   5912   3.0   3.0  +Y (toward)     +Y (toward)     rules driver      0.50  0.50
+  11     22  (32, 10, 12)   5912   2.5   3.0  +Y (toward)     +Y (toward)     rules driver      0.50  0.50
+  12     22  (32, 10, 12)   5912   2.0   3.0  +Y (toward)     +Y (toward)     rules driver      0.50  0.50
+  13     22  (32, 10, 12)   5912   1.5   3.0  +Y (toward)     +Y (toward)     rules driver      0.50  0.50
+  14     22  (32, 11, 12)   5912   1.0   3.0  +Y (toward)     +Y (toward)     rules driver      0.50  0.50
+  21   22#2  (32, 12, 12)    453  19.0   inf  -X (toward)     -X (toward)     rules driver      0.50  0.50
+  22   22#2  (32, 12, 12)    453  18.5   inf  -X (toward)     -X (toward)     rules driver      0.50  0.50
+  23   22#2  (31, 12, 12)    453  18.0   9.5  -X (toward)     -X (toward)     rules driver      0.50  0.50
+  24   22#2  (30, 12, 12)    453  17.5   8.5  -X (toward)     -X (toward)     rules driver      0.50  0.50
+  25   22#2  (30, 12, 12)    453  17.0   8.5  -X (toward)     -X (toward)     rules driver      0.50  0.50
+  26   22#2  (30, 12, 12)    453  16.5   7.5  -X (toward)     -X (toward)     rules driver      0.50  0.50
+  27   22#2  (29, 12, 12)    453  16.0   6.5  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  28   22#2  (29, 12, 12)    453  15.5   6.5  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  29   22#2  (29, 12, 11)    453  15.0   7.5  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  30   22#2  (29, 12, 10)    453  14.5   8.5  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  31   22#2  (29, 12, 10)    453  14.0   9.5  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  32   22#2  (29, 12, 10)    453  13.5   inf  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  33   22#2   (29, 12, 9)    453  13.0  10.0  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  34   22#2   (29, 12, 8)    453  12.5  10.0  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  35   22#2   (29, 12, 8)    453  12.0  10.0  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  36   22#2   (29, 12, 8)    453  11.5  10.0  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  37   22#2   (29, 12, 7)    453  11.0  10.0  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  38   22#2   (29, 12, 6)    453  10.5  10.0  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  39   22#2   (29, 12, 6)    453  10.0  10.0  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  40   22#2   (29, 12, 6)    453   9.5  10.0  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  41   22#2   (29, 12, 5)    453   9.0  10.0  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  42   22#2   (29, 12, 4)    453   8.5   inf  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  43   22#2   (29, 12, 4)    453   8.0   inf  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  44   22#2   (29, 12, 4)    453   7.5   inf  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  45   22#2   (29, 12, 3)    453   7.0   inf  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  46   22#2   (29, 12, 2)    453   6.5   inf  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  47   22#2   (29, 12, 2)    453   6.0   inf  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  48   22#2   (29, 12, 2)    453   5.5   inf  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  49   22#2   (29, 12, 1)    453   5.0   inf  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  50   22#2   (29, 12, 0)    453   4.5   inf  -Z (toward)     -Z (toward)     rules driver      0.50  0.50
+  51   22#2   (29, 12, 0)    453   4.0   inf  +X (toward)     +X (toward)     rules driver      0.50  0.50
+  52   22#2   (30, 12, 0)    453   3.5   inf  +X (toward)     +X (toward)     rules driver      0.50  0.50
+  53   22#2   (30, 12, 0)    453   3.0   inf  +X (toward)     +X (toward)     rules driver      0.50  0.50
+  54   22#2   (30, 12, 0)    453   2.5   inf  +X (toward)     +X (toward)     rules driver      0.50  0.50
+  55   22#2   (31, 12, 0)    453   2.0   inf  +X (toward)     +X (toward)     rules driver      0.50  0.50
+  56   22#2   (32, 12, 0)    453   1.5   inf  +X (toward)     +X (toward)     rules driver      0.50  0.50
+  57   22#2   (32, 12, 0)    453   1.0   inf  +X (toward)     +X (toward)     rules driver      0.50  0.50
+  58   22#2   (32, 12, 0)    453   0.5   inf  +X (toward)     +X (toward)     rules driver      0.50  0.50
+  59   22#2   (33, 12, 0)    452   1.0   inf  -X (toward)     -X (toward)     rules driver      0.50  0.50
+
+[trace] wrote 4088 robot-steps -> trace_steps.csv

@@ -1,0 +1,8 @@
+Metric,RULES alone (small / large),Policy + RULES (ladder_run1) (small / large),RHCR-PIBT + naive (small / large),"Policy vs RULES, paired p (small / large)"
+Stranded orders recovered,93.3% / 86.5%,74.9% / 87.1%,69.6% / 71.9%,< 0.001 / 0.708
+Rescuers lost per episode,0.20 / 1.00,1.43 / 0.93,2.73 / 2.53,< 0.001 / 0.710
+Orders delivered,97.3% / 97.2%,94.3% / 97.5%,92.1% / 92.8%,0.001 / 0.669
+Hops to reach a stranded order,23.5 / 47.8,50.6 / 65.3,23.2 / 75.6,< 0.001 / < 0.001
+Collisions per episode,0.10 / 0.00,1.03 / 0.03,0.07 / 0.00,< 0.001 / 0.317
+Distance travelled (cells),434 / 1266,1080 / 1523,421 / 1326,< 0.001 / < 0.001
+Replan downtime (s per episode),0.0 / 0.0,0.0 / 0.0,2.1 / 46.0,n/a / n/a

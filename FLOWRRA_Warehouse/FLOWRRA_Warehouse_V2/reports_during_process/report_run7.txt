@@ -1,0 +1,77 @@
+=== curriculum_metrics.csv: 80 episodes, route off from episode 6, last 15 = 66-80
+=== baseline curriculum_metrics.csv: 80 episodes, route off from 6
+
+--- 1. By map and window (means; route-off windows of 15 episodes) ---
+size                        large                                                 small                                             
+window                    warm-up     6-20    21-35    36-50    51-65    66-80  warm-up     6-20    21-35    36-50    51-65    66-80
+router_learner_agree        0.995    0.991    0.995    0.994    0.994    0.997    0.969    0.978    0.983    0.989    0.987    0.986
+router_q_differs            0.261    0.287    0.277    0.299    0.306    0.286    0.356    0.455    0.365    0.404    0.384    0.369
+router_choice_differs       0.273    0.103    0.103    0.123    0.215    0.294    0.367    0.185    0.157    0.209    0.283    0.376
+stream_book_lead_mean     124.692  133.910  131.532  115.069  123.059  134.966   50.714   57.210   62.898   59.069   90.352  103.677
+stream_book_delivered      78.000   75.625   73.800   74.400   74.714   77.250   77.750   76.857   76.500   77.000   75.500   74.571
+guard_stops                 0.000   36.750    9.400   34.700   73.143   97.875  141.500  221.286  244.600  216.800  281.750  358.143
+ladder_l3_fired             0.000    2.375    1.000    1.400    1.571    5.375    1.000    4.571    4.300    6.800    7.250   10.857
+obstacle_near_miss_steps    1.000   10.500    5.200   10.800    1.000    1.875   40.750   64.571   24.800   64.600   17.250   36.143
+collisions                  0.000    0.000    0.000    0.000    0.000    0.000    0.000    0.000    0.000    0.000    0.000    0.000
+errors_injected             6.000   11.000    8.400   11.500   11.571   11.000    8.000    9.857   10.800   10.000   10.875   10.143
+qval_safety                -0.189   -0.170   -0.174   -0.184   -0.170   -0.176   -0.228   -0.170   -0.176   -0.183   -0.171   -0.184
+loss_safety                 0.001    0.001    0.002    0.002    0.002    0.002    0.001    0.001    0.002    0.002    0.002    0.002
+qval_efficiency             1.498    1.650    1.772    1.779    1.757    1.573    1.315    1.633    1.751    1.794    1.755    1.526
+loss_efficiency             0.010    0.010    0.012    0.015    0.016    0.017    0.009    0.010    0.013    0.015    0.016    0.017
+
+Near misses with people, median by map and window:
+size     large                                small                              
+window warm-up 6-20 21-35 36-50 51-65 66-80 warm-up  6-20 21-35 36-50 51-65 66-80
+median     1.0  6.0   0.0   6.0   0.0   0.0    34.0  12.0  17.0  31.0  11.0  24.0
+
+--- 2. Route off, by map and fleet size (means; near misses also median) ---
+(run: episodes 6-80; base: episodes 6-80, the same span)
+            collisions      guard_stops          ladder_l3_fired           n     near_median       obstacle_near_miss_steps         router_q_differs        stream_book_delivered         stream_book_lead_mean         
+                  base  run        base      run            base    run base run        base   run                     base     run             base    run                  base     run                  base      run
+size  fleet                                                                                                                                                                                                             
+large 25           0.0  0.0      14.167    8.000           0.167  0.500    6   6         0.0   0.0                    0.500   2.000            0.358  0.327                64.333  69.167               177.523  158.160
+      40           0.0  0.0     105.357   82.857           1.571  2.929   14  14         4.0   0.5                   10.071   7.071            0.342  0.274                73.786  75.643               154.893  142.735
+      60           0.0  0.0      63.056   43.056           1.500  2.667   18  18         0.0   0.0                    9.000   7.167            0.330  0.294                76.722  76.944               113.534  104.084
+small 25           0.0  0.0     327.000  311.533           2.533  7.600   15  15        41.0  25.0                   82.667  33.200            0.553  0.375                72.333  73.733               169.422   98.120
+      40           0.0  0.0     836.889  262.556           9.222  8.000    9   9        47.0  11.0                  104.111  54.222            0.541  0.381                74.000  76.333               164.874   69.504
+      60           0.0  0.0     582.462  215.692           7.231  4.385   13  13        20.0   9.0                   47.769  32.923            0.560  0.419                76.000  78.538               124.317   52.001
+
+--- 3. Last 15 episodes by map (mean / median) ---
+                          large mean  large median  large base mean  large base median  small mean  small median  small base mean  small base median
+router_q_differs               0.286         0.292            0.244              0.240       0.369         0.372            0.507              0.504
+stream_book_lead_mean        134.966       129.390          129.194            124.861     103.677       102.532          173.484            179.267
+stream_book_delivered         77.250        78.000           75.375             75.500      74.571        77.000           73.857             75.000
+guard_stops                   97.875        93.000           51.500             50.500     358.143       267.000          609.429            689.000
+ladder_l3_fired                5.375         3.500            1.125              1.000      10.857        11.000            7.143              8.000
+obstacle_near_miss_steps       1.875         0.000            6.750              0.500      36.143        24.000           41.571             41.000
+collisions                     0.000         0.000            0.000              0.000       0.000         0.000            0.000              0.000
+router_learner_agree           0.997         0.997            0.950              0.950       0.986         0.986            0.754              0.756
+router_choice_differs          0.294         0.300            0.253              0.249       0.376         0.379            0.511              0.508
+
+--- 4. The 10 worst near-miss days (route off) ---
+          size  fleet  obstacle_near_miss_steps  obstacle_humans  errors_injected  wave_failures  guard_stops  ladder_l3_fired  stream_book_lead_mean  stream_book_delivered
+episode                                                                                                                                                                     
+15       small     40                       356                1               13              9           58                1              56.106667                     75
+42       small     60                       238                3               11              8           78                2              48.064103                     78
+75       small     25                        85                0               15             10          115               11             123.225806                     62
+27       small     25                        67                0               13              9          269                5              73.421053                     76
+70       small     25                        53                1               11              8          258               10             133.597403                     77
+30       small     25                        52                0                9              7          224                1              69.723684                     76
+53       small     25                        52                0                9              8          111                3              73.434211                     76
+20       large     40                        51                3               11              9            0                1             144.769231                     78
+35       small     60                        46                0               14             10          250                3              55.051948                     77
+14       small     40                        45                1               14              9          260               12              62.739726                     73
+
+--- 5. Run 10's six predictions (entry 43), on the last 15 episodes ---
+  PASS  1 Learner reads the route: small 0.986 (>= 0.95), large 0.997 (>= 0.97)
+  FAIL  2 Chosen moves follow the route: small 0.376 (<= 0.35), large 0.294 (<= 0.20)
+  FAIL  3 The small map is fixed [all fleets, 15 days]: small lead 103.7 against base 173.5 (-40%, needs <= -40%); large 135.0 against 129.2 (must not be worse)
+  FAIL  4 Safety holds [all fleets]: collisions 0; near misses mean/median 17.9/6.0 against base 23.0/11.0; L3 7.93/6.0 against 3.93/2.0 (fails if above on both mean and median)
+  FAIL  3 The small map is fixed [like for like, 15 days]: small lead 103.7 against base 173.5 (-40%, needs <= -40%); large 135.0 against 129.2 (must not be worse)
+  FAIL  4 Safety holds [like for like]: collisions 0; near misses mean/median 17.9/6.0 against base 23.0/11.0; L3 7.93/6.0 against 3.93/2.0 (fails if above on both mean and median)
+  FAIL  5 The safety value is steady: safety value (last 15) -0.180 (band -0.10 to -0.20); safety loss trend over the last 30 episodes +0.00062 (fails if clearly climbing)
+  PASS  6 The heads learn the clear (allowed to fail): small-map heads differ 0.369 (<= 0.45)
+  (Prediction 5's 'clearly climbing' line here is a rise of more than 0.0005 over 30 episodes; judge it with the graph.)
+
+wrote report_run7_training.png
+wrote report_run7_by_fleet.png

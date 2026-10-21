@@ -1,0 +1,193 @@
+=== deploy_eval_clean10.csv, deploy_eval_sweep_s1.csv, deploy_eval_sweep_s2.csv, deploy_eval_sweep_s3.csv: arms ['ladder6', 'ladder4', 'RULES', 'ladder6s1', 'ladder7s1', 'ladder6s2', 'ladder7s2', 'ladder6s3', 'ladder7s3']; reference ladder7s2; 71 rows
+
+--- 1. By arm, map and fleet (means) ---
+                    stream_book_fill  stream_book_lead_mean  collisions  ladder_l3_fired  guard_stops  orders_per_hour
+size  k  arm                                                                                                          
+large 25 RULES                 0.992                128.765         0.0            1.000        0.000            357.0
+         ladder4               1.000                127.250         0.0            0.667       21.000            360.0
+         ladder6               0.996                154.571         0.0            2.000       35.333            358.5
+      40 RULES                 0.967                109.433         0.0            8.333        1.000            348.0
+         ladder4               1.000                112.300         0.0            1.000       27.667            360.0
+         ladder6               0.983                148.659         0.0            0.667       37.000            354.0
+      60 RULES                 1.000                 76.725         0.0            0.333        0.000            360.0
+         ladder4               1.000                 76.500         0.0            0.667        6.667            360.0
+         ladder6               1.000                106.250         0.0            1.333       82.333            360.0
+small 25 RULES                 1.000                 48.767         0.0            4.000       87.333            360.0
+         ladder4               0.992                 64.302         0.0            7.000      264.000            357.0
+         ladder6               0.992                115.171         0.0           15.000      952.000            357.0
+         ladder6s1             1.000                 76.300         0.0           10.333      373.667            360.0
+         ladder6s2             1.000                 62.300         0.0            4.333      259.000            360.0
+         ladder6s3             1.000                 62.583         0.0            5.667      178.000            360.0
+         ladder7s1             1.000                 67.238         0.0            4.500      105.500            360.0
+         ladder7s2             1.000                 66.267         0.0            5.667      251.667            360.0
+         ladder7s3             1.000                 64.783         0.0            8.333      362.000            360.0
+      40 RULES                 1.000                 36.421         0.0            1.000        0.667            360.0
+         ladder4               1.000                 43.288         0.0            0.000       57.667            360.0
+         ladder6               0.983                 79.391         0.0            9.333      426.667            354.0
+      60 RULES                 1.000                 32.167         0.0            6.333       50.000            360.0
+         ladder4               1.000                 33.725         0.0            2.333       89.333            360.0
+         ladder6               1.000                 65.192         0.0            7.000      400.333            360.0
+
+--- 2. By arm and map (means; near misses also median) ---
+                 stream_book_fill  stream_book_lead_mean  collisions  ladder_l3_fired  guard_stops  orders_per_hour
+size  arm                                                                                                          
+large RULES                 0.986                104.974         0.0            3.222        0.333            355.0
+      ladder4               1.000                105.350         0.0            0.778       18.444            360.0
+      ladder6               0.993                136.493         0.0            1.333       51.556            357.5
+small RULES                 1.000                 39.118         0.0            3.778       46.000            360.0
+      ladder4               0.997                 47.105         0.0            3.111      137.000            359.0
+      ladder6               0.992                 86.585         0.0           10.444      593.000            357.0
+      ladder6s1             1.000                 76.300         0.0           10.333      373.667            360.0
+      ladder6s2             1.000                 62.300         0.0            4.333      259.000            360.0
+      ladder6s3             1.000                 62.583         0.0            5.667      178.000            360.0
+      ladder7s1             1.000                 67.238         0.0            4.500      105.500            360.0
+      ladder7s2             1.000                 66.267         0.0            5.667      251.667            360.0
+      ladder7s3             1.000                 64.783         0.0            8.333      362.000            360.0
+
+--- 3. Graduation: ladder7s2 against each arm, paired over the same days ---
+(not in these CSVs, so not won by anyone: Near misses with people; e.g. near misses with people in the clean condition, where people are off. 3 wins are still needed.)
+ladder7s2 vs ladder6 | all | 3 paired days
+   Share of book delivered    ladder7s2     1.000 | ladder6     0.992 | won  | days better/worse 1/0 | p nan
+   Lead time                  ladder7s2    66.267 | ladder6   115.171 | won  | days better/worse 3/0 | p nan
+   Collisions                 ladder7s2     0.000 | ladder6     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder7s2     5.667 | ladder6    15.000 | won  | days better/worse 3/0 | p nan
+   Guard stops                ladder7s2   251.667 | ladder6   952.000 | won  | days better/worse 3/0 | p nan   (reported, not scored)
+   Orders per hour            ladder7s2   360.000 | ladder6   357.000 | won  | days better/worse 1/0 | p nan   (reported, not scored)
+   => 3 of 5 won; safety gate passed: ladder7s2 GRADUATES against ladder6 (all)
+
+ladder7s2 vs ladder6 | small | 3 paired days
+   Share of book delivered    ladder7s2     1.000 | ladder6     0.992 | won  | days better/worse 1/0 | p nan
+   Lead time                  ladder7s2    66.267 | ladder6   115.171 | won  | days better/worse 3/0 | p nan
+   Collisions                 ladder7s2     0.000 | ladder6     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder7s2     5.667 | ladder6    15.000 | won  | days better/worse 3/0 | p nan
+   Guard stops                ladder7s2   251.667 | ladder6   952.000 | won  | days better/worse 3/0 | p nan   (reported, not scored)
+   Orders per hour            ladder7s2   360.000 | ladder6   357.000 | won  | days better/worse 1/0 | p nan   (reported, not scored)
+   => 3 of 5 won; safety gate passed: ladder7s2 GRADUATES against ladder6 (small)
+
+ladder7s2 vs ladder4 | all | 3 paired days
+   Share of book delivered    ladder7s2     1.000 | ladder4     0.992 | won  | days better/worse 1/0 | p nan
+   Lead time                  ladder7s2    66.267 | ladder4    64.302 | lost | days better/worse 1/2 | p nan
+   Collisions                 ladder7s2     0.000 | ladder4     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder7s2     5.667 | ladder4     7.000 | won  | days better/worse 1/2 | p nan
+   Guard stops                ladder7s2   251.667 | ladder4   264.000 | won  | days better/worse 1/2 | p nan   (reported, not scored)
+   Orders per hour            ladder7s2   360.000 | ladder4   357.000 | won  | days better/worse 1/0 | p nan   (reported, not scored)
+   => 2 of 5 won; safety gate passed: ladder7s2 does not graduate against ladder4 (all)
+
+ladder7s2 vs ladder4 | small | 3 paired days
+   Share of book delivered    ladder7s2     1.000 | ladder4     0.992 | won  | days better/worse 1/0 | p nan
+   Lead time                  ladder7s2    66.267 | ladder4    64.302 | lost | days better/worse 1/2 | p nan
+   Collisions                 ladder7s2     0.000 | ladder4     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder7s2     5.667 | ladder4     7.000 | won  | days better/worse 1/2 | p nan
+   Guard stops                ladder7s2   251.667 | ladder4   264.000 | won  | days better/worse 1/2 | p nan   (reported, not scored)
+   Orders per hour            ladder7s2   360.000 | ladder4   357.000 | won  | days better/worse 1/0 | p nan   (reported, not scored)
+   => 2 of 5 won; safety gate passed: ladder7s2 does not graduate against ladder4 (small)
+
+ladder7s2 vs RULES | all | 3 paired days
+   Share of book delivered    ladder7s2     1.000 | RULES     1.000 | tie  | days better/worse 0/0 | p nan
+   Lead time                  ladder7s2    66.267 | RULES    48.767 | lost | days better/worse 0/3 | p nan
+   Collisions                 ladder7s2     0.000 | RULES     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder7s2     5.667 | RULES     4.000 | lost | days better/worse 0/1 | p nan
+   Guard stops                ladder7s2   251.667 | RULES    87.333 | lost | days better/worse 1/2 | p nan   (reported, not scored)
+   Orders per hour            ladder7s2   360.000 | RULES   360.000 | tie  | days better/worse 0/0 | p nan   (reported, not scored)
+   => 0 of 5 won; safety gate passed: ladder7s2 does not graduate against RULES (all)
+
+ladder7s2 vs RULES | small | 3 paired days
+   Share of book delivered    ladder7s2     1.000 | RULES     1.000 | tie  | days better/worse 0/0 | p nan
+   Lead time                  ladder7s2    66.267 | RULES    48.767 | lost | days better/worse 0/3 | p nan
+   Collisions                 ladder7s2     0.000 | RULES     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder7s2     5.667 | RULES     4.000 | lost | days better/worse 0/1 | p nan
+   Guard stops                ladder7s2   251.667 | RULES    87.333 | lost | days better/worse 1/2 | p nan   (reported, not scored)
+   Orders per hour            ladder7s2   360.000 | RULES   360.000 | tie  | days better/worse 0/0 | p nan   (reported, not scored)
+   => 0 of 5 won; safety gate passed: ladder7s2 does not graduate against RULES (small)
+
+ladder7s2 vs ladder6s1 | all | 3 paired days
+   Share of book delivered    ladder7s2     1.000 | ladder6s1     1.000 | tie  | days better/worse 0/0 | p nan
+   Lead time                  ladder7s2    66.267 | ladder6s1    76.300 | won  | days better/worse 3/0 | p nan
+   Collisions                 ladder7s2     0.000 | ladder6s1     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder7s2     5.667 | ladder6s1    10.333 | won  | days better/worse 3/0 | p nan
+   Guard stops                ladder7s2   251.667 | ladder6s1   373.667 | won  | days better/worse 2/1 | p nan   (reported, not scored)
+   Orders per hour            ladder7s2   360.000 | ladder6s1   360.000 | tie  | days better/worse 0/0 | p nan   (reported, not scored)
+   => 2 of 5 won; safety gate passed: ladder7s2 does not graduate against ladder6s1 (all)
+
+ladder7s2 vs ladder6s1 | small | 3 paired days
+   Share of book delivered    ladder7s2     1.000 | ladder6s1     1.000 | tie  | days better/worse 0/0 | p nan
+   Lead time                  ladder7s2    66.267 | ladder6s1    76.300 | won  | days better/worse 3/0 | p nan
+   Collisions                 ladder7s2     0.000 | ladder6s1     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder7s2     5.667 | ladder6s1    10.333 | won  | days better/worse 3/0 | p nan
+   Guard stops                ladder7s2   251.667 | ladder6s1   373.667 | won  | days better/worse 2/1 | p nan   (reported, not scored)
+   Orders per hour            ladder7s2   360.000 | ladder6s1   360.000 | tie  | days better/worse 0/0 | p nan   (reported, not scored)
+   => 2 of 5 won; safety gate passed: ladder7s2 does not graduate against ladder6s1 (small)
+
+ladder7s2 vs ladder7s1 | all | 2 paired days
+   Share of book delivered    ladder7s2     1.000 | ladder7s1     1.000 | tie  | days better/worse 0/0 | p nan
+   Lead time                  ladder7s2    66.706 | ladder7s1    67.237 | won  | days better/worse 1/1 | p nan
+   Collisions                 ladder7s2     0.000 | ladder7s1     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder7s2     5.500 | ladder7s1     4.500 | lost | days better/worse 0/2 | p nan
+   Guard stops                ladder7s2   215.000 | ladder7s1   105.500 | lost | days better/worse 0/2 | p nan   (reported, not scored)
+   Orders per hour            ladder7s2   360.000 | ladder7s1   360.000 | tie  | days better/worse 0/0 | p nan   (reported, not scored)
+   => 1 of 5 won; safety gate passed: ladder7s2 does not graduate against ladder7s1 (all)
+
+ladder7s2 vs ladder7s1 | small | 2 paired days
+   Share of book delivered    ladder7s2     1.000 | ladder7s1     1.000 | tie  | days better/worse 0/0 | p nan
+   Lead time                  ladder7s2    66.706 | ladder7s1    67.237 | won  | days better/worse 1/1 | p nan
+   Collisions                 ladder7s2     0.000 | ladder7s1     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder7s2     5.500 | ladder7s1     4.500 | lost | days better/worse 0/2 | p nan
+   Guard stops                ladder7s2   215.000 | ladder7s1   105.500 | lost | days better/worse 0/2 | p nan   (reported, not scored)
+   Orders per hour            ladder7s2   360.000 | ladder7s1   360.000 | tie  | days better/worse 0/0 | p nan   (reported, not scored)
+   => 1 of 5 won; safety gate passed: ladder7s2 does not graduate against ladder7s1 (small)
+
+ladder7s2 vs ladder6s2 | all | 3 paired days
+   Share of book delivered    ladder7s2     1.000 | ladder6s2     1.000 | tie  | days better/worse 0/0 | p nan
+   Lead time                  ladder7s2    66.267 | ladder6s2    62.300 | lost | days better/worse 1/2 | p nan
+   Collisions                 ladder7s2     0.000 | ladder6s2     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder7s2     5.667 | ladder6s2     4.333 | lost | days better/worse 1/1 | p nan
+   Guard stops                ladder7s2   251.667 | ladder6s2   259.000 | won  | days better/worse 1/2 | p nan   (reported, not scored)
+   Orders per hour            ladder7s2   360.000 | ladder6s2   360.000 | tie  | days better/worse 0/0 | p nan   (reported, not scored)
+   => 0 of 5 won; safety gate passed: ladder7s2 does not graduate against ladder6s2 (all)
+
+ladder7s2 vs ladder6s2 | small | 3 paired days
+   Share of book delivered    ladder7s2     1.000 | ladder6s2     1.000 | tie  | days better/worse 0/0 | p nan
+   Lead time                  ladder7s2    66.267 | ladder6s2    62.300 | lost | days better/worse 1/2 | p nan
+   Collisions                 ladder7s2     0.000 | ladder6s2     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder7s2     5.667 | ladder6s2     4.333 | lost | days better/worse 1/1 | p nan
+   Guard stops                ladder7s2   251.667 | ladder6s2   259.000 | won  | days better/worse 1/2 | p nan   (reported, not scored)
+   Orders per hour            ladder7s2   360.000 | ladder6s2   360.000 | tie  | days better/worse 0/0 | p nan   (reported, not scored)
+   => 0 of 5 won; safety gate passed: ladder7s2 does not graduate against ladder6s2 (small)
+
+ladder7s2 vs ladder6s3 | all | 3 paired days
+   Share of book delivered    ladder7s2     1.000 | ladder6s3     1.000 | tie  | days better/worse 0/0 | p nan
+   Lead time                  ladder7s2    66.267 | ladder6s3    62.583 | lost | days better/worse 1/2 | p nan
+   Collisions                 ladder7s2     0.000 | ladder6s3     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder7s2     5.667 | ladder6s3     5.667 | tie  | days better/worse 2/1 | p nan
+   Guard stops                ladder7s2   251.667 | ladder6s3   178.000 | lost | days better/worse 1/2 | p nan   (reported, not scored)
+   Orders per hour            ladder7s2   360.000 | ladder6s3   360.000 | tie  | days better/worse 0/0 | p nan   (reported, not scored)
+   => 0 of 5 won; safety gate passed: ladder7s2 does not graduate against ladder6s3 (all)
+
+ladder7s2 vs ladder6s3 | small | 3 paired days
+   Share of book delivered    ladder7s2     1.000 | ladder6s3     1.000 | tie  | days better/worse 0/0 | p nan
+   Lead time                  ladder7s2    66.267 | ladder6s3    62.583 | lost | days better/worse 1/2 | p nan
+   Collisions                 ladder7s2     0.000 | ladder6s3     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder7s2     5.667 | ladder6s3     5.667 | tie  | days better/worse 2/1 | p nan
+   Guard stops                ladder7s2   251.667 | ladder6s3   178.000 | lost | days better/worse 1/2 | p nan   (reported, not scored)
+   Orders per hour            ladder7s2   360.000 | ladder6s3   360.000 | tie  | days better/worse 0/0 | p nan   (reported, not scored)
+   => 0 of 5 won; safety gate passed: ladder7s2 does not graduate against ladder6s3 (small)
+
+ladder7s2 vs ladder7s3 | all | 3 paired days
+   Share of book delivered    ladder7s2     1.000 | ladder7s3     1.000 | tie  | days better/worse 0/0 | p nan
+   Lead time                  ladder7s2    66.267 | ladder7s3    64.783 | lost | days better/worse 1/2 | p nan
+   Collisions                 ladder7s2     0.000 | ladder7s3     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder7s2     5.667 | ladder7s3     8.333 | won  | days better/worse 2/1 | p nan
+   Guard stops                ladder7s2   251.667 | ladder7s3   362.000 | won  | days better/worse 3/0 | p nan   (reported, not scored)
+   Orders per hour            ladder7s2   360.000 | ladder7s3   360.000 | tie  | days better/worse 0/0 | p nan   (reported, not scored)
+   => 1 of 5 won; safety gate passed: ladder7s2 does not graduate against ladder7s3 (all)
+
+ladder7s2 vs ladder7s3 | small | 3 paired days
+   Share of book delivered    ladder7s2     1.000 | ladder7s3     1.000 | tie  | days better/worse 0/0 | p nan
+   Lead time                  ladder7s2    66.267 | ladder7s3    64.783 | lost | days better/worse 1/2 | p nan
+   Collisions                 ladder7s2     0.000 | ladder7s3     0.000 | tie  | days better/worse 0/0 | p nan
+   L3 fires                   ladder7s2     5.667 | ladder7s3     8.333 | won  | days better/worse 2/1 | p nan
+   Guard stops                ladder7s2   251.667 | ladder7s3   362.000 | won  | days better/worse 3/0 | p nan   (reported, not scored)
+   Orders per hour            ladder7s2   360.000 | ladder7s3   360.000 | tie  | days better/worse 0/0 | p nan   (reported, not scored)
+   => 1 of 5 won; safety gate passed: ladder7s2 does not graduate against ladder7s3 (small)
+
+wrote sweep_ladder7s2_deploy.png

@@ -1,6 +1,6 @@
 # FLOWRRA v2 — The Conflict Ladder
 
-Rohit Tamidapati · 5 October 2026 · updated 20 October 2026
+Rohit Tamidapati · 5 October 2026 · updated 23 October 2026
 
 > **Milestone, 20 October 2026: the final deploy test.**
 > - **The test:** FLOWRRA's decentralised fleet against the MAPF planners PIBT and RHCR (reimplemented), all on the same floor and inside the same safety boundary. Every robot is a point on the graph, as in MAPF; FLOWRRA's boundary around each one (a minimum gap, warning bubbles, a braking distance) acts as its footprint. The same failures and people come on the same days.
@@ -2688,7 +2688,7 @@ Each step was built behind its own switch, tested, and run against the step befo
         - The detailed article comes next, with every claim stated exactly as measured.
       - **Measured, for that article:**
         - ladder4 (network + route, decentralised) delivers the most in both conditions, and firmly the most at 60–80 robots with failures and people.
-        - Zero collisions across the run.
+        - Collisions near zero for every arm: at most 0.016 a day.
         - The planners' advantages are lead time and distance from people.
         - The network alone trails ladder4.
         - Under the usual MAPF rules, PIBT's throughput is 3.1× what it is inside our safety boundary (lifelong Kiva, entry 44): the cost of the boundary, which any planner pays.
@@ -2705,6 +2705,406 @@ Each step was built behind its own switch, tested, and run against the step befo
       - the replay check (`--world-fixes off --orphans book` must reproduce earlier clean rows exactly);
       - the load check and the timing check;
       - then predictions, the run, scoring and the article.
+    - **After the run (21 October): replaying a day, and an open item.**
+      - **Replay tools.** `record_day.py` runs one day through `deploy_eval` with the final run's flags and records every step; `render_day.py` turns the recording into an HTML animation and a GIF.
+        - `--check` compares a replay with its scored row.
+        - Variants (`--book`, `--max-failures`, `--extra-steps`) are labelled as variants in every frame's title.
+        - Two fixes found on the way:
+          - a longer run must still tell the env the scored length (throughput pressure T and the failure window are computed from it), or the day changes from step 1;
+          - replays run on one thread, as the jobs did.
+      - **What a replay showed.** The day: ladder4, Kiva-style map, 60 fleets, seed 3, full, a variant with a book of 150 and at most 9 failures.
+        - 142 of 150 were delivered.
+        - At the end, 8 orders were still marked as assigned, with no fleet carrying them and no pickup open, so they could never be delivered.
+      - **It fits the scored data:**
+        - no arm finished the book on any full Kiva-style day;
+        - on clean Kiva-style days, ladder4 finished it on 30% of days;
+        - across ladder4's full Kiva-style days, more failures go with more undelivered orders (correlation 0.34).
+      - **Rohit's hypothesis:** the hop limit on reassigning an order, set for our arms. If so, our arms under-scored, and the gap in the hardest conditions would widen once it is fixed.
+      - **Open, to test.** Record who holds each claim (a small addition to `record_day.py`), find which arms leave orders stranded, and fix the cause.
+        - If confirmed, it goes into the article's Scope and assumptions.
+        - Until then the article does not mention it.
+
+45. **Collapsing jams by sampling: `thrml` offline, then the collapse rung (21–22 October).** Design, numbers and caveats in `JAM_COLLAPSE_DESIGN.md`.
+    - **Why.** The ladder resolves a jam fleet by fleet. FLOWRRA's founding idea, and the article's §4, call for a joint collapse: hold the ways the fleets could move in superposition, then settle on one consistent plan. That is sampling from an energy-based model, which is what `thrml` does. It is Extropic's open-source library for block Gibbs sampling on discrete models, built for prototyping ahead of their sampling hardware.
+    - **The first attempt, dropped.**
+      - It used one hop of look-ahead (`jam_energy.py`), compared with where the ladder had each fleet two steps later.
+      - That was unfair because of braking. Of 320 fleet moves, 168 had slowed, 96 had stopped, and only 55 had made a full hop.
+    - **Rohit's two-boundary design (22 October).**
+      - Start: the cluster's cells when it forms.
+      - Exit: where each fleet actually came out of it.
+      - `thrml` fills in everything between, under the same rules, with the fleets outside the jam clamped to the recording. The plan is compared with what the fleets really drove.
+    - **The tools.** All are in the `thrml` folder; they read a day recorded by `record_day.py`.
+      - `extract_jams.py`: clusters of warned fleets within 3 hops, chained over steps into jams.
+      - `jam_collapse.py`: the two boundaries, windows inside the standing congestion zones, and an exact A* for up to 4 fleets.
+      - `jam_thrml.py`: the `thrml` model.
+      - `jam_figures.py`: each fleet's distance to its exit over time, recorded against planned.
+    - **The day:** ladder4, Kiva-style map, 60 fleets, seed 3, full, replayed on Rohit's laptop. It delivered 183; the scored run delivered 192 (the open item below).
+    - **Fixes on the way.**
+      - Fleets had to stay parked on their exit until the window ended. Now they leave once out, the same rule in both solvers.
+      - Chains start from shortest-path plans.
+      - Half the chains keep the rules hard; half pay a finite penalty while hot.
+      - A jam with no plan is retried with twice the chains and steps.
+      - Zone windows were counted twice; that is fixed.
+      - Jams that start with two fleets on one cell (mid-hop rounding) are skipped.
+    - **Results (Rohit's laptop, 22 October: 103 windows in 11 minutes on the CPU).**
+      - `thrml` found a plan in 98 of the 99 windows that have one. The miss is jam 140: 2 fleets, a 23-tick window.
+      - Its plan was the exact best in 90 of 95 small jams.
+      - Distance driven: 777 hops in the plans against 1,723 recorded (shortest 707).
+      - Driven away from the exit: 35 against 538.
+      - Jam by jam: less in 81, about the same in 15, more in 2.
+      - Exact search on all jams of up to 4 fleets: 657 hops against 1,546.
+      - The big windows, all inside congestion zones:
+        - 7 fleets: 34 hops, the shortest possible;
+        - 8 fleets: 37 (shortest 35);
+        - 4 fleets: 13, the shortest possible;
+        - 6 fleets: 53 on the retry (shortest 43). It varies from run to run: 49, 55, 65, or no plan.
+    - **What it does not show.**
+      - The plans know where each fleet came out and what its neighbours did next.
+      - No claim about deliveries.
+      - Time is not compared, because of braking.
+      - It is one day.
+    - **A finding for FLOWRRA itself: the dithering.**
+      - Jam 154: two fleets rocked half a hop back and forth for 28 steps, where one hop would have separated them.
+      - Jam 351: two fleets advanced and backed off in opposite phase.
+      - **Hypothesis (Rohit and Claude):** each fleet reacts on its own to a field that adds everyone's paths up, so neither can settle who goes first. A coupled (joint) density can.
+      - To try: hysteresis on yielding, and a coupled future-density field for path awareness.
+    - **Part B, the live rung (decided with Rohit, 22 October).**
+      1. **Far boundary:** hops to goal now, the network's values later.
+      2. **Solvers, in two steps.**
+         - B1: exact search up to 4 fleets, `thrml` for 5–8.
+         - B2: `thrml` for every jam, padded to one size so JAX compiles once.
+      3. **Commitment:** the members follow the plan in lockstep. Tick k+1 starts only when every member stands on its tick-k cell. The plan is cancelled when the cluster grows (re-planned at once), a member fails, leaves, gets a new goal or meets L3, or a tick takes more than 24 steps.
+      4. **Braking and the intent guard stay on.**
+      5. **Position:** above L1, with L1, L2 and L3 underneath as the fallback.
+    - **B1, built.**
+      - **`collapse_warehouse.py`, the rung.**
+        - A cluster of warned fleets that lasts 2 steps gets one joint plan for the next 8 hops (the path-awareness horizon).
+        - The cost is every fleet's hops to goal, added over the ticks: the area under its distance-to-goal line, so waiting costs, backing off costs more, and a zigzag costs most.
+        - Fleets outside the cluster, within 10 hops, are clamped: at tick k they may be anywhere from their cell to k hops along their route ahead. Failed, waiting and parked fleets stay put.
+        - People and debris are no-go.
+        - A cluster with no plan is left to the ladder and tried again after 10 steps.
+        - Nothing in `core_warehouse.py` is edited. `install()` wraps four FLOWRRA methods:
+          - the constructor;
+          - `_ladder_plan_retreats`, so no retrace is ordered for a fleet on a plan;
+          - `_ladder_retrace_actions`, so plans are made first and their moves outrank other orders;
+          - `get_error_statistics`, which adds the rung's counters and every fleet's distance driven to each CSV row.
+      - **`collapse_eval.py`, the paired test.** It runs the same day through `deploy_eval` with the final run's flags, once with the rung off and once on. It writes one CSV and prints the paired table: deliveries, distance driven by all fleets, collisions, near misses, L3, L1 orders, guard stops and lead time.
+      - **Smoke test in the sandbox.** The sandbox has no torch and no checkpoints, so this ran on the RULES arm, with no network. Kiva-style map, 60 fleets, seed 0, full, a 300-step test day; one run per variant.
+        - **No collisions in any run.**
+        - **Rung off:**
+          - 92 delivered;
+          - L3 73, L1 orders 142, guard stops 902;
+          - 29.0 cells driven per delivery;
+          - 63 s.
+        - **Rung on, exact search plus `thrml` for 5–8 fleets** (16 chains, 300 steps live):
+          - 110 delivered;
+          - L3 26, L1 74, guard stops 154;
+          - 32.8 cells per delivery;
+          - 494 s, of which `thrml` took 445 s for 42 plans.
+        - **Rung on, exact only** (`--big ladder`):
+          - 98 delivered;
+          - L3 39, L1 107, guard stops 446;
+          - 33.1 cells per delivery;
+          - 58 s.
+        - **A 120-step check** on seed 1, exact only: 65 delivered off, 71 on.
+        - **Bugs found and fixed.**
+          - The env's `waiting_nodes` means "held still with a peer close by", not parked, so plans were being cancelled in the middle of jams. Waiting fleets now stay in plans.
+          - A tiny cost per hop moved now breaks the tie between waiting and a sideways move.
+        - **Reading:** this checks that the mechanism works; it is not a result.
+          - Every "on" run had fewer L3, L1 orders and guard stops, and more deliveries.
+          - Distance driven per delivery rose 13–14 %, to watch in the real test.
+          - Short days, one seed, and the RULES arm, not ladder4.
+      - **Decision time, tracked (22 October, Rohit's ask).**
+        - **For every day, rung on or off:**
+          - the time per simulated step for the whole floor;
+          - the fleets' own decision inside it (the network and route, or RULES' driver);
+          - the rung's share.
+        - **For every planning attempt, found or not:** the time by solver (median, 95th percentile and longest), with `thrml`'s split into JAX compiling and sampling. Its two halves of chains run the same compiled program, so the first call minus the second is the compile.
+        - **Offline, `jam_thrml.py` now prints each jam's decision time,** split into building the model, compiling and sampling.
+        - **Sandbox, RULES arm, a 150-step test day (2 CPU cores):**
+          - a step took 168 ms for the whole floor, 8.6 ms of it the fleets' own decision;
+          - exact plans took a median of 2.1 ms (95th percentile 300 ms, longest 544 ms);
+          - `thrml` plans took a median of 9.6 s: about 5.0 s compiling and 5.3 s sampling;
+          - the rung added 1.5 s per step on average, almost all of it `thrml`.
+          - Offline, the 7-fleet window took 44 s: 0.24 s building, 5.6 s compiling and 38 s sampling (32 chains, 600 steps).
+        - **Against a real-time budget:**
+          - Half a hop (one step) takes about half a second for an AGV at about 1 m/s on 1 m cells.
+          - Exact plans fit that budget; `thrml` on a CPU does not.
+          - B2's fixed sizes remove the compile.
+          - The sampling is the part sampling hardware is meant to speed up. That is untested here, not a claim.
+      - **The paired test moves to AWS (22 October).** The laptop froze with four runs at once, so the test runs on the 16-core SageMaker box: 4 seeds × three versions (rung off, rung with `thrml`, exact only), one per core. A 50-step check there: 57 delivered against 47.
+      - **A bug found on AWS, and fixed (22 October).**
+        - **What happened:** two of the four `thrml` runs died partway through the day with "LLVM compilation error: Cannot allocate memory".
+        - **The cause:** every jam has its own shape, so every `thrml` call compiles a new program, and JAX kept every compiled program loaded. Measured in the sandbox, each call added about 350 memory maps and 20–100 MB. After a couple of hundred calls the process reaches the system's limit on memory maps (65,530 by default), and the compiler fails.
+        - **The fix, in `jam_thrml.collapse()`:**
+          - the weight tables go into the compiled program as arguments, not as constants baked into it;
+          - after each call, the compiled programs are dropped (`jax.clear_caches()`).
+        - **Measured over 25 calls:** memory maps flat at about 413 (they had grown to 8,145) and memory about 540 MB (it had grown to 880 MB). The plans are unchanged, checked on jams 102, 154 and 283.
+        - All four `thrml` runs are rerun with the fix. The off and exact-only runs never call `thrml`, so they are unaffected.
+      - **First paired result: the rung with exact search only (AWS, 22 October).** ladder4, Kiva-style map, 60 fleets, full, seeds 0–3: four full days, each with the rung off and on. Clusters of 5 or more were left to the ladder in this version.
+
+        | Per day (mean) | Rung off | Rung on | Days better |
+        |---|---|---|---|
+        | Orders delivered (book of 200) | 190.0 | 191.5 | 3 of 4 |
+        | Mean lead time per order (steps) | 233.0 | 148.2 (−36 %) | 4 of 4 |
+        | Near-miss steps with people | 298.8 | 155.8 (−48 %) | 4 of 4 |
+        | Cells driven per delivery | 74.4 | 67.0 (−10 %) | |
+        | Distance driven, all fleets | 14,127 | 12,831 | 3 of 4 |
+        | L1 retrace orders | 836.8 | 478.5 | 4 of 4 |
+        | Intent-guard stops | 5,887 | 3,312 | 3 of 4 |
+        | L3 fired | 104.2 | 79.0 | 2 of 4 (mixed) |
+        | Collisions | 0 | 0 | |
+
+        - **Decision time:**
+          - exact plans: median 10.2 ms; 95th percentile 1.0 s (the time limit, hit by searches that found no plan);
+          - the rung: 64 ms per step on average, within a step of about 600 ms for the whole floor;
+          - runtime per day: about the same either way (937 s off, 898 s on).
+        - **The rung's day:** 450 plans, 31 run to their last tick, 325 re-planned as clusters grew, and 170 searches found no plan. 376 cluster attempts were too big for this version.
+        - **Reading:**
+          - Deliveries barely move: the book is nearly finished either way.
+          - Orders arrive much faster, and fleets come about half as close to people, on all four days.
+          - Fleets drive about 10 % less per delivery.
+        - **Not firm yet:** four days are too few for the agreed test. Even 4 of 4 in one direction gives p = 0.125 two-sided; 8 days could reach p < 0.05.
+        - One map, one fleet size; the `thrml` variant is still running.
+      - **Eight days: the rung with exact search only (AWS, 22 October).** Seeds 0–7, the same setup as above. Paired Wilcoxon tests on the per-day differences; "firm" means p < 0.05.
+
+        | Per day (mean) | Rung off | Rung on | Days better | p |
+        |---|---|---|---|---|
+        | Mean lead time per order (steps) | 229.3 | 135.5 (−41 %) | 8 of 8 | **0.008, firm** |
+        | Intent-guard stops | 5,976 | 3,162 (−47 %) | 7 of 8 | **0.016, firm** |
+        | L1 retrace orders | 818 | 431 | 8 of 8 | 0.008, firm (partly by design: the rung takes over from L1 for planned fleets) |
+        | Near-miss steps with people | 246.9 | 145.8 (−41 %) | 7 of 8 | 0.055, not quite |
+        | Distance driven, all fleets | 13,530 | 12,529 (−7 %) | 6 of 8 | 0.078 |
+        | Cells driven per delivery | 71.9 | 65.6 | | |
+        | Orders delivered (book of 200) | 188.1 | 190.9 | 6 of 8 | 0.195 |
+        | L3 fired | 118.6 | 74.5 | 5 of 8 | 0.25 |
+        | Collisions | 0 | 0 | | |
+
+        - **Decision time:**
+          - exact plans: median 9 ms;
+          - the rung: 54 ms per step on average;
+          - runtime per day: about the same either way (779 s off, 746 s on).
+        - **Reading:** a joint plan for clusters of 2–4 fleets gets orders delivered about 40 % sooner, firmly, at no cost in deliveries or collisions, with about half the guard stops. Near misses with people fall on 7 of 8 days, just short of firm.
+        - **Scope:** one map, 60 fleets, the full condition, 8 days.
+      - **Four days: the rung with `thrml` for clusters of 5–8 (AWS, 22 October).** Seeds 0–3.
+
+        | Per day (mean) | Rung off | Rung on | Days better |
+        |---|---|---|---|
+        | Mean lead time per order (steps) | 233.0 | 126.5 (−46 %) | 4 of 4 |
+        | Distance driven, all fleets | 14,127 | 11,623 (−18 %) | 4 of 4 |
+        | Cells driven per delivery | 74.4 | 60.5 | |
+        | L3 / L1 / guard stops | 104 / 837 / 5,887 | 52 / 329 / 1,923 | 4 of 4 each |
+        | Orders delivered | 190.0 | 192.0 | 3 of 4 |
+        | **Near-miss steps with people** | 298.8 | **738.0** | **2 of 4: +662 and +1,494 on seeds 2 and 3** |
+        | Runtime per day (s) | 937 | 4,423 (4.7×) | |
+
+        - **Decision time:**
+          - `thrml` plans: median 15.5 s (10.5 s compiling, 5.7 s sampling) on one busy CPU core, with up to 16 runs on the box;
+          - 255 attempts a day;
+          - the rung: 2.6 s per step on average.
+        - **Reading:**
+          - Handling the bigger clusters adds to the gains in lead time, distance and L3.
+          - But on two days fleets were near people far more often: a safety regression, to understand before any claim.
+          - A likely cause: plans for big clusters hold fleets in lockstep for many steps, and they avoid only the cells people stand on when the plan is made. People who walk up afterwards find fleets parked beside them.
+          - To try: keep plans a hop away from people, and cancel a plan when a person comes within 2 hops of a member.
+        - Four days cannot be firm (p ≥ 0.125).
+      - **B2 built: `thrml` compiled once per size (22 October).**
+        - `collapse_bucketed()` in `jam_thrml.py` pads a jam's choices up to one of 32, 40, 48, 64, 80, 96, 128, 160 or 192 per variable, keeping the exact number of fleets.
+        - Each size is compiled once per run and reused by every later jam of that size. The live rung now uses it.
+        - Padding fleets as well (up to 4, 6 or 8) was tried first and dropped: padding 5 fleets to 8 tripled the sampling on the CPU, because every fleet's variables are tied to every other fleet's.
+        - **Checked (sandbox, 2 CPU cores):**
+          - the same plans as before on jams 154, 102 and 10012;
+          - a size's second jam compiles in about 0 s, and memory maps stay flat;
+          - a 3-fleet jam's decision went from 8.2 s to 2.2 s, and a 7-fleet window's from 42.7 s to 32.4 s.
+        - **What is left is sampling.** It grows with the jam (a 7-fleet window is 112 variables with up to 90 choices each). On the laptop GPU it was 0.33 s (median).
+      - **The people fix (22 October).**
+        - **Why:** the `thrml` days had near misses with people far up on 2 of 4 days.
+        - **The mechanism, as the code counts it:** a near miss is a fleet on a cell next to a person, counted per person per step. People wait when a fleet blocks their way. So a plan that holds fleets beside a person's path piles near misses up.
+        - **What the rung does now:**
+          - a plan keeps a hop away from every person, and from the next 4 cells of each person's path;
+          - when a person comes within 2 hops of a fleet on a plan, the plan ends and FLOWRRA's own rules take over;
+          - no plan is made for a cluster with a person within 2 hops.
+        - New counters: `cancel_people` and `near_people`.
+        - **Checks in the sandbox.**
+          - A unit test confirms the rung sees each person, the path ahead of them, and the 2-hop zone around them.
+          - A 600-step test day (RULES arm, exact only) ran cleanly: 151 plans, no collisions. On that day no planned fleet came within 2 hops of a person, so the new rule never fired. The real test is the AWS rerun.
+      - **With the people fix and B2: the paired days again (AWS, 23 October).** Same setup; the rung-off rows are reused (same code path, same numpy 2.5.4).
+        - **Eight days, exact search only:**
+
+          | Per day (mean) | Rung off | Rung on | Days better | p |
+          |---|---|---|---|---|
+          | Orders delivered (of 200) | 188.1 | 191.5 | 7 of 8 (1 equal) | **0.016, firm** |
+          | Mean lead time per order (steps) | 229.3 | 132.4 (−42 %) | 8 of 8 | **0.008, firm** |
+          | Intent-guard stops | 5,976 | 2,561 (−57 %) | 8 of 8 | **0.008, firm** |
+          | Distance driven, all fleets | 13,530 | 12,458 (−8 %) | 7 of 8 | **0.016, firm** |
+          | Cells driven per delivery | 71.9 | 65.0 (−10 %) | 7 of 8 | **0.016, firm** |
+          | L1 retrace orders | 818 | 395 | 8 of 8 | 0.008 (partly by design) |
+          | L3 fired | 118.6 | 66.1 | 5 of 8 | 0.109 |
+          | Near-miss steps with people | 246.9 | 309.5 | 5 of 8 | 0.641, mixed |
+          | Collisions | 0 | 0 | | |
+
+          - **Near misses with people are driven by one day.** On seed 6 they rose by 1,168. Without that day the mean change is about −95, close to the −101 before the fix. One person held up beside fleets for a long time can add hundreds of steps. To look at: a replay of seed 6.
+          - **Decision time:** exact plans took a median of 10 ms, and the rung 58 ms per step. Runtime per day was about the same (779 s off, 689 s on).
+          - **The people rule:** 2.2 plans ended because a person came close, and 41 clusters a day were left to FLOWRRA's own rules.
+        - **Four days, with `thrml` for clusters of 5–8:**
+
+          | Per day (mean) | Rung off | Rung on | Days better |
+          |---|---|---|---|
+          | Orders delivered | 190.0 | 193.0 | 4 of 4 |
+          | Mean lead time per order (steps) | 233.0 | 116.7 (−50 %) | 4 of 4 |
+          | Near-miss steps with people | 298.8 | 85.0 (−72 %) | 4 of 4 |
+          | Distance driven, all fleets | 14,127 | 11,489 (−19 %) | 4 of 4 |
+          | Cells driven per delivery | 74.4 | 59.5 (−20 %) | 4 of 4 |
+          | Intent-guard stops | 5,887 | 2,007 (−66 %) | 4 of 4 |
+          | L3 fired | 104.2 | 63.2 | 2 of 4 (two +2) |
+          | Collisions | 0 | 0 | |
+
+          - **The people regression is gone:** near misses are now down on all four days, against up sharply on two days before the fix.
+          - **B2 worked live:** compiling took a median of 27 ms (it had been 10.5 s). A `thrml` plan took 6.5 s (median), almost all of it sampling on one CPU core.
+          - **Runtime per day:** 2.6× the rung-off run, down from 4.7×.
+          - **Not firm:** four days can give p = 0.125 at best. Seeds 4–7 would settle it.
+        - **Reading:**
+          - The exact-only rung now firmly raises deliveries, shortens lead time, cuts driving and halves guard stops, with zero collisions. Its effect on near misses with people is not settled.
+          - Adding `thrml` for the big clusters is the strongest version on every measure, now including people, but it is measured on four days only, and it costs decision time.
+      - **Eight days with `thrml` for clusters of 5–8 (AWS, 23 October).** Seeds 0–7, with the people fix and B2.
+
+        | Per day (mean) | Rung off | Rung on | Days better | p |
+        |---|---|---|---|---|
+        | Orders delivered (of 200) | 188.1 | 191.4 | 7 of 8 (1 equal) | **0.016, firm** |
+        | Mean lead time per order (steps) | 229.3 | 129.8 (−43 %) | 8 of 8 | **0.008, firm** |
+        | Distance driven, all fleets | 13,530 | 11,649 (−14 %) | 8 of 8 | **0.008, firm** |
+        | Cells driven per delivery | 71.9 | 60.9 (−15 %) | 8 of 8 | **0.008, firm** |
+        | Intent-guard stops | 5,976 | 2,492 (−58 %) | 8 of 8 | **0.008, firm** |
+        | L1 retrace orders | 818 | 343 | 8 of 8 | 0.008 (partly by design) |
+        | Near-miss steps with people | 246.9 | 114.2 (−54 %) | 6 of 8 | 0.078 |
+        | L3 fired | 118.6 | 80.8 | 5 of 8 | 0.180 |
+        | Collisions | 0 | 0 | | |
+
+        - **Decision time:**
+          - exact plans: median 7.4 ms;
+          - `thrml` plans: median 5.7 s on one CPU core, of which 25 ms compiling and 5.0 s sampling;
+          - the rung: 1.1 s per step on average. A day took 2.8× as long as with the rung off (779 s against 2,189 s).
+        - **Head to head with the exact-only version, on the same eight days** (each "on" day minus the other):
+          - `thrml` drove less: −808 cells a day, 6 of 8 days, p = 0.109;
+          - near misses with people were fewer: −195 a day, 6 of 8 days, p = 0.055;
+          - deliveries and lead time came out the same (p 0.86 and 0.74).
+        - **Reading:**
+          - Both versions firmly raise deliveries, about halve lead time and guard stops, and cut driving, with zero collisions.
+          - Handling the big clusters with `thrml` drives less again and comes closer to people less often, but neither difference is firm.
+          - Its cost is decision time: 5 s of sampling per big-cluster plan on a CPU core, against a real-time budget of about half a second.
+        - **Scope:** one map (Kiva-style), 60 fleets, the full condition, the ladder4 network.
+      - **A plan log: decision time by jam size (23 October).**
+        - With the rung on, `collapse_eval.py` now writes `<run>_plans.csv`: one row per planning attempt. Each row gives the day, the step, the solver, the number of fleets, the variables, the most choices per variable, the compiled size, whether a plan was found, and the milliseconds (for `thrml`, split into compiling and sampling).
+        - `collapse_eval.py --plans` summarises it by solver and fleets, and for `thrml` by compiled size.
+        - Fixed on the way: an attempt that stopped before sampling was picking up the previous jam's timing.
+        - **The 8 days again, with the log (AWS `ml.g5.4xlarge`, one CPU core per day, 23 October).** Same seeds, same settings.
+          - Every firm result held: 191.6 orders (+3.5, p 0.016), lead time 130.2 (−43 %), cells per delivery 62.8 (−13 %), guard stops 2,549 (−57 %), all firm; zero collisions.
+          - Near misses with people moved: 188.0 against 246.9 (−24 %), better on 5 of 8 days, p 0.31 (the first run had −54 %, 6 of 8). Exact search stops at 1 s of wall-clock time, so two runs of the same day can part ways, and near misses are the noisiest measure.
+          - **Decision time, 4,307 attempts:**
+
+            | Solver, fleets | Attempts | Found | Median | p95 |
+            |---|---|---|---|---|
+            | exact, 2 | 1,191 | 85 % | 2 ms | 10 ms |
+            | exact, 3 | 761 | 84 % | 22 ms | 244 ms |
+            | exact, 4 | 577 | 58 % | 262 ms | 1,016 ms |
+            | `thrml`, 5 | 463 | 71 % | 4.2 s | 12.8 s |
+            | `thrml`, 6 | 348 | 70 % | 6.4 s | 17.9 s |
+            | `thrml`, 7 | 286 | 68 % | 9.3 s | 22.3 s |
+            | `thrml`, 8 | 313 | 70 % | 12.1 s | 28.0 s |
+
+          - The 3–4 fleet jams exact search could not settle within its 1 s went to `thrml` too: 368 attempts, found 5 % (3 fleets) and 50 % (4 fleets).
+          - `thrml` sampling grows roughly as fleets² × choices^1.5 (within 20 % across 39 sizes): from 1.0 s at 5 fleets × 32 choices to 23 s at 8 × 128.
+          - Compiling: 300 first-of-a-size compiles over the 8 days, median 8.6 s each; every other attempt spent 4 ms compiling. (The 25 ms in the first run was the median over all plans.) On a floor, all sizes could be compiled at start-up.
+        - **What the wait would cost: an estimate, not a test.** The simulator freezes time while the rung decides, so the gains assume instant decisions. Suppose a cluster stood still while its plan was found, with one step at 0.5 s and one hop at 1 s:
+          - exact search: about 37 s of deciding a day at about 4 fleets each, some 150 fleet-seconds, against about 1,000 hops it saves on its own. Worth the stop;
+          - `thrml` on one CPU core: 222 attempts a day, failures included, about 9,000–11,000 fleet-seconds (a fifth to a quarter of the floor's 45,000), against the 400–800 hops it adds beyond exact search. More than ten times the saving;
+          - break-even is about 0.3–0.5 s per decision, roughly one step. Left out: stopped clusters blocking others, and plans going stale while they wait. Both make the cost larger.
+      - **Replay, rung off and on (23 October).**
+        - `record_day.py --collapse off|on` records a day with the rung installed as the paired test runs it. With the rung on, each snapshot also holds the joint plans: their fleets, the solver (exact or `thrml`), and the cells left in each plan. Every snapshot now also carries running counts of guard stops, near-miss steps with people and cells driven.
+        - `render_pair.py` draws the two days side by side, at the same step: the whole day, a close-up of the rung's first plan (the days are identical up to it, so both panels show the same jam), and a close-up of the first `thrml` plan (by then the days have parted, and the title says so).
+        - `collapse_warehouse.py` now notes each plan's solver; nothing else in the rung changed.
+        - Checked here on 120 steps of a RULES day (seed 1): both recordings and all three views came out right.
+      - **What the seed-1 replay showed (23 October).** The rung-on recording is the scored day (`--check` identical, 193 delivered); so is the off one (187).
+        - **When the gain comes.** The two days are level for the first 300 steps; the rung is even behind early on (by up to 5 orders near step 36). From about step 300 it pulls away: +27 by step 500, 191 delivered by step 750. Without the rung the day reaches 187 only at step 1,443.
+        - **Near misses with people follow time on the floor.** At step 1,000, 45 fleets are still carrying orders without the rung, against 16 with it. Up to step 800, the rung-on day had more near misses (69 against 46). Its lower total (180 against 382) comes from finishing sooner, not from being safer per step of work.
+        - **Most plans are not followed.** 449 plans: the median was held for 2 steps and got through 0 of its 8 hops. About 356 were remade when their cluster changed (any new fleet in a path warning with a member), 66 were cancelled, and 27 ran all 8 hops: 24 from exact search, 3 of the 197 that `thrml` sampled. In practice the rung plans 8 hops ahead, uses about the first move, and plans again: rolling-horizon planning, not one plan followed in lockstep. Each `thrml` decision is used for about 2 steps.
+        - **The open question:** is the gain the joint moves, or the side effects of the rung? A fleet on a plan gets no L1 retrace order (one authority; retraces fell 56 % over the 8 days), and plan members mostly stand still while their plan is remade.
+      - **The hold test (built 23 October).** `--solver hold`: the same clusters, grace, people rule, one authority and lockstep, but the "plan" is to stay put. No search, no sampling. A fleet is held at most 8 steps in a row, then its own rules get 10 steps (without that cap a cluster that keeps changing would be held for ever). `collapse_eval.py --head A B` compares two versions of the rung on the same days.
+        - Reading: if hold scores about the same as the rung, the gain is holding and one authority, and the outreach notes need reframing. If it scores clearly worse, the joint plans earn it. The outreach notes are held until then.
+        - Checked here on 150 steps of a RULES day: holds made, completed, remade and released as intended.
+        - **Result (AWS, the same 8 days, 23 October).** Hold against no rung, and against the rung (`on3`):
+
+          | Per day (mean) | No rung | Hold | Rung | Hold vs rung |
+          |---|---|---|---|---|
+          | Orders delivered | 188.1 | 183.5 (p 0.094) | 191.6 | −8.1, worse 8 of 8, **firm** |
+          | Mean lead time (steps) | 229.3 | 242.8 (p 0.31) | 130.2 | +113, worse 8 of 8, **firm** |
+          | Cells driven per delivery | 71.9 | 64.5 (**firm**) | 62.8 | +1.7, p 0.31 |
+          | Intent-guard stops | 5,976 | 4,250 (p 0.11) | 2,549 | +1,701, **firm** |
+          | L3 fired | 118.6 | 182.5 (**firm**, worse) | 76.0 | +106.5, **firm** |
+          | L1 retrace orders | 818 | 577 (**firm**, by design) | 356 | +220, **firm** |
+          | Near-miss steps with people | 246.9 | 255.5 (p 0.31) | 188.0 | +67.5, p 0.74 |
+
+          - Seed 3 went badly with hold: −20 orders, +843 near-miss steps and +203 L3 against no rung.
+        - **Reading.**
+          - Holding a cluster still and giving it one authority does not give the rung's gains. Deliveries and lead time are firmly worse than with the rung on all 8 days, and no better than with no rung. So the plans' moves earn those gains, even though each plan is used for only about its first move.
+          - Holding alone does give most of the cut in driving per delivery (−10 % against the rung's −13 %). So "less driving" cannot be credited to the joint plans.
+          - Not settled: what `thrml` adds. Its extra driving saving over exact-only (400–800 cells a day) may be holding too: with `thrml` the big clusters sit on plans that are remade every couple of steps; with exact-only they are left to the ladder.
+      - **The exact-plus-hold test (built and run 23 October; result below).** `--big hold`: exact search for 2–4 fleets as in the rung, and hold wherever `thrml` would be asked (5–8 fleets, and 3–4 that exact search could not settle in time). Against the rung (`on3`), it asks whether sampling the big clusters adds anything beyond holding them. One difference: hold always "succeeds", where `thrml` found a plan about 63 % of the time.
+        - Checked here on 150 steps of a RULES day: 44 exact plans and 15 holds, as intended. The hold-only test, refactored onto the same code, repeats its earlier short run exactly.
+        - **To run it** (AWS, in `~/flowrra_aws`, with the 23 October `collapse_warehouse.py` and `collapse_eval.py`; `grep -c '"hold"' collapse_warehouse.py` should print more than 0; about 15 minutes for all 8 days in parallel):
+          ```
+          c=0; for s in 0 1 2 3 4 5 6 7; do
+            taskset -c $c nohup python collapse_eval.py --arm ladder4 --fleets 60 --seeds $s --cond full --collapse on --big hold --out aws_s${s}_bighold.csv > aws_s${s}_bighold.log 2>&1 &
+            c=$((c+1)); done
+          pgrep -fc collapse_eval.py          # 8 while running, 0 when done
+          python collapse_eval.py --compare "aws_s*_off.csv" "aws_s*_bighold.csv"
+          python collapse_eval.py --head "aws_s*_on3.csv" "aws_s*_bighold.csv"
+          ```
+        - **Reading** (`--head`: A is the rung, B is exact-plus-hold, "diff" is B − A):
+          - B about equal to A on deliveries, lead time and driving: sampling the big clusters adds nothing beyond holding them. The Extropic note's "what `thrml` adds" and its wait estimate must then be withdrawn.
+          - A firmly better: the sampled moves earn their place in the big clusters, and by how much is the number for the notes.
+          - Then stop the AWS instance.
+        - **Result (AWS `ml.g5.4xlarge`, the same 8 days, one CPU core per day, 23 October).** `--head`: A = the rung with `thrml` for big clusters (`on3`), B = exact-plus-hold (`bighold`); "diff" is B − A. Paired Wilcoxon, "firm" means p < 0.05.
+
+          | Per day (mean) | A: sampling | B: hold | B − A | Days A better | p |
+          |---|---|---|---|---|---|
+          | Orders delivered (of 200) | 191.6 | 189.8 | −1.9 | 7 of 8 (1 equal) | **0.016, firm** |
+          | Mean lead time per order (steps) | 130.2 | 167.5 | +37.3 | 7 of 8 | **0.039, firm** |
+          | Distance driven, all fleets | 12,036 | 11,320 | −715 | B less on 7 of 8 | 0.109 |
+          | Cells driven per delivery | 62.8 | 59.7 | −3.1 | B less on 6 of 8 | 0.195 |
+          | Near-miss steps with people | 188.0 | 206.4 | +18 | A fewer on 6 of 8 | 0.383 |
+          | L3 fired | 76.0 | 100.5 | +24.5 | A fewer on 6 of 8 | 0.148 |
+          | Intent-guard stops | 2,549 | 2,689 | +139 | mixed | 0.844 |
+          | L1 retrace orders | 356 | 362 | +6 | mixed | 0.844 |
+          | Collisions | 0 | 0 | | | |
+          | Runtime per day (s) | 2,274 | 922 | −1,352 | | **0.008, firm** |
+          | The rung's time per step (ms) | 1,164 | 47 | −1,118 | | **0.008, firm** |
+
+        - **Exact-plus-hold against no rung (`--compare`, same 8 days):** lead time 229.3 → 167.5 (−27 %, p 0.016, firm); distance driven 13,530 → 11,320 (−16 %, firm); cells per delivery 71.9 → 59.7 (firm); guard stops 5,976 → 2,689 (−55 %, firm); L1 retrace orders 818 → 362 (firm, partly by design); deliveries 188.1 → 189.8 (p 0.125); near misses 246.9 → 206.4 (p 0.48) and L3 118.6 → 100.5 (p 0.38) not firm; collisions 0. Per day the rung made about 337 exact plans and 253 holds; 24.5 holds were released by the 8-step cap.
+        - **Reading.**
+          - **Sampling earns its place against holding.** For the clusters `thrml` would be asked about, sampled plans deliver about 2 more orders a day (+1.9, 7 of 8 days) and cut lead time by about 22 % (−37 steps, 7 of 8 days), both firm. These are the numbers for the outreach notes.
+          - **Not separable on anything else.** Near misses with people, L3, guard stops and L1 orders are not firmly different. Hold drove less (−715 cells a day, 7 of 8 days, p 0.109, not firm). So "less driving" is not credited to sampling, as in the hold-only test.
+          - **What it costs.** A day took 2.4× as long with sampling (2,274 s against 922 s); the rung's share of a step was 1,164 ms against 47 ms.
+          - **Hold costs something, and that matters for the wait.** Hold stands a cluster still for up to 8 steps (4 s), about what a CPU `thrml` decision takes (median 4.2–12.1 s, 8–24 steps), but with no plan at the end of it. So B shows what unproductive standing costs; it is not a wait-then-plan test.
+          - **Against leaving big clusters to the ladder, sampling is level.** In the earlier head-to-head, `thrml` against exact-only was the same on deliveries and lead time (p 0.86 and 0.74); exact-only's lead time was 132.4 against hold's 167.5 (separate batches, not paired). Read together: holding a big cluster costs lead time, and sampling avoids that cost; sampling beating the ladder itself on delivery or lead time is not shown. The paired exact-only against exact-plus-hold run would settle it (`--head` on the two sets of CSVs).
+          - **Caveats.** One map, 60 fleets, full condition, 8 days. Exact search stops at 1 s of wall-clock time, so reruns of a day can part ways (near misses most). The lead-time p of 0.039 is the marginal one, among many measures looked at. Hold always "succeeds"; `thrml` found a plan about 70 % of the time for 5–8 fleets, and the clusters it missed went back to the ladder.
+    - **Next.**
+      - ~~Make the plans people-aware, then rerun~~ (done, above).
+      - ~~The `thrml` version on seeds 4–7~~ (done, above).
+      - The same paired test on other conditions: clean days, 40 and 80 fleets, another map.
+      - Sampling time: the GPU, and then the on-board version (one sampler per fleet, the energy vote).
+      - A replay of seed 6 with the exact-only rung, to see what held a person up.
+      - ~~B2: one fixed size for `thrml`, so it compiles once~~ (done, above).
+      - The exact-only rung on more conditions (clean; 80 fleets), if credits allow.
+      - The rung against PIBT on the same days, once sampling is fast enough to pay for its wait (Rohit: with sampling working, FLOWRRA could move ahead of PIBT rather than level with it). To test, not yet tested.
+      - Later: the collapse built into the core (`core_warehouse.py`), with its energies taken from the density field (`density_warehouse.py`) and the network trained with the collapse in the loop.
+      - ~~**First, when resuming:** the exact-plus-hold test~~ (done, above: sampling beats holding on deliveries and lead time, firmly).
+      - Pair exact-only against exact-plus-hold on the same 8 days, to see whether holding big clusters is worse than leaving them to the ladder (needs the exact-only CSV names for `--head`).
+      - Let plans run further: remake a plan only when a newcomer actually conflicts with it, and see whether the gain grows.
+    - **Open item: the laptop replay.** It delivers 183 where the scored run delivered 192.
+      - A lead, checked and closed (22 October): `config_warehouse.py` in the repo differed from the sandbox copy in `next_state_edge_features` and the router floor `scale_end`.
+      - The laptop's `[deploy]` header shows `scale_end 2.0` and `next_state_edge_features True`, the same as the AWS final run (Rohit checked), so those two settings are not the cause. The sandbox copy was the odd one out.
+      - Still open: library versions, or the machine.
 
 **Next.**
 

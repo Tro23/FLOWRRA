@@ -2,7 +2,7 @@
 
 **Decentralised coordination for warehouse fleets.** Every fleet (one vehicle) decides locally, from what it perceives within 5 graph hops. The set of all fleets on the floor is treated as one holon that learns to keep itself whole while it works. A learned graph policy and a ladder of path-aware rules share the work, through deliveries, hardware failures and people on the floor, with no central replanning step.
 
-FLOWRRA (Flow Recognition Reconfiguration Agent) is an independent research project by [DhaaRn](https://dhaarn.com). This folder holds its warehouse work.
+FLOWRRA (Flow Recognition Reconfiguration Agent) is an independent research project by [DhaaRn](https://dhaarn.org). This folder holds its warehouse work.
 
 > **Start here: [`FLOWRRA_Warehouse_V2/`](FLOWRRA_Warehouse_V2/) is the current version.** The full write-up is the article, [`Flowrra_Article.md`](FLOWRRA_Warehouse_V2/Flowrra_Article.md), and every step and run is recorded in the build log, [`V2_The_Conflict_Ladder.md`](FLOWRRA_Warehouse_V2/Journey_in_Writing/V2_The_Conflict_Ladder.md). Everything outside `FLOWRRA_Warehouse_V2/` belongs to the previous version and is kept as a fixed reference point.
 
@@ -245,7 +245,7 @@ python render_day.py day_ladder4_Kiva_2D_46_33_1_k60_s3_full.json.gz --gif
 
 ## About
 
-FLOWRRA is an independent research project by Rohit Tamidapati ([DhaaRn](https://dhaarn.com)). I designed the system and the experiments, and I built it with heavy AI assistance.
+FLOWRRA is an independent research project by Rohit Tamidapati ([DhaaRn](https://dhaarn.org)). I designed the system and the experiments, and I built it with heavy AI assistance.
 
 I hold the work to a few practices:
 - system design and informational flow;
@@ -256,7 +256,7 @@ I hold the work to a few practices:
 
 In short, the intuitive one.
 
-I'd love to do this kind of work inside a team facing these problems at scale. If you run a fleet and want to see how FLOWRRA behaves on your layout, or have a view on how it should be tested, I'd like to hear from you through [dhaarn.com](https://dhaarn.com) or [ rohittamidapati@gmail.com ].
+I'd love to do this kind of work inside a team facing these problems at scale. If you run a fleet and want to see how FLOWRRA behaves on your layout, or have a view on how it should be tested, I'd like to hear from you through [dhaarn.org](https://dhaarn.org) or [ rohittamidapati@gmail.com ].
 
 **Writing**
 

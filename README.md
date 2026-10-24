@@ -10,7 +10,7 @@ FLOWRRA is a novel multi-agent reinforcement learning framework that enables swa
   <p>MULTI HOLON - FLOWRRA 2D Simulation showing instant recovery from node partitions</p>
   <img src="assets/The_Beautiful_Swarm.gif" alt="MULTI HOLON - FLOWRRA 2D Simulation showing instant recovery from node partitions" width="400"/><br></br>
   <p><i>Live 2D simulation demonstrating 81.7% average flow coherence under severe node partitions.</i></p>
-  <p><b>For interactive visual, visit: [ https://dhaarn.com ]</b></p>
+  <p><b>For interactive visual, visit: [ https://dhaarn.org ]</b></p>
 </div>
 
     - For Conceptual Understanding and Evolution of FLOWRRA visit: https://open.substack.com/pub/rohittamidapati/p/flowrra-flow-recognition-reconfiguration?r=721j7i&utm_campaign=post&utm_medium=web&showWelcomeOnShare=true -
@@ -581,7 +581,7 @@ FLOWRRA is dual-licensed:
   - If you modify and offer it as a network service (SaaS/API) or otherwise, you must release your changes under AGPLv3.
 
 - **Commercial / Proprietary License** - For closed-source use, private modifications, enterprise integration, or avoiding AGPL obligations.
-  - Contact me at [rohittamidapati11@gmail.com] or [rohit.tamidapati@dhaarn.com] for pricing/terms.
+  - Contact me at [rohittamidapati11@gmail.com] or [rohit.tamidapati@dhaarn.org] for pricing/terms.
   - Ideal for companies building production products, SaaS, or integrations without sharing source.
 
 ## Contributing
@@ -598,9 +598,9 @@ Contributions and Collaborations are welcome: Reach out to the Author.
 
 For questions, collaboration, or discussions:
 - **Author**: Rohit Tamidapati ft. Claude, Gemini, Grok & ChatGPT (Free Versions)
-- **DhaaRn**: [https://dhaarn.com]
+- **DhaaRn**: [https://dhaarn.org]
 - **LinkedIn**: [https://www.linkedin.com/in/rohit-tamidapati/]
-- **Email**: rohit.tamidapati@dhaarn.com
+- **Email**: rohit.tamidapati@dhaarn.org
 
 ## Future Enhancements Planned
 
@@ -620,7 +620,7 @@ For questions, collaboration, or discussions:
 ## Citation
 
 If you want to use FLOWRRA in your research, reach out to the author:
-- [rohit.tamidapati@dhaarn.com]
+- [rohit.tamidapati@dhaarn.org]
 - [rohittamidapati11@gmail.com]
 
 ```

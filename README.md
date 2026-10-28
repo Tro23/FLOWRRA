@@ -623,7 +623,6 @@ If you want to use FLOWRRA in your research, reach out to the author:
 - [rohit.tamidapati@dhaarn.org]
 - [rohittamidapati11@gmail.com]
 
-```
 
 ## Acknowledgments
 
